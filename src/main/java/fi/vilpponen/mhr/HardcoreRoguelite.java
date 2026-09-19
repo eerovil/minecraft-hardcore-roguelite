@@ -1,5 +1,7 @@
 package fi.vilpponen.mhr;
 
+import fi.vilpponen.mhr.border.BorderCommand;
+import fi.vilpponen.mhr.border.WorldBorders;
 import fi.vilpponen.mhr.command.BalanceCommand;
 import fi.vilpponen.mhr.command.UnlockCommand;
 import fi.vilpponen.mhr.core.Balance;
@@ -26,10 +28,12 @@ public class HardcoreRoguelite implements ModInitializer {
 				state.describe(), balance.unlocks().size(), balance.mobDamageMultiplier());
 
 		EquipmentSlots.register();
+		WorldBorders.init();
 
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			UnlockCommand.register(dispatcher);
 			BalanceCommand.register(dispatcher);
+			BorderCommand.register(dispatcher);
 		});
 	}
 }

@@ -160,6 +160,19 @@ Join through the port-forward and check:
 The server tells the client which slots are open when you join and again whenever `mhr unlock` or
 `mhr lock` changes something, so the client's own config file is never consulted while connected.
 Enforcement never reads that copy — it is for drawing only.
+## Testing the world border
+
+A run starts on the `tiny` tier, and the border is placed when the server starts, centered on the
+world spawn. Change the tier with the dev command, which applies it to the running world at once:
+
+```sh
+scripts/dev.sh rcon "mhr border"            # what tier is selected
+scripts/dev.sh rcon "mhr border medium"     # tiny | medium | large | infinite
+scripts/dev.sh rcon "worldborder get"       # vanilla's own read-back, in blocks
+```
+
+The tier is not stored anywhere yet, so a server restart goes back to `tiny`. Remembering it
+between runs belongs to the permanent unlock state, which does not exist yet.
 
 ## Testing the ore unlocks
 

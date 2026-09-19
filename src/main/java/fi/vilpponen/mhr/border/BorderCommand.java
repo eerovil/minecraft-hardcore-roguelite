@@ -1,0 +1,59 @@
+package fi.vilpponen.mhr.border;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.context.CommandContext;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
+
+/**
+ * A developer command standing in for the shop, which does not exist yet.
+ *
+ * <p>{@code /mhr border} shows the tier, {@code /mhr border <tier>} changes it.
+ *
+ * <p>Registered on its own rather than alongside the unlock command: brigadier merges two
+ * registrations of the same {@code /mhr} root, so the border feature stays in one package.
+ */
+public final class BorderCommand {
+	private BorderCommand() {
+	}
+
+	public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+		dispatcher.register(Commands.literal("mhr")
+				.requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+				.then(Commands.literal("border")
+						.executes(BorderCommand::show)
+						.then(Commands.argument("tier", StringArgumentType.word())
+								.suggests((context, builder) -> {
+									for (BorderTier tier : BorderTier.values()) {
+										builder.suggest(tier.id());
+									}
+									return builder.buildFuture();
+								})
+								.executes(BorderCommand::set))));
+	}
+
+	private static int show(CommandContext<CommandSourceStack> context) {
+		BorderTier tier = WorldBorders.selectedTier();
+		context.getSource().sendSuccess(() -> Component.literal("Border tier: " + tier.id() + describe(tier)), false);
+		return 1;
+	}
+
+	private static int set(CommandContext<CommandSourceStack> context) {
+		String id = StringArgumentType.getString(context, "tier");
+		BorderTier tier = BorderTier.byId(id);
+		if (tier == null) {
+			context.getSource().sendFailure(Component.literal("No such border tier: " + id));
+			return 0;
+		}
+
+		WorldBorders.select(tier);
+		context.getSource().sendSuccess(() -> Component.literal("Border tier: " + tier.id() + describe(tier)), true);
+		return 1;
+	}
+
+	private static String describe(BorderTier tier) {
+		return tier.isInfinite() ? " (no practical limit)" : " (" + (long) tier.diameter() + " blocks across)";
+	}
+}
