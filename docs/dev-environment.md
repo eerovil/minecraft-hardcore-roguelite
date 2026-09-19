@@ -87,7 +87,9 @@ check. There is nothing to confirm between iterations: change the code, run it a
 In a third pod, `mhr-gametest`, not in the build pod and not against the dev server. It is the same
 `gradle:jdk25` image plus `xvfb` and Mesa's software OpenGL driver, apt-installed at startup —
 nothing in the cluster has a GPU, so the client renders with `llvmpipe` into a 1280×720 virtual
-display. That works, and it is slow: a full run is minutes, most of it the client starting.
+display. A warm run — unit tests, server GameTests and all five client scenarios — is about 75
+seconds, most of it the client starting. The first run after a pod restart is slower, because the
+pod apt-gets its display then, and a cold Gradle cache downloads Minecraft again on top of that.
 
 It has a Gradle cache of its own (`/pvc/gradle-gametest`) and a source tree of its own
 (`/pvc/gametest/workspace`), so it neither waits for nor breaks someone else's `scripts/dev.sh go`.
