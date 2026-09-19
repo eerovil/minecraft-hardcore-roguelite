@@ -88,6 +88,25 @@ public final class UnlockState {
 		return local;
 	}
 
+	/**
+	 * Throw away what is loaded and read the file again.
+	 *
+	 * <p>Nothing in the game needs this: one process is one player's unlocks from launch to exit,
+	 * and every purchase is written through as it is made. It exists for the automated tests, where
+	 * the dedicated server runs inside the client's own process — so a test that wants to know
+	 * whether a purchase really reached the file has no process boundary to cross and has to ask
+	 * for one. Between two runs is the honest place to call it, because that is where a real player
+	 * would have quit the game.
+	 *
+	 * @return the state as the file on disk now says it is
+	 */
+	public static UnlockState reloadFromFile() {
+		synchronized (UnlockState.class) {
+			instance = null;
+			return get();
+		}
+	}
+
 	public synchronized boolean isOwned(Unlock unlock) {
 		return level(unlock) > 0;
 	}
