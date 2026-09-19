@@ -6,13 +6,13 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import fi.vilpponen.mhr.core.BalanceManager;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
@@ -28,6 +28,12 @@ import net.fabricmc.loader.api.FabricLoader;
  * <p>The file is a JSON object of unlock id to level, where a missing id means the unlock is not
  * owned. A plain list of ids, which is what the mod wrote before unlocks had levels, still reads and
  * counts as level one each; it is rewritten in the current shape the first time it is read.
+ *
+ * <p>What is owned is keyed by id, not by enum constant. Most ids have an {@link Unlock} behind
+ * them, because some Java asks whether they are owned. Some have none: a starter item is nothing
+ * but an entry in the balance catalogue, and adding one should not mean adding a constant. Keying
+ * on the id means the two kinds are the same kind here, in the file, and in the dev command —
+ * which is the point of ids being strings in the first place.
  *
  * <p>Read from the worldgen threads, so the backing map is guarded by this object's monitor.
  */
@@ -61,7 +67,7 @@ public final class UnlockState {
 	private static volatile UnlockState instance;
 
 	private final Path file;
-	private final Map<Unlock, Integer> levels = new EnumMap<>(Unlock.class);
+	private final Map<String, Integer> levels = new TreeMap<>();
 
 	private UnlockState(Path file) {
 		this.file = file;
@@ -86,14 +92,28 @@ public final class UnlockState {
 		return level(unlock) > 0;
 	}
 
+	/** @param id a stable unlock id, whether or not an {@link Unlock} constant carries it. */
+	public synchronized boolean isOwned(String id) {
+		return level(id) > 0;
+	}
+
 	/** How many times this unlock has been bought: zero when it is not owned at all. */
 	public synchronized int level(Unlock unlock) {
-		return levels.getOrDefault(unlock, 0);
+		return level(unlock.id());
+	}
+
+	public synchronized int level(String id) {
+		return levels.getOrDefault(id, 0);
 	}
 
 	/** @return true if this changed anything. */
 	public synchronized boolean set(Unlock unlock, boolean value) {
-		return setLevel(unlock, value ? Math.max(level(unlock), 1) : 0);
+		return setLevel(unlock.id(), value ? Math.max(level(unlock), 1) : 0);
+	}
+
+	/** @return true if this changed anything. */
+	public synchronized boolean set(String id, boolean value) {
+		return setLevel(id, value ? Math.max(level(id), 1) : 0);
 	}
 
 	/**
@@ -103,17 +123,34 @@ public final class UnlockState {
 	 * @return true if this changed anything.
 	 */
 	public synchronized boolean setLevel(Unlock unlock, int level) {
-		int clamped = Math.clamp(level, 0, unlock.maxLevel());
-		if (clamped == level(unlock)) {
+		return setLevel(unlock.id(), level);
+	}
+
+	/** @return true if this changed anything. */
+	public synchronized boolean setLevel(String id, int level) {
+		int clamped = Math.clamp(level, 0, maxLevelOf(id));
+		if (clamped == level(id)) {
 			return false;
 		}
 		if (clamped == 0) {
-			levels.remove(unlock);
+			levels.remove(id);
 		} else {
-			levels.put(unlock, clamped);
+			levels.put(id, clamped);
 		}
 		save();
 		return true;
+	}
+
+	/**
+	 * How far an id can be taken.
+	 *
+	 * <p>A constant answers for itself, from balance data. Everything else the catalogue sells — a
+	 * starter item, or an unlock whose code has not been written yet — is bought once and no more.
+	 * An id that is in neither is not clamped at all: see {@link #put}.
+	 */
+	private static int maxLevelOf(String id) {
+		Unlock unlock = Unlock.byId(id);
+		return unlock == null ? 1 : unlock.maxLevel();
 	}
 
 	public synchronized String describe() {
@@ -133,16 +170,25 @@ public final class UnlockState {
 		return description.toString();
 	}
 
+	/** The owned ids that a constant is named after. Ones with no constant are simply not here. */
 	public synchronized Set<Unlock> owned() {
 		Set<Unlock> owned = EnumSet.noneOf(Unlock.class);
-		owned.addAll(levels.keySet());
+		for (String id : levels.keySet()) {
+			Unlock unlock = Unlock.byId(id);
+			if (unlock != null) {
+				owned.add(unlock);
+			}
+		}
 		return Collections.unmodifiableSet(owned);
 	}
 
+	/** Every owned id, including the ones no {@link Unlock} constant carries. */
+	public synchronized Set<String> ownedIds() {
+		return Set.copyOf(levels.keySet());
+	}
+
 	private synchronized Map<String, Integer> sortedById() {
-		Map<String, Integer> byId = new TreeMap<>();
-		levels.forEach((unlock, level) -> byId.put(unlock.id(), level));
-		return byId;
+		return new TreeMap<>(levels);
 	}
 
 	private synchronized void load() {
@@ -189,27 +235,48 @@ public final class UnlockState {
 		return migrated;
 	}
 
-	/** @return true if the id had been renamed since the file was written. */
+	/**
+	 * Take one id and level out of the file.
+	 *
+	 * <p>An id this build cannot act on is still kept, and still written back. A purchase is
+	 * permanent, and this build not knowing what to do with one is a fact about this build, not
+	 * about the purchase: pull a starter item out of the catalogue for a release and put it back in
+	 * the next, and the player still owns it, where dropping it on load would have quietly spent
+	 * their currency for them. It is not clamped either, because nothing here knows what its
+	 * ceiling would be. Everything that acts on an unlock asks for the one it cares about by id, so
+	 * one that resolves to nothing simply never matches.
+	 *
+	 * @return true if the id had been renamed since the file was written.
+	 */
 	private synchronized boolean put(String id, int level) {
 		String current = RENAMED_IDS.getOrDefault(id, id);
-		Unlock unlock = Unlock.byId(current);
-		if (unlock == null) {
-			HardcoreRoguelite.LOGGER.warn("Ignoring unknown unlock id '{}' in {}", id, file);
-			return false;
-		}
 		boolean renamed = !current.equals(id);
 		if (renamed) {
 			HardcoreRoguelite.LOGGER.info("Unlock '{}' is now called '{}'", id, current);
 		}
 
-		int clamped = Math.clamp(level, 0, unlock.maxLevel());
-		if (clamped != level) {
-			HardcoreRoguelite.LOGGER.warn("Clamping unlock '{}' level {} to {} in {}", current, level, clamped, file);
+		int kept = level;
+		if (isKnown(current)) {
+			kept = Math.clamp(level, 0, maxLevelOf(current));
+			if (kept != level) {
+				HardcoreRoguelite.LOGGER.warn("Clamping unlock '{}' level {} to {} in {}", current, level, kept, file);
+			}
+		} else {
+			HardcoreRoguelite.LOGGER.warn(
+					"Nothing in this build sells unlock '{}', which {} says is owned."
+							+ " Keeping it: a purchase is permanent, and it works again if it comes back.",
+					current, file);
 		}
-		if (clamped > 0) {
-			levels.put(unlock, clamped);
+
+		if (kept > 0) {
+			levels.put(current, kept);
 		}
 		return renamed;
+	}
+
+	/** Is this an id anything in this build can act on — a constant, or something the shop sells? */
+	private static boolean isKnown(String id) {
+		return Unlock.byId(id) != null || BalanceManager.get().unlock(id).isPresent();
 	}
 
 	private synchronized void save() {

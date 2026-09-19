@@ -37,6 +37,10 @@ Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks im
 - **the five equipment slots** — helmet, chestplate, leggings, boots and offhand, each bought
   separately. A locked slot shows a padlock in the inventory and refuses every item. You can still
   craft, pick up and store the gear; you just can't wear it.
+- **starter items** — anything you have bought turns up in a chest next to you when a run starts.
+  One chest, or a double chest if it needs one, and never more than that. They are not code: each
+  one is an entry in the balance catalogue carrying the item stack it hands over, so an enchanted
+  pickaxe needs no special handling.
 - **the crafted-tool enchant** — the first vanilla+ unlock, and the first repeatable one. Every tool
   or sword you craft comes out of the crafting grid already enchanted with something that fits it.
   Buying it again raises how high that enchantment can roll; at the top level an item can come out
@@ -54,6 +58,8 @@ There is no shop and no currency yet, so unlocks are toggled with a dev command:
 /mhr unlock player.slot.boots
 /mhr unlock player.craft.enchant      # buys the next level
 /mhr unlock player.craft.enchant 4    # or jump straight to one
+/mhr unlock starter.bread
+/mhr starterchest                     # place this run's chest again, for testing
 ```
 
 Prices, rewards, border sizes and the mob damage multiplier are data, not code: they live in

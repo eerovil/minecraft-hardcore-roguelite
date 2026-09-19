@@ -7,7 +7,12 @@ import fi.vilpponen.mhr.core.BalanceManager;
  *
  * <p>Only {@link #TREES}, {@link #VILLAGE}, the ores, the six passive animals, the five equipment
  * slots and {@link #CRAFT_ENCHANT} do anything yet. The rest of the catalogue from the design
- * document (world border, status effects, start chest) gets added here as each one is implemented.
+ * document (world border, status effects) gets added here as each one is implemented.
+ *
+ * <p>Not everything the shop sells needs a constant here. A constant exists so Java can name one
+ * unlock and ask whether it is owned; a starter item has nothing to name, because the whole of it
+ * is the item stack in the balance file. Those live under {@code starter.} in the catalogue and
+ * are owned by id alone — see {@code fi.vilpponen.mhr.starter} and {@link UnlockState}.
  *
  * <p>The id is one string used everywhere: it is the key in {@code default-balance.json}, the value
  * written to the unlock save file, and what the dev command takes. It is namespaced — {@code world.}
