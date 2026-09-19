@@ -7,7 +7,8 @@
 		"LockedArmorSlotVisibleMixin",
 		"LockedSlotPlacementMixin",
 		"PlayerEquipmentMixin",
-		"TreeGenerationMixin"
+		"TreeGenerationMixin",
+		"VillageGenerationMixin"
 	],
 	"client": [
 		"client.LockedSlotOverlayMixin"

@@ -3,9 +3,9 @@ package fi.vilpponen.mhr;
 /**
  * Everything the shop can sell that is permanent across runs.
  *
- * <p>Only {@link #TREES} and the five equipment slots do anything yet. The rest of the catalogue
- * from the design document (ores, animals, villages, world border, status effects, start chest)
- * gets added here as each one is implemented.
+ * <p>Only {@link #TREES}, {@link #VILLAGE} and the five equipment slots do anything yet. The rest
+ * of the catalogue from the design document (ores, animals, world border, status effects, start
+ * chest) gets added here as each one is implemented.
  *
  * <p>The id is one string used everywhere: it is the key in {@code default-balance.json}, the value
  * written to the unlock save file, and what the dev command takes. It is namespaced — {@code world.}
@@ -16,6 +16,9 @@ package fi.vilpponen.mhr;
  */
 public enum Unlock {
 	TREES("world.trees"),
+
+	/** Village structures in newly generated land. See {@code fi.vilpponen.mhr.village}. */
+	VILLAGE("world.village"),
 
 	/** The five equipment slots, one unlock each. See {@code fi.vilpponen.mhr.equipment}. */
 	SLOT_HELMET("player.slot.helmet"),
