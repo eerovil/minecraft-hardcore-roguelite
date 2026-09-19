@@ -584,21 +584,9 @@ through a portal the same way one does:
   the `endBorder.minimumSize` floor is what makes the difference between arriving and arriving
   outside the wall.
 
-Only one thing about this feature needs a client, and it is not the border — it is the *copy of* the
-border. A connected player never sees the server's; they see their own, kept up to date by packets,
-and the wall is drawn from that. A tier bought mid-run that never reached the client would leave the
-player stopped by a wall they cannot see while the server looked perfectly correct. So
-`src/gametest/java/fi/vilpponen/mhr/gametest/client/WorldBorderClientTest.java` has one scenario:
-
-- **a-tier-change-reaches-the-connected-client** — `mhr border tiny` and then `mhr border medium`
-  while a player is connected. After each, the client's own border has to match the server's size
-  and center, and the wall has to be drawn half the tier's width from the run's spawn. Two tiers
-  rather than one, because a client that never updated its copy would still match on the first —
-  that is the border it was handed when it joined.
-
-| The tiny wall, 64 blocks from spawn | The medium wall, 256 blocks from spawn |
-| ----------------------------------- | -------------------------------------- |
-| ![the border wall seen from eighteen blocks away](images/gametest-border-tiny-wall.png) | ![the same wall, a tier wider out](images/gametest-border-medium-wall.png) |
+No client is involved in any of it. What a border is and where it goes are facts about the server's
+own world, and the two journeys ask the same question a player would by sending something through a
+real portal — so there is nothing here a real client is needed to answer.
 
 ### What is still manual
 
@@ -783,9 +771,9 @@ Nothing here needs doing by hand any more:
 scripts/dev.sh gametest
 ```
 
-covers all four tiers, all three dimensions, what a balance reload does and does not change, two
+covers all four tiers, all three dimensions, what a balance reload does and does not change, and two
 real transitions out of the overworld — a nether portal and an end portal, with a pig as the
-traveller — and that a tier change reaches a connected client's own copy of the border. See [Automated gameplay tests](#automated-gameplay-tests). What follows
+traveller. See [Automated gameplay tests](#automated-gameplay-tests). What follows
 is how to poke at it on the dev server when you want to *see* it rather than prove it.
 
 A run starts on the `tiny` tier, and the border is placed when the server starts, centered on the
