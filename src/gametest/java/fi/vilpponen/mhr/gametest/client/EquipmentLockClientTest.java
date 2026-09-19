@@ -85,6 +85,9 @@ public class EquipmentLockClientTest implements FabricClientGameTest {
 		int helmetSlot = player.findSlotWithItem(Items.IRON_HELMET);
 		check(helmetSlot >= 0, "the helmet should be somewhere in the open inventory screen");
 		player.clickSlot(helmetSlot);
+		check(player.cursor().is(Items.IRON_HELMET),
+				"clicking the helmet should pick it up onto the cursor, but the cursor holds "
+						+ player.cursor());
 		player.clickSlot(TestPlayer.HEAD_SLOT);
 		player.closeInventory();
 
@@ -92,7 +95,20 @@ public class EquipmentLockClientTest implements FabricClientGameTest {
 				"a locked helmet slot must stay empty after a click that tries to fill it");
 		check(player.reachableCount(Items.IRON_HELMET) == 1,
 				"the refused helmet must still exist exactly once, but there are "
-						+ player.reachableCount(Items.IRON_HELMET));
+						+ player.reachableCount(Items.IRON_HELMET) + ":" + player.whereItIs(Items.IRON_HELMET));
+
+		// The click above is turned away three times over — the slot says it cannot be filled, the
+		// player says it has no such slot, and the write barrier refuses the write. That is good for
+		// a player and bad for a test: it would still pass with the barrier gone. `/item replace`
+		// writes the slot directly, past both of the polite refusals, so this last pair of
+		// assertions is red the moment the barrier itself stops working.
+		player.command("item replace entity Player0 armor.head with minecraft:iron_helmet");
+		check(player.equipped(EquipmentSlot.HEAD).isEmpty(),
+				"a locked helmet slot must refuse a direct write too, but it holds "
+						+ player.equipped(EquipmentSlot.HEAD));
+		check(player.reachableCount(Items.IRON_HELMET) == 2,
+				"the directly written helmet must be handed back rather than destroyed, and the"
+						+ " helmets are at:" + player.whereItIs(Items.IRON_HELMET));
 	}
 
 	/**
@@ -113,14 +129,18 @@ public class EquipmentLockClientTest implements FabricClientGameTest {
 		int helmetSlot = player.findSlotWithItem(Items.IRON_HELMET);
 		check(helmetSlot >= 0, "the helmet should be somewhere in the open inventory screen");
 		player.clickSlot(helmetSlot);
+		check(player.cursor().is(Items.IRON_HELMET),
+				"clicking the helmet should pick it up onto the cursor, but the cursor holds "
+						+ player.cursor());
 		player.clickSlot(TestPlayer.HEAD_SLOT);
 		player.closeInventory();
 
 		check(player.equipped(EquipmentSlot.HEAD).is(Items.IRON_HELMET),
 				"an unlocked helmet slot must accept the helmet, but it holds "
-						+ player.equipped(EquipmentSlot.HEAD));
+						+ player.equipped(EquipmentSlot.HEAD) + " and the helmet is at:"
+						+ player.whereItIs(Items.IRON_HELMET));
 		check(player.reachableCount(Items.IRON_HELMET) == 1,
-				"equipping must not duplicate the helmet");
+				"equipping must not duplicate the helmet, but it is at:" + player.whereItIs(Items.IRON_HELMET));
 	}
 
 	/**
@@ -135,7 +155,7 @@ public class EquipmentLockClientTest implements FabricClientGameTest {
 				"a locked offhand must stay empty when the swap-hands key is pressed");
 		check(player.reachableCount(Items.SHIELD) == 1,
 				"the refused shield must be neither lost nor duplicated, but there are "
-						+ player.reachableCount(Items.SHIELD));
+						+ player.reachableCount(Items.SHIELD) + ":" + player.whereItIs(Items.SHIELD));
 
 		player.command("mhr unlock player.slot.offhand");
 		player.putInHand(Items.SHIELD);
@@ -144,7 +164,8 @@ public class EquipmentLockClientTest implements FabricClientGameTest {
 		check(player.equipped(EquipmentSlot.OFFHAND).is(Items.SHIELD),
 				"an unlocked offhand must swap normally, but it holds "
 						+ player.equipped(EquipmentSlot.OFFHAND));
-		check(player.reachableCount(Items.SHIELD) == 1, "the swap must not duplicate the shield");
+		check(player.reachableCount(Items.SHIELD) == 1,
+				"the swap must not duplicate the shield, but it is at:" + player.whereItIs(Items.SHIELD));
 	}
 
 	/**
@@ -164,7 +185,7 @@ public class EquipmentLockClientTest implements FabricClientGameTest {
 				"locking an occupied slot must empty it immediately");
 		check(player.reachableCount(Items.SHIELD) == 1,
 				"the shield must come back to the player, but there are "
-						+ player.reachableCount(Items.SHIELD));
+						+ player.reachableCount(Items.SHIELD) + ":" + player.whereItIs(Items.SHIELD));
 	}
 
 	/**
@@ -187,7 +208,8 @@ public class EquipmentLockClientTest implements FabricClientGameTest {
 			player.clickSlot(TestPlayer.HEAD_SLOT);
 			player.closeInventory();
 			check(player.equipped(EquipmentSlot.HEAD).is(Items.IRON_HELMET),
-					"setup: the helmet should be worn before the player logs out");
+					"setup: the helmet should be worn before the player logs out, but it is at:"
+							+ player.whereItIs(Items.IRON_HELMET));
 		}
 
 		// Nobody is connected now, which is exactly the case the JOIN handler exists for.
@@ -203,7 +225,8 @@ public class EquipmentLockClientTest implements FabricClientGameTest {
 					"a slot locked while the player was away must be empty on rejoin, but it holds " + head);
 			check(player.reachableCount(Items.IRON_HELMET) == 1,
 					"the helmet must survive the reconnect exactly once, but there are "
-							+ player.reachableCount(Items.IRON_HELMET));
+							+ player.reachableCount(Items.IRON_HELMET) + ":"
+							+ player.whereItIs(Items.IRON_HELMET));
 			check(!player.clientThinksUnlocked(EquipmentSlot.HEAD),
 					"a rejoining client must be told the helmet slot is locked");
 			context.takeScreenshot("reconnect-helmet-slot-locked");

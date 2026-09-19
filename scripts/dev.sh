@@ -160,8 +160,10 @@ export HOME=/pvc/gametest/home
 export GRADLE_USER_HOME=/pvc/gradle-gametest
 export DISPLAY=:99
 # Minecraft 26.3 asks SDL for the OpenGL context. Left to itself SDL goes through GLX, and
-# llvmpipe on a bare Xvfb has no GLX visual that matches what the game wants. EGL does.
-export SDL_VIDEO_X11_FORCE_EGL=1
+# llvmpipe on a bare Xvfb has no GLX visual that matches what the game wants, so the client dies
+# on "Couldn't find matching GLX visual" before a single test runs. EGL has no such problem.
+# The SDL2 spelling of this was SDL_VIDEO_X11_FORCE_EGL and SDL3 ignores it.
+export SDL_VIDEO_FORCE_EGL=1
 mkdir -p "\$HOME"
 
 # One virtual display, reused across runs. Minecraft renders into it with llvmpipe; nothing

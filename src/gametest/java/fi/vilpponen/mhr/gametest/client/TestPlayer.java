@@ -1,7 +1,9 @@
 package fi.vilpponen.mhr.gametest.client;
 
 import fi.vilpponen.mhr.gametest.mixin.ContainerScreenAccessor;
+import java.util.ArrayList;
 import java.util.List;
+import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.fabric.api.client.gametest.v1.TestInput;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestServerConnection;
@@ -67,6 +69,41 @@ final class TestPlayer {
 	 * <p>This is the item-conservation check. A refused helmet has to be somewhere; the point of
 	 * counting all four places at once is that "not equipped" is never allowed to mean "destroyed".
 	 */
+	/**
+	 * The same places, spelled out. A count that is wrong is only useful if you can see where the
+	 * extra copy is, so every failed conservation check prints this.
+	 */
+	String whereItIs(Item item) {
+		return server.computeOnServer(unused -> {
+			ServerPlayer player = connection.getServerPlayer();
+			StringBuilder where = new StringBuilder();
+
+			NonNullList<ItemStack> items = player.getInventory().getNonEquipmentItems();
+			for (int i = 0; i < items.size(); i++) {
+				if (items.get(i).is(item)) {
+					where.append(" inventory[").append(i).append("]x").append(items.get(i).getCount());
+				}
+			}
+			for (EquipmentSlot slot : countableEquipment()) {
+				ItemStack stack = player.getItemBySlot(slot);
+				if (stack.is(item)) {
+					where.append(' ').append(slot.getName()).append('x').append(stack.getCount());
+				}
+			}
+			ItemStack carried = player.containerMenu.getCarried();
+			if (carried.is(item)) {
+				where.append(" cursorx").append(carried.getCount());
+			}
+			for (ItemEntity entity : player.level().getEntitiesOfClass(
+					ItemEntity.class, player.getBoundingBox().inflate(16.0))) {
+				if (entity.getItem().is(item)) {
+					where.append(" groundx").append(entity.getItem().getCount());
+				}
+			}
+			return where.isEmpty() ? " nowhere" : where.toString();
+		});
+	}
+
 	int reachableCount(Item item) {
 		return server.computeOnServer(unused -> {
 			ServerPlayer player = connection.getServerPlayer();
@@ -76,7 +113,7 @@ final class TestPlayer {
 			for (ItemStack stack : items) {
 				count += stack.is(item) ? stack.getCount() : 0;
 			}
-			for (EquipmentSlot slot : EquipmentSlot.values()) {
+			for (EquipmentSlot slot : countableEquipment()) {
 				ItemStack stack = player.getItemBySlot(slot);
 				count += stack.is(item) ? stack.getCount() : 0;
 			}
@@ -93,8 +130,34 @@ final class TestPlayer {
 		});
 	}
 
+	/**
+	 * The equipment slots worth counting separately.
+	 *
+	 * <p>The main hand is left out on purpose: it is not a place of its own, it is whichever hotbar
+	 * square is selected, and it is already in {@code getNonEquipmentItems()}. Counting both is how
+	 * a perfectly conserved item comes out as two.
+	 */
+	private static List<EquipmentSlot> countableEquipment() {
+		List<EquipmentSlot> slots = new ArrayList<>();
+		for (EquipmentSlot slot : EquipmentSlot.values()) {
+			if (slot != EquipmentSlot.MAINHAND) {
+				slots.add(slot);
+			}
+		}
+		return slots;
+	}
+
+	/** What is on the cursor, as the server sees it. */
+	ItemStack cursor() {
+		return server.computeOnServer(unused -> connection.getServerPlayer().containerMenu.getCarried().copy());
+	}
+
 	/** Puts the player back to nothing owned, nothing worn, nothing carried, empty inventory. */
 	void reset(List<String> unlockIds) {
+		// A scenario that failed halfway may have left a screen open. Close it before anything
+		// else, so one red scenario cannot make the next one red for a different reason.
+		context.setScreen(() -> null);
+		context.waitTicks(2);
 		for (String id : unlockIds) {
 			server.runCommand("mhr lock " + id);
 		}
@@ -165,7 +228,7 @@ final class TestPlayer {
 	/** Presses the inventory key again, which is how vanilla closes it. */
 	void closeInventory() {
 		context.getInput().pressKey(options -> options.keyInventory);
-		context.waitFor(client -> client.screen == null);
+		context.waitFor(client -> client.gui.screen() == null);
 		settle();
 	}
 
@@ -184,14 +247,16 @@ final class TestPlayer {
 	 */
 	void clickSlot(int slotIndex) {
 		moveCursorToSlot(slotIndex);
-		context.getInput().pressMouse(0);
+		// MOUSE_BUTTON_LEFT, not 0. 26.3 gets its input from SDL, where the left button is 1;
+		// pressing 0 presses a button that does not exist and nothing happens at all.
+		context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
 		settle();
 	}
 
 	/** Moves the mouse onto a slot and checks the screen agrees. */
 	void moveCursorToSlot(int slotIndex) {
 		double[] position = context.computeOnClient(client -> {
-			AbstractContainerScreen<?> screen = containerScreen(client.screen);
+			AbstractContainerScreen<?> screen = containerScreen(client.gui.screen());
 			ContainerScreenAccessor accessor = (ContainerScreenAccessor) screen;
 			Slot slot = screen.getMenu().getSlot(slotIndex);
 			double scale = client.getWindow().getGuiScale();
@@ -204,12 +269,12 @@ final class TestPlayer {
 		context.waitTicks(2);
 
 		int hovered = context.computeOnClient(client -> {
-			ContainerScreenAccessor accessor = (ContainerScreenAccessor) containerScreen(client.screen);
+			ContainerScreenAccessor accessor = (ContainerScreenAccessor) containerScreen(client.gui.screen());
 			Slot slot = accessor.mhr$hoveredSlot();
 			return slot == null ? -1 : slot.index;
 		});
 		int wanted = context.computeOnClient(client ->
-				containerScreen(client.screen).getMenu().getSlot(slotIndex).index);
+				containerScreen(client.gui.screen()).getMenu().getSlot(slotIndex).index);
 		if (hovered != wanted) {
 			throw new AssertionError("Wanted the cursor on menu slot " + slotIndex
 					+ " (container index " + wanted + ") at window position "
@@ -221,7 +286,7 @@ final class TestPlayer {
 	/** The menu index of the first slot holding this item, or -1. */
 	int findSlotWithItem(Item item) {
 		return context.computeOnClient(client -> {
-			AbstractContainerScreen<?> screen = containerScreen(client.screen);
+			AbstractContainerScreen<?> screen = containerScreen(client.gui.screen());
 			NonNullList<Slot> slots = screen.getMenu().slots;
 			for (int i = 0; i < slots.size(); i++) {
 				if (slots.get(i).getItem().is(item)) {

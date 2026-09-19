@@ -96,9 +96,11 @@ nothing root-owned lands on the volume.
 
 Two things had to be arranged for the client to start headless at all, both in `scripts/dev.sh`:
 
-- **`SDL_VIDEO_X11_FORCE_EGL=1`.** 26.3 asks SDL for the OpenGL context, SDL prefers GLX, and
-  llvmpipe on a bare Xvfb has no GLX visual matching what the game asks for. EGL does. Without
-  this the client dies on `Couldn't find matching GLX visual` before any test runs.
+- **`SDL_VIDEO_FORCE_EGL=1`.** 26.3 asks SDL for the OpenGL context, SDL prefers GLX, and llvmpipe
+  on a bare Xvfb has no GLX visual matching what the game asks for. EGL does. Without this the
+  client dies on `Couldn't find matching GLX visual` before any test runs. Note the name: the SDL2
+  spelling was `SDL_VIDEO_X11_FORCE_EGL` and SDL3 ignores it silently, which looks exactly like the
+  variable not working.
 - **Xvfb at 24-bit colour**, started once per pod and reused.
 
 ### Test isolation
@@ -131,7 +133,7 @@ The client test log marks each scenario:
 ```
 
 A failed one logs `FAIL` with the assertion message, writes
-`screenshots/failed-<scenario-name>.png`, and carries on to the remaining scenarios — so one run
+`screenshots/<n>_failed-<scenario-name>.png`, and carries on to the remaining scenarios — so one run
 tells you everything that is broken, not just the first thing. The run ends by throwing with the
 whole list, which is what turns the exit status non-zero.
 
@@ -157,6 +159,16 @@ These were manual client checks and are not any more, in
 
 Every one of them ends by counting every copy of the item the player could still reach — inventory,
 equipment, the cursor, and the ground — so "refused" can never quietly mean "destroyed".
+
+The two inventory screenshots are worth a look, because they are the padlock check the docs used
+to ask a human for:
+
+| Helmet slot locked | ...and the moment after `mhr unlock player.slot.helmet` |
+| ------------------ | ------------------------------------------------------ |
+| ![five padlocks](images/gametest-helmet-slot-locked.png) | ![four padlocks](images/gametest-helmet-slot-unlocked.png) |
+
+Five padlocks become four, with the helmet square back to its vanilla empty icon, without the
+inventory being closed and reopened.
 
 The clicks are real. The cursor is moved to the middle of the square and the click is only sent once
 the screen itself agrees that is the square under the pointer, so a layout change makes the test
@@ -404,6 +416,9 @@ removes both pods but keeps the volume, so bringing it back is fast.
 - Client-side behaviour is tested by the client GameTests in the `mhr-gametest` pod, not by hand —
   see [Automated gameplay tests](#automated-gameplay-tests). There is still no client you can *look*
   at: for exploring by eye you run the real Minecraft client on the Mac through the port-forward.
+- The mouse button is `InputConstants.MOUSE_BUTTON_LEFT`, which is **1** in 26.3, not 0. 26.3
+  takes its input from SDL and SDL numbers buttons from one. Pressing 0 presses nothing at all and
+  the test then fails somewhere much later, so it is worth knowing before writing the next one.
 - The gametest pod apt-gets its virtual display on every start, so the first `scripts/dev.sh
   gametest` after a pod restart waits a minute for that, and a run with a cold Gradle cache waits
   rather longer while it downloads Minecraft again.
