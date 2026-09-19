@@ -118,9 +118,24 @@ class BalanceOverrideKeysTest {
 	}
 
 	@Test
-	void aWrongShapedSectionIsLeftForTheParserToReport() {
-		// Not this check's job — bind says what shape a section should be, and says it once.
-		accept("{\"unlocks\": 3}");
-		accept("{\"currency\": {\"advancements\": \"lots\"}}");
+	void anObjectReplacedByAScalarIsRefused() {
+		// The one bind would miss: nothing traverses vanillaPlus, so left to bind this override
+		// survives the reload and only shows up later, when the feature reading the path is asked a
+		// question. Refusing it here keeps the game on the balance it had.
+		BalanceException thrown = reject("{\"vanillaPlus\": {\"speed\": 12}}");
+
+		assertTrue(thrown.getMessage().contains("sets 'vanillaPlus.speed' to 12"), thrown.getMessage());
+		assertTrue(thrown.getMessage().contains("has an object there"), thrown.getMessage());
+	}
+
+	@Test
+	void aWrongShapedSectionIsRefused() {
+		assertTrue(reject("{\"unlocks\": 3}").getMessage().contains("has an object there"));
+		assertTrue(reject("{\"currency\": {\"advancements\": \"lots\"}}").getMessage()
+				.contains("has an object there"));
+		assertTrue(reject("{\"difficulty\": {\"mobDamageMultiplier\": \"hard\"}}").getMessage()
+				.contains("has a number there"));
+		assertTrue(reject("{\"unlocks\": {\"world.trees\": {\"price\": [3]}}}").getMessage()
+				.contains("has a number there"));
 	}
 }

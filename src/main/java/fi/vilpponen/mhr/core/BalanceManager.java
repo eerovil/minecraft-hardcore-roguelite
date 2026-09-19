@@ -153,10 +153,15 @@ public final class BalanceManager {
 	 * hitting exactly as hard as before. A balance change that appears to work, does nothing, and says
 	 * nothing is the one failure this layer exists to prevent.
 	 *
+	 * <p>Shape counts too, not just the names: the override has to look like the bundled file all the
+	 * way down, so only the values differ. Left to {@code bind}, a section it does not traverse could
+	 * have an object replaced by a number, survive a reload, and only blow up later when the feature
+	 * reading it happened to be asked a question. Checking here means a bad override is refused while
+	 * the game is still on the balance it had.
+	 *
 	 * <p>So there is no extension point here, which is the point: a new tuning value goes in
 	 * {@code default-balance.json} first, where the rest of the catalogue already lives, and the
-	 * override tunes it afterwards. Code can read a value by path before the data exists — see
-	 * {@link Balance#number} — but a config file cannot invent one.
+	 * override tunes it afterwards. A config file cannot invent one.
 	 */
 	static void checkOverrideKeys(JsonObject defaults, JsonObject over, String where) {
 		checkKeys(defaults, over, "", where);
@@ -177,12 +182,38 @@ public final class BalanceManager {
 				throw new BalanceException("The balance override " + where + " sets '" + path
 						+ "', which the bundled balance does not have." + hint);
 			}
-			// Only descend where both sides are objects. A scalar where an object belongs, or the
-			// other way round, is a shape question, and bind answers those in one place.
-			if (expected.isJsonObject() && entry.getValue().isJsonObject()) {
-				checkKeys(expected.getAsJsonObject(), entry.getValue().getAsJsonObject(), path, where);
+
+			JsonElement actual = entry.getValue();
+			if (!sameKind(expected, actual)) {
+				throw new BalanceException("The balance override " + where + " sets '" + path + "' to "
+						+ actual + ", but the bundled balance has " + kindOf(expected) + " there.");
+			}
+			if (expected.isJsonObject()) {
+				checkKeys(expected.getAsJsonObject(), actual.getAsJsonObject(), path, where);
 			}
 		}
+	}
+
+	/** Two values the merge can swap for each other without changing the file's shape. */
+	private static boolean sameKind(JsonElement expected, JsonElement actual) {
+		return kindOf(expected).equals(kindOf(actual));
+	}
+
+	private static String kindOf(JsonElement element) {
+		if (element.isJsonObject()) {
+			return "an object";
+		}
+		if (element.isJsonArray()) {
+			return "a list";
+		}
+		if (element.isJsonNull()) {
+			return "null";
+		}
+		JsonPrimitive primitive = element.getAsJsonPrimitive();
+		if (primitive.isNumber()) {
+			return "a number";
+		}
+		return primitive.isBoolean() ? "a true/false" : "a string";
 	}
 
 	/** The known name within a typo or two of this one, or null if nothing is close enough. */

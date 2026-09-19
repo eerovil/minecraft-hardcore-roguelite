@@ -41,9 +41,13 @@ Without that rule both of those merge perfectly and do nothing: the first makes 
 reads while the real diamond keeps its price, the second makes a section nothing reads while mobs go
 on hitting exactly as hard as before. Neither would say a word.
 
-There is no exception to it, which is the point. A new value — a new unlock, a new tuning knob for a
-vanilla+ system — goes in `default-balance.json` first, where the catalogue already lives, and the
-override tunes it afterwards. See [Adding values](#adding-values).
+Shape counts as well as names. The override has to look like the bundled file all the way down, so
+only the values differ — replacing an object with a number, or a number with a string, is refused
+before anything is merged, and the game stays on the balance it had.
+
+There is no exception to any of it, which is the point. A new value — a new unlock, a new tuning knob
+for a vanilla+ system — goes in `default-balance.json` first, where the catalogue already lives, and
+the override tunes it afterwards. See [Adding values](#adding-values).
 
 If the override does not exist, the defaults are used as they are. Nothing writes the file for you,
 on purpose: a generated copy of the whole catalogue would go stale the moment a default changed.
@@ -126,7 +130,9 @@ like a run played at the right ones, so a mistake has to be loud.
 - **On reload** the running game keeps the balance it already had and the error goes to whoever ran
   the command. A typo mid-playtest does not disturb the session.
 
-Missing values are not errors — they fall back to the bundled default through the merge.
+A value the override leaves out is not an error: it keeps its bundled value through the merge. That
+is the only fallback in the system. A value missing from the bundled file is an error, because
+nothing is behind it.
 
 ## Reloading while the game runs
 
@@ -157,10 +163,15 @@ use instead.
 ## Using it from feature code
 
 ```java
-int price = BalanceManager.get().unlockPrice("world.ore.diamond").orElse(0);
+int price = BalanceManager.get().unlockPrice("world.ore.diamond").orElseThrow();
 double multiplier = BalanceManager.get().mobDamageMultiplier();
 int reward = BalanceManager.get().advancementReward("minecraft:end/kill_dragon");
 ```
+
+Note the `orElseThrow`. An unlock the shop sells but the balance file does not price is a mistake in
+the mod, and `orElse(0)` would turn it into a free unlock nobody ordered. The one accessor that
+answers for something absent is `advancementReward`, which pays 0 for an advancement the file does
+not list — that is a real answer, not a stand-in, since most advancements pay nothing.
 
 `BalanceManager.get()` is cheap and thread-safe — the snapshot is immutable and is swapped whole on
 reload, so worldgen threads can call it. Features must not keep a number of their own; that is the
@@ -172,22 +183,21 @@ A new tuning value with no typed home yet goes into a new section of `default-ba
 read by path:
 
 ```java
-double stepPercent = BalanceManager.get().number("vanillaPlus.speed.stepPercent", 10);
+double stepPercent = BalanceManager.get().number("vanillaPlus.speed.stepPercent");
 ```
 
-Put the value in the bundled file when you add the code that reads it. Once it is there, an override
-can tune it like anything else; until it is, an override naming it is refused, because a config file
-that could invent keys is a config file where a typo does nothing and says nothing.
+Put the value in the bundled file in the same change as the code that reads it. There is no fallback
+argument, on purpose: a fallback is a balance number written in Java, and this layer exists so there
+are none. A path the data does not have is a mistake in the file or in the code, and it is reported
+as one — the same as a path that runs into something which is not an object on the way down, like
+`vanillaPlus.speed` holding `12` when the code expects it to hold `stepPercent`.
+
+The override keeps its own safe fallback by being merged over the bundled file: anything it leaves
+out simply keeps the bundled value. That is the only fallback there is, and it is enough.
 
 When the system settles down, give it a record and an accessor in `Balance` and validation in
 `BalanceManager.bind`. The path lookup splits on `.`, so it cannot reach into `unlocks` — those keys
 contain dots themselves. Use `unlockPrice` for those.
-
-A path that is simply absent gives you the fallback; that is what it is for. A path that runs into
-something that is not an object on the way down — `vanillaPlus.speed` holding `12` when the code
-expects it to hold `stepPercent` — is an error, and is reported like any other bad balance value.
-The same rule as everywhere else here: a missing value falls back, a wrong one is never quietly
-papered over.
 
 ## Where this sits in the mod
 

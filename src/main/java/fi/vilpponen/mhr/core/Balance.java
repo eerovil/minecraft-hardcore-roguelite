@@ -110,22 +110,28 @@ public final class Balance {
 
 	/**
 	 * Any other number in the merged balance file, by dotted path, e.g.
-	 * {@code number("vanillaPlus.speed.stepPercent", 10)}.
+	 * {@code number("vanillaPlus.speed.stepPercent")}.
 	 *
 	 * <p>The escape hatch for tuning values that do not have a typed home yet, so a new vanilla+
 	 * system can be balanced from data on day one and grow a proper accessor later. The value goes
-	 * in {@code default-balance.json} alongside the code that reads it; an override can tune it
-	 * afterwards but cannot introduce it. The path is split on {@code .}, so it cannot reach into
-	 * {@link #unlocks()} — those keys contain dots themselves. Use {@link #unlockPrice} for those.
+	 * in {@code default-balance.json} alongside the code that reads it.
 	 *
-	 * @param fallback returned when the path is absent
-	 * @throws BalanceException if the path exists but does not hold a number, or if it runs into a
-	 *     value that is not an object on the way down
+	 * <p>There is deliberately no fallback argument. A fallback is a balance number written in Java,
+	 * and the whole point of this layer is that there are none: a path the data does not have is a
+	 * mistake in one of the two, not a cue to invent a value. The override already has its safe
+	 * fallback — it is merged over the bundled file, so anything it leaves out keeps the bundled
+	 * value — and a second default behind that would only hide a missing one.
+	 *
+	 * <p>The path is split on {@code .}, so it cannot reach into {@link #unlocks()} — those keys
+	 * contain dots themselves. Use {@link #unlockPrice} for those.
+	 *
+	 * @throws BalanceException if the path is absent, does not hold a number, or runs into a value
+	 *     that is not an object on the way down
 	 */
-	public double number(String path, double fallback) {
+	public double number(String path) {
 		JsonElement found = resolve(path);
 		if (found == null) {
-			return fallback;
+			throw new BalanceException("Balance is missing the value '" + path + "'");
 		}
 		if (!(found instanceof JsonPrimitive primitive) || !primitive.isNumber()) {
 			throw new BalanceException("Balance value '" + path + "' should be a number, not " + found);
@@ -138,8 +144,8 @@ public final class Balance {
 	 *
 	 * @throws BalanceException if the value is fractional, or too big to be an {@code int}
 	 */
-	public int integer(String path, int fallback) {
-		return Numbers.toInt(number(path, fallback), path);
+	public int integer(String path) {
+		return Numbers.toInt(number(path), path);
 	}
 
 	/** Top-level sections present in the merged file, including ones nothing reads yet. */
