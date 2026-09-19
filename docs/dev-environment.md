@@ -189,7 +189,25 @@ throwaway world. `rcon-cli` also reads commands from stdin, which is much faster
 `scripts/dev.sh rcon` per command when you are counting fourteen ore blocks across several chunks.
 
 Note that the cluster is shared: if someone else runs `scripts/dev.sh go` while you are testing,
-the server restarts under you with their jar.
+the server restarts under you with their jar. The build pod's `/pvc/workspace` is shared too, so a
+deploy can ship someone else's build. For a test that has to be left alone, copy your tree to a
+directory of your own under `/pvc`, build there, and run a second server deployment against its own
+`subPath` — then delete it when you are done.
+
+### The large iron and copper veins
+
+The deep veins do not come from an ore feature, so `place feature` cannot reach them and a scan of a
+few chunks will usually miss them: they are rare, and only about one block in fifty of a vein is a
+raw ore block. Two things make them testable:
+
+- `raw_iron_block` and `raw_copper_block` only ever come from a vein, so counting them counts veins
+  and nothing else.
+- With a fixed `SEED` on the server, deleting the world regenerates exactly the same terrain. Scan
+  the same coordinates once with the ore unlocked and once with it locked and the two runs are
+  directly comparable. 16×16 chunks is enough to contain a few veins.
+
+Something that is unlocked in both runs — coal is a good choice — should come out at roughly the
+same count, which is how you know you really did regenerate the same world.
 
 ## Resource use
 
