@@ -392,9 +392,12 @@ centering works or not:
 - **theEndIsWidenedOnlyWhenTheTierIsNarrowerThanItsFloor** — the floor itself, on a fixture that
   cannot drift: one tier retuned to a quarter of the minimum and another to four times it. The
   narrow one is widened in the end and left alone in the overworld, the wide one keeps its size.
-- **aBalanceOverrideAndAReloadResizeATier** — writing a `worldBorder.medium.size` into the config
-  override and running `mhr reload` resizes the tier on the spot, in every dimension, with no
-  rebuild; taking the override away puts the bundled number back.
+- **aReloadedOverrideResizesTheTierOnItsNextApplication** — writing a `worldBorder.medium.size`
+  into the config override and running `mhr reload` leaves the border the run is already inside
+  exactly as it was, which is what the reload command promises: a world is never resized under the
+  player. The *next* application of that tier — the next run, or a tier change — comes out at the
+  retuned size, in every dimension and with no rebuild. Taking the override away puts the bundled
+  number back the same way.
 
 A portal transition is not arithmetic, though, and it is the one place a wrong border hides: vanilla
 drags a portal destination back inside whatever border it is given, so a nether border left on the
@@ -404,7 +407,7 @@ they walked into. That has to be walked through, so it is a **client GameTest**,
 assertions are still all server-side; the client is there because it is the only traveller the
 harness has.
 
-- **the-border-wall-stands-at-the-tier-size** — the wall photographed from eight blocks short of
+- **the-border-wall-stands-at-the-tier-size** — the wall photographed from eighteen blocks short of
   its own edge on tiny and again on medium, each checked against half the tier's width in the
   balance file.
 - **a-nether-portal-inside-the-border-lands-inside-the-nether-border** — a real four-by-five
@@ -592,8 +595,9 @@ Nothing here needs doing by hand any more:
 scripts/dev.sh gametest
 ```
 
-covers all four tiers, all three dimensions, the balance reload, and a real portal walked through in
-both directions of travel. See [Automated gameplay tests](#automated-gameplay-tests). What follows
+covers all four tiers, all three dimensions, what a balance reload does and does not change, and two
+real transitions walked out of the overworld: a nether portal, and an end portal. Coming back is a
+command teleport, because the way home is not what the border promises anything about. See [Automated gameplay tests](#automated-gameplay-tests). What follows
 is how to poke at it on the dev server when you want to *see* it rather than prove it.
 
 A run starts on the `tiny` tier, and the border is placed when the server starts, centered on the

@@ -245,12 +245,16 @@ public final class WorldBorderGameTest {
 	// --- balance ---------------------------------------------------------------------------------
 
 	/**
-	 * Retuning a tier is editing the balance override and reloading it, not a rebuild. The border
-	 * is read out of the balance each time it is applied, so the next tier change is on the new
-	 * numbers.
+	 * Retuning a tier is editing the balance override and reloading it, not a rebuild — but it is
+	 * the <em>next</em> border application that picks the new number up, not the running world.
+	 *
+	 * <p>That is deliberate, and {@code mhr reload} says so in as many words: a run already in
+	 * progress keeps the border it started with, because resizing a world under the player would
+	 * put them outside a wall they never crossed. So this scenario pins both halves — the reload
+	 * changing nothing on the spot, and the same tier applied again coming out at the new size.
 	 */
 	@GameTest
-	public void aBalanceOverrideAndAReloadResizeATier(GameTestHelper helper) {
+	public void aReloadedOverrideResizesTheTierOnItsNextApplication(GameTestHelper helper) {
 		MinecraftServer server = helper.getLevel().getServer();
 		Path override = BalanceManager.overrideFile();
 		double before = BorderTier.MEDIUM.balance(BalanceManager.get()).size().orElseThrow();
@@ -260,13 +264,27 @@ public final class WorldBorderGameTest {
 
 		withRunSpawn(server, () -> {
 			try {
+				selectTier(server, BorderTier.MEDIUM);
 				write(override, "{\"worldBorder\": {\"medium\": {\"size\": " + RETUNED_MEDIUM_SIZE + "}}}");
 				runCommand(server, "mhr reload");
 
+				// Nothing moves under the player. The balance in effect has changed and the world
+				// has not, which is what the reload command promises whoever ran it.
+				helper.assertValueEqual(border(server, Level.OVERWORLD).getSize(), before,
+						"a reload must leave the border a run is already inside at the size it had");
+				helper.assertValueEqual(border(server, Level.NETHER).getSize(), before,
+						"a reload must leave the nether border alone too, not only the overworld");
+				helper.assertValueEqual(
+						BorderTier.MEDIUM.balance(BalanceManager.get()).size().orElseThrow(),
+						(double) RETUNED_MEDIUM_SIZE,
+						"the reload itself must have taken, or the check above proves nothing");
+
+				// The next time the tier is applied — the next run, or a tier change — it is on the
+				// new numbers, with no rebuild anywhere.
 				selectTier(server, BorderTier.MEDIUM);
 				helper.assertValueEqual(border(server, Level.OVERWORLD).getSize(),
 						(double) RETUNED_MEDIUM_SIZE,
-						"a reloaded balance override must resize the medium tier without a rebuild");
+						"applying the medium tier after the reload must use the retuned size");
 				helper.assertValueEqual(border(server, Level.NETHER).getSize(),
 						(double) RETUNED_MEDIUM_SIZE,
 						"the retuned size must reach every dimension, not only the overworld");
