@@ -460,6 +460,68 @@ pass at all.
 | ----------------------------- | ----------------------------------------------- |
 | ![a village in open land](images/gametest-fresh-village-unlocked.png) | ![the same land, empty](images/gametest-fresh-village-locked.png) |
 
+#### The starter chest
+
+Split the same way, for the same reason: what goes in the chest is exact and needs no client, and
+that joining a run is what puts it there needs a real one.
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/server/StarterChestGameTest.java` is the exact half.
+Every scenario calls `RunStart.grant`, which is the single call both the first-join hook and
+`mhr starterchest` come down to, so what is checked is the delivery itself:
+
+- **nothing-owned-places-no-chest** — nothing bought is not an empty chest, it is no chest and no
+  block touched. This is the control the rest of them lean on.
+- **one-purchase-puts-a-chest-at-the-run-start** and **the-chest-holds-exactly-what-was-bought** —
+  one chest next to where the run began, holding the five purchases and nothing else. What each
+  purchase hands over is written out in the test rather than read from the catalogue, so a balance
+  edit that changes it comes out red instead of agreeing with itself.
+- **an-enchanted-starter-item-keeps-its-components** — the catalogue's Efficiency III pickaxe
+  arrives enchanted. A stage that dropped the components would hand over a perfectly ordinary
+  diamond pickaxe and look like it worked.
+- **more-than-27-slots-makes-a-double-chest**, **a-double-chest-delivers-all-54-slots** and
+  **past-54-slots-is-reported-and-nothing-vanishes-quietly** — 30, 54 and 60 slots. Both halves are
+  real chests at the same height and the load is split 27 and the rest; at 60 the chest is still
+  placed and still full, and what arrived plus what was reported missing is what was asked for, so
+  an overflow can never be a purchase gone quietly.
+- **an-override-and-a-reload-change-what-the-chest-holds** — a config override retunes
+  `starter.bread`, `mhr reload` is run, and the very same server builds a chest of the new thing.
+  Taking the override away again brings the bundled catalogue back.
+
+The count-dependent ones retune a *pickaxe* on purpose: it does not stack, so "count" and "slots
+used" are the same number and a scenario about 28 slots is one line of JSON.
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/StarterChestClientTest.java` is the half only a
+real player arriving can answer. It builds three dedicated servers, because each one is a *run*: the
+harness deletes the world before it starts a server, while the purchases live outside the world in
+the unlock file, which is exactly the difference between rejoining and starting over.
+
+- **first-join-of-a-run-places-the-starter-chest** — the purchases are made while nobody is
+  connected, the way a player buys them between runs, and then a real client connects. One chest,
+  next to the player, holding all three with the enchantment intact.
+- **the-chest-opens-and-shows-what-was-bought** — the player aims at it and presses the use key. The
+  chest screen opens and shows the same three things, so the chest is one a player can actually get
+  at rather than one walled into the scenery.
+- **a-reconnect-does-not-place-a-second-chest** — log out, log back in: still one chest, the same
+  one. Counted as blocks in the world rather than as a flag, because a second grant would be a
+  second chest whether or not the flag agrees.
+- **a-genuinely-new-run-gets-its-starter-chest-again** — a world that has never been played, and
+  nothing bought in it. The three purchases are still the ones run one was given, which the scenario
+  asserts before it looks for the chest, so the unlocks outliving the world they were spent in is
+  part of what is being checked rather than something re-arranged on the way. It drops the loaded
+  unlock state first, through `UnlockState.reloadFromFile()`, because this harness runs its
+  dedicated server *inside the client's process*: without that the second run would read the very
+  same object the first one bought from, and a purchase that never reached
+  `hardcore-roguelite-unlocks.json` would go unnoticed. That call is the one thing the tests ask of
+  the mod itself, and it exists because the process boundary a real player crosses between runs is
+  the one thing the harness cannot give them. This and the one above are the two halves of "once
+  per run", and neither means anything without the other.
+- **nothing-bought-means-no-chest-on-join** — the control. A mod that put a chest down on every join
+  would pass everything above and be caught only here.
+
+| The chest a run starts next to | ...and what is in it |
+| ------------------------------ | -------------------- |
+| ![a chest on flat ground](images/gametest-starter-chest.png) | ![16 bread, 32 torches and an enchanted pickaxe](images/gametest-starter-chest-open.png) |
+
 #### The world border
 
 Where each border ends up is arithmetic, so most of it is a **server GameTest**, in
@@ -540,6 +602,9 @@ harness has.
 - The **full-inventory fallback**, where a refused item falls at the player's feet.
 - Nothing about trees, animals or villages, beyond looking at a world by eye if you want to.
 - Nothing about the crafted enchant either, beyond the recipe-book button noted above.
+- **Where the starter chest lands on awkward ground** — a cave, a one-block tunnel, the Nether roof.
+  The tests run on the harness's flat world, where the search finds a spot on its first try, so the
+  slope and ceiling cases are still a `mhr starterchest` by hand.
 
 ## Joining the server
 
@@ -860,6 +925,17 @@ with the command above, and put a pickaxe recipe in a crafting table.
 
 ## Testing the starter chest
 
+Nothing here needs a human in a Minecraft client any more:
+
+```sh
+scripts/dev.sh gametest
+```
+
+See [The starter chest](#the-starter-chest). Between them the two tests cover nothing-owned, the
+exact contents, the enchanted item, one chest, a double chest, the overflow past 54, a config
+override with `mhr reload`, the first join, the reconnect and a genuinely new run. What follows is
+how to poke at it on the dev server when you want to *see* it rather than prove it.
+
 Starter items are ordinary unlocks: they sit in `default-balance.json` under `unlocks` with every
 other price, and carry the stack they hand over. See [`balance.md`](balance.md#starter-items).
 
@@ -878,8 +954,8 @@ scripts/dev.sh rcon "mhr reload"
 What the player *owns* is separate and lives with the other unlocks, outside the world, so it
 survives `newworld`.
 
-The chest normally appears when a player first joins a fresh world. That needs a real client, so
-for a quick check from the console place it by hand instead:
+The chest normally appears when a player first joins a fresh world. To place it from the console
+without making a new world:
 
 ```sh
 scripts/dev.sh rcon "mhr list"                      # unlocks, then the starter items
@@ -890,22 +966,18 @@ scripts/dev.sh rcon "data get block -1 63 -1"       # it lands next to the spot 
 
 `mhr starterchest` with no position puts it next to you, and only works in game.
 
-Things worth checking:
+`mhr list` ends with whether this run has had its chest yet, which is the flag the automated tests
+check by counting chests instead.
 
-- Nothing owned: the command refuses and no block is placed.
-- Up to 27 filled slots is one chest; past that it is a double chest, and `data get block` on each
-  half shows the load split 27 and the rest.
-- Items stack the way the game would: two catalogue entries of the same thing become one stack, and
-  a count over a stack splits across slots.
-- Over 54 slots is a broken catalogue. The chest is still placed and still full, and everything left
-  out is named both in chat and in the server log, as one tally per item rather than one line per
-  slot — a `count` in the millions is legal balance data, and has to report rather than hang.
+Two things about the chest are still worth an eye of your own, because both are about *where* it
+lands and the tests run on flat ground where there is nowhere else for it to go:
+
 - The chest lands next to you, at your level — not on the surface above you. Worth checking from
   underground, since that is where the two used to differ: `mhr starterchest 0 20 0` inside solid
   stone should refuse to find a clear spot and say so, while a spot in a cave at y 20 should get a
   chest at y 20 rather than one on the hillside overhead.
-- `mhr list` ends with whether this run has had its chest yet. It is a flag in the world's own save,
-  so `newworld` clears it and logging out and back in does not give a second chest.
+- A count in the millions is legal balance data. The tests go a few slots past the 54 and check the
+  tally; a really enormous one is the case where "report rather than hang" is worth seeing.
 
 ## Resource use
 
