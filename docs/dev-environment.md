@@ -248,6 +248,44 @@ raw ore block. Two things make them testable:
 
 Something that is unlocked in both runs — coal is a good choice — should come out at roughly the
 same count, which is how you know you really did regenerate the same world.
+## Testing the crafted-tool enchant
+
+The unlock is repeatable, so `mhr list` shows a level next to it and `mhr unlock` buys the next one:
+
+```sh
+scripts/dev.sh rcon "mhr list"
+scripts/dev.sh rcon "mhr unlock player.craft.enchant"     # level 1
+scripts/dev.sh rcon "mhr unlock player.craft.enchant 4"   # straight to the top level
+scripts/dev.sh rcon "mhr lock player.craft.enchant"
+```
+
+The levels are kept in the same file as everything else, `/server/config/hardcore-roguelite-unlocks.json`,
+which is now a map of unlock id to level rather than a list of ids. A file in the old format still
+reads, with everything in it counting as level one, and is rewritten in the new shape on the spot.
+
+How many levels there are and what each is worth are balance numbers, so a curve change needs no
+rebuild:
+
+```sh
+scripts/dev.sh rcon "mhr balance"   # shows vanillaPlus.craftEnchant
+scripts/dev.sh rcon "mhr reload"    # after editing config/hardcore-roguelite-balance.json
+```
+
+The crafting itself needs a real client, because there is no way to craft from the server console.
+Join through the port-forward and check:
+
+- With the unlock locked, craft a wooden pickaxe: it comes out plain.
+- `mhr unlock player.craft.enchant`, then put the ingredients back in the grid. The output slot already
+  shows the enchantment before you take it — that is the point, it is the crafting result that is
+  enchanted, not the item in your hand afterwards.
+- Take it out by clicking, by shift-clicking and through the recipe book. All three give the same
+  enchanted item.
+- Leave the ingredients sitting in the grid and pull the last one out and back a few times. The
+  enchantment stays the same, so jiggling the grid is not a way to reroll. Craft one and set up the
+  next: that one is a new roll.
+- `mhr unlock player.craft.enchant 4` and craft a few more. Efficiency now turns up at V rather than I.
+- Craft something that is not a tool — planks, a chest, a bow — and it stays plain.
+- Nothing impossible ever lands: no Sharpness on a pickaxe, no Mending, no curses.
 
 ## Resource use
 

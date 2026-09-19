@@ -74,13 +74,21 @@ on purpose: a generated copy of the whole catalogue would go stale the moment a 
 
 	"difficulty": {
 		"mobDamageMultiplier": 1.5
+	},
+
+	"vanillaPlus": {
+		"craftEnchant": {
+			"maxUnlockLevel": 4,
+			"strengthPerLevel": 0.25
+		}
 	}
 }
 ```
 
 - **`currency.advancements`** — currency for completing a vanilla advancement, by its full id. An
   advancement that is not listed pays nothing.
-- **`unlocks`** — what the shop sells, keyed by stable unlock id. `price` is in currency.
+- **`unlocks`** — what the shop sells, keyed by stable unlock id. `price` is in currency. A
+  repeatable unlock is priced once and costs that much each time it is bought.
 - **`worldBorder`** — one entry per tier. `size` is the edge-to-edge width in blocks; leaving it out
   means the border is never in the way. A tier's unlock id is `world.border.` plus its key, but its
   price sits here so the size and the price stay next to each other.
@@ -89,6 +97,11 @@ on purpose: a generated copy of the whole catalogue would go stale the moment a 
   100 blocks east of it, or an end portal would drop you outside the border. Read by path, as
   [Adding values](#adding-values) describes.
 - **`difficulty.mobDamageMultiplier`** — how much harder than vanilla mobs hit. `1.0` is vanilla.
+- **`vanillaPlus.craftEnchant`** — the crafted-tool enchant, which is the first repeatable unlock.
+  `maxUnlockLevel` is how many times `player.craft.enchant` can be bought; `strengthPerLevel` is what
+  each of those levels is worth as a fraction of an enchantment's own maximum, so the two multiply to
+  `1.0` when the top level is meant to reach it. Two levels worth `0.5` each is the same curve in
+  half the purchases.
 
 `default-balance.json` may hold sections nothing reads yet, which is how a new vanilla+ system gets
 balanced from data before it has a typed accessor — see [Adding values](#adding-values). Inside the
@@ -202,6 +215,20 @@ out simply keeps the bundled value. That is the only fallback there is, and it i
 When the system settles down, give it a record and an accessor in `Balance` and validation in
 `BalanceManager.bind`. The path lookup splits on `.`, so it cannot reach into `unlocks` — those keys
 contain dots themselves. Use `unlockPrice` for those.
+
+## Things that are data but not numbers
+
+Sets belong in tags rather than in the balance file, because the game already loads and merges
+those. The crafted-tool enchant ships two, and a datapack can add to either or replace it outright
+without the mod being rebuilt:
+
+| Tag | What it decides |
+| --- | --- |
+| `hardcore_roguelite:craft_enchantable` (item) | Which crafted items come out enchanted. Ships as the vanilla tool and sword tags. |
+| `hardcore_roguelite:craft_enchant_pool` (enchantment) | What may be rolled. Ships as `#minecraft:in_enchanting_table`, which leaves out treasure enchantments and curses. |
+
+An enchantment that cannot go on the item is never applied whatever the pool says: the game's own
+answer for what fits an item is asked as well.
 
 ## Where this sits in the mod
 
