@@ -24,18 +24,26 @@ The override is deep-merged over the defaults, so it only names what it changes:
 That file is complete. Every other price, every reward, every border tier keeps its bundled value.
 Objects merge key by key; anything else — a number, a string, an array — replaces what was there.
 
-The override changes things that exist; it does not add them. Every id it names under `unlocks`,
-`currency.advancements` or `worldBorder` has to be in the bundled catalogue already, so a misspelt
-`world.ore.diamod` is refused rather than quietly becoming a new entry nothing reads while the real
-diamond keeps its old price:
+The override changes things that exist; it does not add them. The bundled file is the catalogue, so
+it is also the schema: every key the override names, at every depth, has to be in the bundled file
+already. A misspelt one is refused, with the nearest real name when the typo is small enough to
+guess at:
 
 ```
 The balance override ./config/hardcore-roguelite-balance.json sets 'unlocks.world.ore.diamod',
-but there is no such unlock. Did you mean 'world.ore.diamond'?
+which the bundled balance does not have. Did you mean 'world.ore.diamond'?
+
+The balance override ./config/hardcore-roguelite-balance.json sets 'dificulty',
+which the bundled balance does not have. Did you mean 'difficulty'?
 ```
 
-A genuinely new unlock goes in `default-balance.json`, which is where the catalogue lives. New
-top-level sections are the exception and stay free — see [Adding values](#adding-values).
+Without that rule both of those merge perfectly and do nothing: the first makes an entry nothing
+reads while the real diamond keeps its price, the second makes a section nothing reads while mobs go
+on hitting exactly as hard as before. Neither would say a word.
+
+There is no exception to it, which is the point. A new value — a new unlock, a new tuning knob for a
+vanilla+ system — goes in `default-balance.json` first, where the catalogue already lives, and the
+override tunes it afterwards. See [Adding values](#adding-values).
 
 If the override does not exist, the defaults are used as they are. Nothing writes the file for you,
 on purpose: a generated copy of the whole catalogue would go stale the moment a default changed.
@@ -74,9 +82,10 @@ on purpose: a generated copy of the whole catalogue would go stale the moment a 
   price sits here so the size and the price stay next to each other.
 - **`difficulty.mobDamageMultiplier`** — how much harder than vanilla mobs hit. `1.0` is vanilla.
 
-Top-level sections nothing reads yet are allowed, which is how a new vanilla+ system gets balanced
-from data before it has a typed accessor — see [Adding values](#adding-values). Inside the sections
-above, an unknown key is an error, so `mobDamageMultipler` is caught rather than silently ignored.
+`default-balance.json` may hold sections nothing reads yet, which is how a new vanilla+ system gets
+balanced from data before it has a typed accessor — see [Adding values](#adding-values). Inside the
+four sections above, an unknown key is an error either way, so `mobDamageMultipler` is caught rather
+than silently ignored.
 
 ## Unlock ids
 
@@ -159,12 +168,16 @@ one rule this layer exists to enforce.
 
 ## Adding values
 
-A new tuning value with no typed home yet can go straight into a new top-level section and be read
-by path:
+A new tuning value with no typed home yet goes into a new section of `default-balance.json` and is
+read by path:
 
 ```java
 double stepPercent = BalanceManager.get().number("vanillaPlus.speed.stepPercent", 10);
 ```
+
+Put the value in the bundled file when you add the code that reads it. Once it is there, an override
+can tune it like anything else; until it is, an override naming it is refused, because a config file
+that could invent keys is a config file where a typo does nothing and says nothing.
 
 When the system settles down, give it a record and an accessor in `Balance` and validation in
 `BalanceManager.bind`. The path lookup splits on `.`, so it cannot reach into `unlocks` — those keys

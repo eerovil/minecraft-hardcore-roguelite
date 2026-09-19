@@ -113,9 +113,10 @@ public final class Balance {
 	 * {@code number("vanillaPlus.speed.stepPercent", 10)}.
 	 *
 	 * <p>The escape hatch for tuning values that do not have a typed home yet, so a new vanilla+
-	 * system can be balanced from data on day one and grow a proper accessor later. The path is
-	 * split on {@code .}, so it cannot reach into {@link #unlocks()} — those keys contain dots
-	 * themselves. Use {@link #unlockPrice} for those.
+	 * system can be balanced from data on day one and grow a proper accessor later. The value goes
+	 * in {@code default-balance.json} alongside the code that reads it; an override can tune it
+	 * afterwards but cannot introduce it. The path is split on {@code .}, so it cannot reach into
+	 * {@link #unlocks()} — those keys contain dots themselves. Use {@link #unlockPrice} for those.
 	 *
 	 * @param fallback returned when the path is absent
 	 * @throws BalanceException if the path exists but does not hold a number, or if it runs into a

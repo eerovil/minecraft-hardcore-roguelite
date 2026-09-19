@@ -106,7 +106,7 @@ public final class BalanceManager {
 		Path override = overrideFile();
 		if (Files.isRegularFile(override)) {
 			JsonObject over = readOverride(override);
-			checkOverrideIds(merged, over, override.toString());
+			checkOverrideKeys(merged, over, override.toString());
 			merge(merged, over);
 		}
 		return bind(merged);
@@ -143,58 +143,49 @@ public final class BalanceManager {
 	}
 
 	/**
-	 * Every id the override names must already be in the catalogue.
+	 * The override may change what the bundled file has, and nothing else.
 	 *
-	 * <p>The three id maps — {@code unlocks}, {@code currency.advancements} and {@code worldBorder} —
-	 * are lists of things that exist, and the bundled file is the list. Left unchecked, an override
-	 * saying {@code world.ore.diamod} would merge cleanly into a brand new entry nothing reads,
-	 * while the real diamond kept its bundled price: a balance change that appears to work, does
-	 * nothing, and says nothing. That is the exact failure this layer exists to prevent, and the one
-	 * a typo makes most easily.
+	 * <p>The bundled file is the catalogue — of unlocks, of paying advancements, of border tiers, and
+	 * of every section and value name there is. So it is also the schema, and the override is checked
+	 * against it all the way down from the root. A key the bundled file does not have is a typo, and
+	 * a typo merges perfectly: {@code world.ore.diamod} becomes an entry nothing reads while the real
+	 * diamond keeps its price, and {@code dificulty} becomes a section nothing reads while mobs go on
+	 * hitting exactly as hard as before. A balance change that appears to work, does nothing, and says
+	 * nothing is the one failure this layer exists to prevent.
 	 *
-	 * <p>Only these maps are checked. A new top-level section is still free to appear, because that
-	 * is how a vanilla+ system gets tuning values before it has a typed accessor — see
-	 * {@link Balance#number}. Adding a genuinely new unlock means adding it to
-	 * {@code default-balance.json}, which is where the catalogue belongs anyway.
+	 * <p>So there is no extension point here, which is the point: a new tuning value goes in
+	 * {@code default-balance.json} first, where the rest of the catalogue already lives, and the
+	 * override tunes it afterwards. Code can read a value by path before the data exists — see
+	 * {@link Balance#number} — but a config file cannot invent one.
 	 */
-	static void checkOverrideIds(JsonObject defaults, JsonObject over, String where) {
-		checkIds(childObject(defaults, "unlocks"), childObject(over, "unlocks"), "unlocks", "unlock", where);
-		checkIds(childObject(childObject(defaults, "currency"), "advancements"),
-				childObject(childObject(over, "currency"), "advancements"),
-				"currency.advancements", "advancement", where);
-		checkIds(childObject(defaults, "worldBorder"), childObject(over, "worldBorder"),
-				"worldBorder", "border tier", where);
+	static void checkOverrideKeys(JsonObject defaults, JsonObject over, String where) {
+		checkKeys(defaults, over, "", where);
 	}
 
-	/** The named child if it is an object, or null — a wrong-shaped one is bind's to complain about. */
-	private static JsonObject childObject(JsonObject parent, String key) {
-		if (parent == null) {
-			return null;
-		}
-		JsonElement found = parent.get(key);
-		return found != null && found.isJsonObject() ? found.getAsJsonObject() : null;
-	}
-
-	private static void checkIds(JsonObject known, JsonObject over, String section, String noun, String where) {
-		if (known == null || over == null) {
-			return;
-		}
-		for (String id : over.keySet()) {
-			if (known.has(id)) {
-				continue;
+	private static void checkKeys(JsonObject known, JsonObject over, String prefix, String where) {
+		for (Map.Entry<String, JsonElement> entry : over.entrySet()) {
+			String path = prefix.isEmpty() ? entry.getKey() : prefix + "." + entry.getKey();
+			JsonElement expected = known.get(entry.getKey());
+			if (expected == null) {
+				String closest = closestTo(entry.getKey(), known.keySet());
+				String hint = closest != null
+						? " Did you mean '" + closest + "'?"
+						// Without the leading slash: as a message it names a file someone edits, not
+						// the classpath resource the constant is.
+						: " A value the override is to change has to exist in " + DEFAULT_RESOURCE.substring(1)
+								+ " first.";
+				throw new BalanceException("The balance override " + where + " sets '" + path
+						+ "', which the bundled balance does not have." + hint);
 			}
-			String closest = closestTo(id, known.keySet());
-			String hint = closest != null
-					? " Did you mean '" + closest + "'?"
-					// Without the leading slash: as a message it is the name of a file someone edits,
-					// not the classpath resource the constant is.
-					: " A new " + noun + " goes in " + DEFAULT_RESOURCE.substring(1) + ", not in the override.";
-			throw new BalanceException("The balance override " + where + " sets '" + section + "." + id
-					+ "', but there is no such " + noun + "." + hint);
+			// Only descend where both sides are objects. A scalar where an object belongs, or the
+			// other way round, is a shape question, and bind answers those in one place.
+			if (expected.isJsonObject() && entry.getValue().isJsonObject()) {
+				checkKeys(expected.getAsJsonObject(), entry.getValue().getAsJsonObject(), path, where);
+			}
 		}
 	}
 
-	/** The known id within a typo or two of this one, or null if nothing is close enough. */
+	/** The known name within a typo or two of this one, or null if nothing is close enough. */
 	private static String closestTo(String id, Set<String> known) {
 		String best = null;
 		int bestDistance = Integer.MAX_VALUE;
@@ -235,7 +226,7 @@ public final class BalanceManager {
 	 * neighbours. Anything else — a number, a string, an array — replaces what was there.
 	 *
 	 * <p>Shape-blind on purpose: what each section is meant to look like is {@link #bind}'s to know,
-	 * and {@link #checkOverrideIds} has already rejected ids that do not exist.
+	 * and {@link #checkOverrideKeys} has already rejected keys that do not exist.
 	 */
 	private static void merge(JsonObject base, JsonObject over) {
 		for (Map.Entry<String, JsonElement> entry : over.entrySet()) {
