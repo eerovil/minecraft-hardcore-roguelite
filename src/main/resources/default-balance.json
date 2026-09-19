@@ -48,7 +48,16 @@
 		"player.slot.boots": { "price": 3 },
 		"player.slot.leggings": { "price": 10 },
 		"player.slot.chestplate": { "price": 10 },
-		"player.slot.offhand": { "price": 30 }
+		"player.slot.offhand": { "price": 30 },
+
+		"player.craft.enchant": { "price": 100 }
+	},
+
+	"vanillaPlus": {
+		"craftEnchant": {
+			"maxUnlockLevel": 4,
+			"strengthPerLevel": 0.25
+		}
 	},
 
 	"worldBorder": {

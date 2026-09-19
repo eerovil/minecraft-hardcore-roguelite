@@ -1,6 +1,7 @@
 package fi.vilpponen.mhr.command;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -15,7 +16,10 @@ import net.minecraft.network.chat.Component;
 /**
  * A developer command standing in for the shop, which does not exist yet.
  *
- * <p>{@code /mhr list}, {@code /mhr unlock <id>}, {@code /mhr lock <id>}.
+ * <p>{@code /mhr list}, {@code /mhr unlock <id> [level]}, {@code /mhr lock <id>}.
+ *
+ * <p>Without a level, {@code unlock} buys the next one, which is the shop's own behaviour for the
+ * repeatable unlocks and plain ownership for the rest.
  */
 public final class UnlockCommand {
 	private UnlockCommand() {
@@ -27,9 +31,12 @@ public final class UnlockCommand {
 				.then(Commands.literal("list")
 						.executes(UnlockCommand::list))
 				.then(Commands.literal("unlock")
-						.then(idArgument().executes(context -> set(context, true))))
+						.then(idArgument()
+								.executes(UnlockCommand::buyNextLevel)
+								.then(Commands.argument("level", IntegerArgumentType.integer(0))
+										.executes(UnlockCommand::setGivenLevel))))
 				.then(Commands.literal("lock")
-						.then(idArgument().executes(context -> set(context, false)))));
+						.then(idArgument().executes(context -> apply(context, 0)))));
 	}
 
 	private static RequiredArgumentBuilder<CommandSourceStack, String> idArgument() {
@@ -46,35 +53,61 @@ public final class UnlockCommand {
 		UnlockState state = UnlockState.get();
 		StringBuilder lines = new StringBuilder("Unlocks:");
 		for (Unlock unlock : Unlock.values()) {
+			int level = state.level(unlock);
 			lines.append("\n  ")
-					.append(state.isOwned(unlock) ? "[owned] " : "[locked] ")
+					.append(level > 0 ? "[owned] " : "[locked] ")
 					.append(unlock.id());
+			if (unlock.isRepeatable()) {
+				lines.append(" (level ").append(level).append('/').append(unlock.maxLevel()).append(')');
+			}
 		}
 		String message = lines.toString();
 		context.getSource().sendSuccess(() -> Component.literal(message), false);
 		return Unlock.values().length;
 	}
 
-	private static int set(CommandContext<CommandSourceStack> context, boolean owned) {
+	/** {@code /mhr unlock <id>} — buy the next level, which for a plain unlock means owning it. */
+	private static int buyNextLevel(CommandContext<CommandSourceStack> context) {
+		Unlock unlock = unlock(context);
+		if (unlock == null) {
+			return 0;
+		}
+		return apply(context, UnlockState.get().level(unlock) + 1);
+	}
+
+	private static int setGivenLevel(CommandContext<CommandSourceStack> context) {
+		return apply(context, IntegerArgumentType.getInteger(context, "level"));
+	}
+
+	private static Unlock unlock(CommandContext<CommandSourceStack> context) {
 		String id = StringArgumentType.getString(context, "id");
 		Unlock unlock = Unlock.byId(id);
 		if (unlock == null) {
 			context.getSource().sendFailure(Component.literal("No such unlock: " + id));
+		}
+		return unlock;
+	}
+
+	private static int apply(CommandContext<CommandSourceStack> context, int level) {
+		Unlock unlock = unlock(context);
+		if (unlock == null) {
 			return 0;
 		}
 
-		boolean changed = UnlockState.get().set(unlock, owned);
+		boolean changed = UnlockState.get().setLevel(unlock, level);
 		if (changed) {
 			// Tell the clients, and re-apply the slot rule to anyone already wearing something.
 			EquipmentSlots.onUnlocksChanged(context.getSource().getServer());
 		}
-		String verb = owned ? "Unlocked " : "Locked ";
+		int owned = UnlockState.get().level(unlock);
+		String verb = owned > 0 ? "Unlocked " : "Locked ";
+		String at = unlock.isRepeatable() ? " at level " + owned + "/" + unlock.maxLevel() : "";
 		String note = changed ? "" : " (no change)";
 		// Equipment slots take effect at once; the worldgen unlocks do not.
-		String suffix = EquipmentLocks.isSlotUnlock(unlock)
+		String suffix = EquipmentLocks.isSlotUnlock(unlock) || unlock == Unlock.CRAFT_ENCHANT
 				? "."
 				: " — worldgen changes apply to new chunks only.";
-		context.getSource().sendSuccess(() -> Component.literal(verb + unlock.id() + note + suffix), true);
+		context.getSource().sendSuccess(() -> Component.literal(verb + unlock.id() + at + note + suffix), true);
 		return changed ? 1 : 0;
 	}
 }

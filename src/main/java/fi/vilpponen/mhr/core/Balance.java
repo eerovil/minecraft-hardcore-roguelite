@@ -32,14 +32,17 @@ public final class Balance {
 	private final Map<String, UnlockBalance> unlocks;
 	private final Map<String, BorderBalance> worldBorder;
 	private final double mobDamageMultiplier;
+	private final CraftEnchantBalance craftEnchant;
 	private final JsonObject source;
 
 	Balance(Map<String, Integer> advancementRewards, Map<String, UnlockBalance> unlocks,
-			Map<String, BorderBalance> worldBorder, double mobDamageMultiplier, JsonObject source) {
+			Map<String, BorderBalance> worldBorder, double mobDamageMultiplier,
+			CraftEnchantBalance craftEnchant, JsonObject source) {
 		this.advancementRewards = Collections.unmodifiableMap(new LinkedHashMap<>(advancementRewards));
 		this.unlocks = Collections.unmodifiableMap(new LinkedHashMap<>(unlocks));
 		this.worldBorder = Collections.unmodifiableMap(new LinkedHashMap<>(worldBorder));
 		this.mobDamageMultiplier = mobDamageMultiplier;
+		this.craftEnchant = craftEnchant;
 		this.source = source;
 	}
 
@@ -56,6 +59,16 @@ public final class Balance {
 		public boolean isUnbounded() {
 			return size.isEmpty();
 		}
+	}
+
+	/**
+	 * The crafted-tool enchant, the first repeatable unlock.
+	 *
+	 * @param maxUnlockLevel how many times {@code player.craft.enchant} can be bought, at least once
+	 * @param strengthPerLevel what one of those levels is worth as a fraction of an enchantment's own
+	 *     maximum, so the two multiply to 1.0 when the top level is meant to reach it
+	 */
+	public record CraftEnchantBalance(int maxUnlockLevel, double strengthPerLevel) {
 	}
 
 	/**
@@ -106,6 +119,17 @@ public final class Balance {
 	/** How much harder than vanilla mobs hit. 1.0 is vanilla. */
 	public double mobDamageMultiplier() {
 		return mobDamageMultiplier;
+	}
+
+	/**
+	 * The crafted-tool enchant's two numbers, already checked.
+	 *
+	 * <p>Typed rather than read by path, so a level that is not whole or a strength of zero is caught
+	 * while the balance is loading — at startup it stops the mod, on reload it leaves the running
+	 * game on the balance it had — instead of throwing at the moment somebody crafts a pickaxe.
+	 */
+	public CraftEnchantBalance craftEnchant() {
+		return craftEnchant;
 	}
 
 	/**
