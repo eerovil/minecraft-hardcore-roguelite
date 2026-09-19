@@ -44,10 +44,11 @@ import org.slf4j.LoggerFactory;
  * rejoining and starting over, and no shortcut can imitate it.
  *
  * <p>Which is also why the purchases are made once, before the first run, and never again. The
- * second run buys nothing: it asserts the three are still owned and then expects its chest, so a
- * change that reset the unlocks along with the world would fail here rather than quietly re-buying
- * them. The third run is the only one that touches the catalogue again, to clear it for the
- * nothing-bought control.
+ * second run buys nothing: it drops the loaded unlock state so the file has to answer for it,
+ * asserts the three are still owned, and only then expects its chest. So a change that reset the
+ * unlocks along with the world, or that stopped writing them to disk at all, fails here rather
+ * than quietly re-buying them. The third run is the only one that touches the catalogue again, to
+ * clear it for the nothing-bought control.
  *
  * <p>See {@code docs/dev-environment.md} for how to run this.
  */
@@ -94,8 +95,10 @@ public class StarterChestClientTest implements FabricClientGameTest {
 		}
 
 		// Run two: a world that has never been played, and deliberately nothing bought here. The
-		// purchases have to be the ones run one was given, or the scenario proves nothing.
+		// purchases have to be the ones run one was given, and they have to come back off the disk
+		// rather than out of the process, or the scenario proves nothing.
 		try (TestDedicatedServerContext server = context.worldBuilder().createServer()) {
+			forgetWhatIsInMemory(server);
 			scenario(context, "a-genuinely-new-run-gets-its-starter-chest-again",
 					() -> aNewRunGrantsAgain(context, server));
 		}
@@ -219,9 +222,9 @@ public class StarterChestClientTest implements FabricClientGameTest {
 	 * A new world is a new run, and the purchases are permanent, so the chest comes back.
 	 *
 	 * <p>Nothing is bought in this run on purpose. The purchases are the ones run one was given,
-	 * still owned across a world that was deleted and a server that was replaced, which is the
-	 * whole point of keeping unlocks out of the save — and re-buying them here would make the
-	 * scenario pass just as happily if they had been lost.
+	 * still owned across a world that was deleted, a server that was replaced and a trip through
+	 * the unlock file, which is the whole point of keeping unlocks out of the save — and re-buying
+	 * them here would make the scenario pass just as happily if they had been lost.
 	 */
 	private void aNewRunGrantsAgain(
 			ClientGameTestContext context, TestDedicatedServerContext server) {
@@ -382,6 +385,20 @@ public class StarterChestClientTest implements FabricClientGameTest {
 	 * join, so a purchase made afterwards is too late — and what a player does, since between runs
 	 * is when the shop is open.
 	 */
+	/**
+	 * Drop the loaded unlocks so the next question about them is answered by the file.
+	 *
+	 * <p>This is the process boundary a real player crosses between runs and this harness does not.
+	 * Its dedicated server runs inside the client's own process, so the unlock state that run one
+	 * bought from is still the very same object in run two — and a purchase that was never written
+	 * to {@code hardcore-roguelite-unlocks.json}, or a file that cannot be read back, would be
+	 * invisible here. Called before anybody joins, so the grant that follows reads what the disk
+	 * says and nothing else.
+	 */
+	private static void forgetWhatIsInMemory(TestDedicatedServerContext server) {
+		server.runOnServer(unused -> UnlockState.reloadFromFile());
+	}
+
 	/** Does the player still own this, as the server sees it right now? */
 	private static boolean owns(TestDedicatedServerContext server, String id) {
 		return server.computeOnServer(unused -> UnlockState.get().isOwned(id));

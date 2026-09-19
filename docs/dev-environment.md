@@ -507,8 +507,14 @@ the unlock file, which is exactly the difference between rejoining and starting 
 - **a-genuinely-new-run-gets-its-starter-chest-again** — a world that has never been played, and
   nothing bought in it. The three purchases are still the ones run one was given, which the scenario
   asserts before it looks for the chest, so the unlocks outliving the world they were spent in is
-  part of what is being checked rather than something re-arranged on the way. This and the one above
-  are the two halves of "once per run", and neither means anything without the other.
+  part of what is being checked rather than something re-arranged on the way. It drops the loaded
+  unlock state first, through `UnlockState.reloadFromFile()`, because this harness runs its
+  dedicated server *inside the client's process*: without that the second run would read the very
+  same object the first one bought from, and a purchase that never reached
+  `hardcore-roguelite-unlocks.json` would go unnoticed. That call is the one thing the tests ask of
+  the mod itself, and it exists because the process boundary a real player crosses between runs is
+  the one thing the harness cannot give them. This and the one above are the two halves of "once
+  per run", and neither means anything without the other.
 - **nothing-bought-means-no-chest-on-join** — the control. A mod that put a chest down on every join
   would pass everything above and be caught only here.
 
