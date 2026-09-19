@@ -39,6 +39,20 @@ dependencies {
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
+// Fabric's own test facilities: a `gametest` source set, a `gameTest` task that boots a dedicated
+// server, and a `clientGameTest` task that boots a real client. Both get a run directory of their
+// own under build/run, wiped before every run, so nothing carries over between runs.
+// See docs/dev-environment.md.
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = 'hardcore-roguelite-test'
+		eula = true
+		enableGameTests = true
+		enableClientGameTests = true
+	}
+}
+
 tasks.named('test') {
 	useJUnitPlatform()
 	testLogging {

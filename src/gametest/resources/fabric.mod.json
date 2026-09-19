@@ -1,0 +1,20 @@
+{
+	"schemaVersion": 1,
+	"id": "hardcore-roguelite-test",
+	"version": "1.0.0",
+	"name": "Hardcore Roguelite tests",
+	"description": "The automated gameplay tests. Never shipped — this mod only exists inside the gameTest and clientGameTest runs.",
+	"license": "MIT",
+	"environment": "*",
+	"mixins": ["hardcore_roguelite_test.mixins.json"],
+	"entrypoints": {
+		"fabric-client-gametest": [
+			"fi.vilpponen.mhr.gametest.client.EquipmentLockClientTest"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.0",
+		"minecraft": "~26.3",
+		"hardcore_roguelite": "*"
+	}
+}

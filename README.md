@@ -83,6 +83,12 @@ scripts/dev.sh go   # build, install, restart the server
 See [`docs/dev-environment.md`](docs/dev-environment.md). A plain `gradle build` with JDK 25 also
 works if you'd rather build locally.
 
+The gameplay tests run a real Minecraft client against a real server, headless, in the cluster:
+
+```sh
+scripts/dev.sh gametest   # unit tests, server GameTests, client GameTests — PASS or FAIL
+```
+
 ## Design rules of thumb
 
 - A good unlock is **obvious**. You should notice it's missing within a minute, not after half an hour.

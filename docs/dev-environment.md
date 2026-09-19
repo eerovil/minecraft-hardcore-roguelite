@@ -6,16 +6,18 @@ the source and issues commands.
 
 ## Shape of it
 
-Namespace `mhr-dev`, one 40 GB volume, two pods:
+Namespace `mhr-dev`, one 40 GB volume, three pods:
 
-| Pod          | Image                    | Job |
-| ------------ | ------------------------ | --- |
-| `mhr-build`  | `gradle:jdk25`           | Sleeps. You exec Gradle in it. Holds the source tree and the Gradle cache. |
-| `mhr-server` | `itzg/minecraft-server`  | A Fabric 26.3 dedicated server with the mod in its `mods/`. |
+| Pod            | Image                    | Job |
+| -------------- | ------------------------ | --- |
+| `mhr-build`    | `gradle:jdk25`           | Sleeps. You exec Gradle in it. Holds the source tree and the Gradle cache. |
+| `mhr-gametest` | `gradle:jdk25` + Xvfb    | Sleeps. Runs the automated gameplay tests, client and all. |
+| `mhr-server`   | `itzg/minecraft-server`  | A Fabric 26.3 dedicated server with the mod in its `mods/`. |
 
-The volume is laid out as `/workspace` (source), `/gradle` (cache and the Minecraft artifacts) and
-`/server` (the server's game directory). The build pod sees all three under `/pvc`; the server pod
-sees only `/server`, mounted at its usual `/data`.
+The volume is laid out as `/workspace` (source), `/gradle` (cache and the Minecraft artifacts),
+`/server` (the server's game directory) and `/gametest` + `/gradle-gametest` (the test pod's own
+tree and cache). The build and test pods see everything under `/pvc`; the server pod sees only
+`/server`, mounted at its usual `/data`.
 
 Both survive restarts. The expensive part — Minecraft, mappings, the Gradle cache — is downloaded
 once and stays on the volume.
@@ -54,12 +56,132 @@ scripts/dev.sh logs    # follow the server log
 `go` is the loop. Edit here, run `go`, reconnect. A rebuild after a small change takes seconds;
 the server restart is the slow part, about half a minute.
 
-Other commands: `sync`, `build`, `deploy`, `console`, `rcon`, `shell`, `newworld`, `status`,
-`down`, `nuke`. Run `scripts/dev.sh` with no arguments for the list.
+Other commands: `sync`, `build`, `deploy`, `gametest`, `console`, `rcon`, `shell`, `newworld`,
+`status`, `down`, `nuke`. Run `scripts/dev.sh` with no arguments for the list.
 
 `sync` copies exactly what a commit would see — tracked files plus untracked ones that are not
 gitignored. It wipes `src/`, `k8s/` and `scripts/` in the pod first so deleted files do not
 linger, and leaves `build/` and `.gradle/` alone so rebuilds stay fast.
+
+## Automated gameplay tests
+
+One command, no human in a Minecraft client:
+
+```sh
+scripts/dev.sh gametest
+```
+
+It syncs the tree, then runs three things in order and stops at the first that is red:
+
+| Step | What it is |
+| ---- | ---------- |
+| `test` | The plain-Java unit tests — balance parsing and the like. No game. |
+| `runGameTest` | Fabric's server GameTests: a dedicated server, no client. |
+| `runClientGameTest` | Fabric's client GameTests: a **real Minecraft client** driving a **real dedicated server**. |
+
+The last line is `PASS` or `FAIL`, and the exit status matches, so it can be the whole of a PR
+check. There is nothing to confirm between iterations: change the code, run it again.
+
+### Where it runs
+
+In a third pod, `mhr-gametest`, not in the build pod and not against the dev server. It is the same
+`gradle:jdk25` image plus `xvfb` and Mesa's software OpenGL driver, apt-installed at startup —
+nothing in the cluster has a GPU, so the client renders with `llvmpipe` into a 1280×720 virtual
+display. That works, and it is slow: a full run is minutes, most of it the client starting.
+
+It has a Gradle cache of its own (`/pvc/gradle-gametest`) and a source tree of its own
+(`/pvc/gametest/workspace`), so it neither waits for nor breaks someone else's `scripts/dev.sh go`.
+The container is root only so that apt-get works; Gradle itself is dropped back to uid 1000, so
+nothing root-owned lands on the volume.
+
+Two things had to be arranged for the client to start headless at all, both in `scripts/dev.sh`:
+
+- **`SDL_VIDEO_FORCE_EGL=1`.** 26.3 asks SDL for the OpenGL context, SDL prefers GLX, and llvmpipe
+  on a bare Xvfb has no GLX visual matching what the game asks for. EGL does. Without this the
+  client dies on `Couldn't find matching GLX visual` before any test runs. Note the name: the SDL2
+  spelling was `SDL_VIDEO_X11_FORCE_EGL` and SDL3 ignores it silently, which looks exactly like the
+  variable not working.
+- **Xvfb at 24-bit colour**, started once per pod and reused.
+
+### Test isolation
+
+Nothing carries over between runs. Loom wipes `build/run/clientGameTest` before each one, and that
+directory is the client's *and* the dedicated server's game directory, so the world, the config
+directory, `hardcore-roguelite-unlocks.json` and the player's inventory all start empty. On top of
+that every scenario begins by locking all five slots and emptying the player, so one scenario
+cannot make the next one pass.
+
+### Artifacts
+
+`scripts/dev.sh gametest` copies logs, screenshots and crash reports back to `build/gametest/`
+whether the run passed or failed:
+
+```
+build/gametest/run/clientGameTest/screenshots/*.png   what the client saw
+build/gametest/run/clientGameTest/logs/latest.log     the client log
+build/gametest/run/gameTest/logs/latest.log           the server GameTest log
+build/gametest/reports/tests/...                      the unit-test HTML report
+```
+
+### Reading a failure
+
+The client test log marks each scenario:
+
+```
+=== scenario locked-helmet-slot-refuses-a-helmet ===
+=== scenario locked-helmet-slot-refuses-a-helmet: PASS ===
+```
+
+A failed one logs `FAIL` with the assertion message, writes
+`screenshots/<n>_failed-<scenario-name>.png`, and carries on to the remaining scenarios — so one run
+tells you everything that is broken, not just the first thing. The run ends by throwing with the
+whole list, which is what turns the exit status non-zero.
+
+An assertion message names what was expected in plain words, for example *"a locked helmet slot
+must stay empty after a click that tries to fill it"*. The item-conservation ones also print the
+count they found.
+
+### What is automated now
+
+These were manual client checks and are not any more, in
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/EquipmentLockClientTest.java`:
+
+- **locked-helmet-slot-refuses-a-helmet** — real mouse clicks pick the helmet up and drop it on the
+  armor square; the slot stays empty and the helmet still exists exactly once.
+- **unlock-while-connected-then-equip** — `mhr unlock player.slot.helmet` with the inventory open;
+  the client's copy of the unlock flips at once and the same clicks now equip it.
+- **offhand-swap-hands-locked-then-unlocked** — the real swap-hands key, refused while the offhand
+  is locked and vanilla once it is not.
+- **locking-an-occupied-slot-empties-it** — `mhr lock` on a slot in use empties it on the spot and
+  the shield comes back.
+- **reconnect-keeps-a-locked-slot-empty** — wear a helmet, disconnect, lock the slot, reconnect: the
+  slot is empty, the helmet is in the inventory and the client is told about the padlock again.
+
+Every one of them ends by counting every copy of the item the player could still reach — inventory,
+equipment, the cursor, and the ground — so "refused" can never quietly mean "destroyed".
+
+The two inventory screenshots are worth a look, because they are the padlock check the docs used
+to ask a human for:
+
+| Helmet slot locked | ...and the moment after `mhr unlock player.slot.helmet` |
+| ------------------ | ------------------------------------------------------ |
+| ![five padlocks](images/gametest-helmet-slot-locked.png) | ![four padlocks](images/gametest-helmet-slot-unlocked.png) |
+
+Five padlocks become four, with the helmet square back to its vanilla empty icon, without the
+inventory being closed and reopened.
+
+The clicks are real. The cursor is moved to the middle of the square and the click is only sent once
+the screen itself agrees that is the square under the pointer, so a layout change makes the test
+fail rather than silently click somewhere else.
+
+### What is still manual
+
+- The padlock **artwork**. The tests screenshot the inventory with the helmet slot locked and again
+  with it unlocked, and those are worth a look when the overlay changes, but nothing compares
+  pixels. State assertions are the proof; the screenshots are for debugging.
+- **Dispenser-fired armor** and **right-click-to-equip**, which need a block and an aimed
+  interaction rather than an inventory screen.
+- The **full-inventory fallback**, where a refused item falls at the player's feet.
 
 ## Joining the server
 
@@ -129,33 +251,29 @@ scripts/dev.sh rcon "mhr list"
 scripts/dev.sh rcon "mhr unlock player.slot.offhand"
 ```
 
-The rest needs a real client, because the lock marker is drawn client-side and the equip attempts
-have to come from a player.
+The rest of it — the padlocks, the equip attempts, the swap-hands key — used to need a human in a
+real client. It does not any more:
+
+```sh
+scripts/dev.sh gametest
+```
+
+See [Automated gameplay tests](#automated-gameplay-tests). That runs a real client against a real
+dedicated server and covers the locked helmet slot, unlocking while connected, the swap-hands key
+both ways, locking a slot that is in use, and the reconnect.
 
 There is one rule behind all of it: **nothing stays in a locked slot**. It is enforced in a single
 place, the write barrier on `PlayerEquipment.set`, so the cases below are not five separate
 features — they are five ways of asking the same question. What you are really checking each time
 is that the item is refused *and* that it is still somewhere you can reach.
 
-Join through the port-forward and check:
+Three checks still want a human, because they need a block or an aimed interaction rather than an
+inventory screen. Join through the port-forward and check:
 
-- Open the inventory: the four armor squares and the offhand square carry a padlock.
-- Click, shift-click or number-key an armor piece into a locked slot — nothing moves.
 - Right-click a helmet held in hand: it stays in your hand.
-- Hold something in your main hand and press the swap-hands key (**F** by default). The offhand
-  stays empty and the item ends up back in your inventory — check it is *there*, in a free slot,
-  not destroyed and not duplicated. Then `mhr unlock player.slot.offhand` and press F again: now it swaps
-  normally.
 - Put an item in a dispenser aimed at you and fire it — armor must not go on.
-- `mhr unlock player.slot.helmet` while the inventory is open: the helmet padlock disappears at once, the
-  other four stay. Equipping a helmet then works and nothing else changed.
-- Locking a slot that is in use: `mhr unlock player.slot.offhand`, raise a shield, then
-  `mhr lock player.slot.offhand`. The shield goes back to your inventory immediately and right-clicking
-  must not raise it. Same for a worn helmet and `mhr lock player.slot.helmet`.
-- The same with a full inventory: the item falls at your feet rather than vanishing.
-- Log out with a locked slot occupied — set it up with `/item replace entity <you> weapon.offhand
-  with minecraft:shield` — then log back in. The slot must be empty and the shield in your
-  inventory.
+- Fill your inventory completely, then have a locked slot refuse something: it falls at your feet
+  rather than vanishing.
 
 The server tells the client which slots are open when you join and again whenever `mhr unlock` or
 `mhr lock` changes something, so the client's own config file is never consulted while connected.
@@ -373,8 +491,15 @@ removes both pods but keeps the volume, so bringing it back is fast.
 
 ## Known gaps
 
-- No client in the cluster. You run the real Minecraft client on the Mac. Testing client-side
-  behaviour (the locked inventory slots from the design doc) will need a different arrangement.
+- Client-side behaviour is tested by the client GameTests in the `mhr-gametest` pod, not by hand —
+  see [Automated gameplay tests](#automated-gameplay-tests). There is still no client you can *look*
+  at: for exploring by eye you run the real Minecraft client on the Mac through the port-forward.
+- The mouse button is `InputConstants.MOUSE_BUTTON_LEFT`, which is **1** in 26.3, not 0. 26.3
+  takes its input from SDL and SDL numbers buttons from one. Pressing 0 presses nothing at all and
+  the test then fails somewhere much later, so it is worth knowing before writing the next one.
+- The gametest pod apt-gets its virtual display on every start, so the first `scripts/dev.sh
+  gametest` after a pod restart waits a minute for that, and a run with a cold Gradle cache waits
+  rather longer while it downloads Minecraft again.
 - The Gradle `runServer`/`runClient` dev tasks from Loom are not used here; the mod is tested as a
   built jar against a real server, which is closer to how it will ship but slower to iterate.
 - The cluster is a `kind` cluster with no port mappings, hence the port-forward. Exposing 25565 on

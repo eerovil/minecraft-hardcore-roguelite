@@ -1,0 +1,12 @@
+{
+	"required": true,
+	"package": "fi.vilpponen.mhr.gametest.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"mixins": [],
+	"client": [
+		"ContainerScreenAccessor"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}
