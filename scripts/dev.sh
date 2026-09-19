@@ -132,7 +132,12 @@ cmd_deploy() {
 # workspace: its own source tree, its own Gradle cache, and a run directory Loom wipes before
 # every run. See docs/dev-environment.md.
 
-GAMETEST_WORKSPACE=/pvc/gametest/workspace
+# The test pod's source tree. Shared, like the build pod's, so two people running `gametest` at
+# once overwrite each other's `src/` halfway through a run — which shows up as somebody else's
+# tests failing in your output. Point this somewhere of your own to stay out of the way:
+#   MHR_GAMETEST_WORKSPACE=/pvc/gametest/workspace-mine scripts/dev.sh gametest
+# The Gradle cache stays shared either way, which is the expensive part.
+GAMETEST_WORKSPACE="${MHR_GAMETEST_WORKSPACE:-/pvc/gametest/workspace}"
 GAMETEST_AS_USER="setpriv --reuid=1000 --regid=1000 --clear-groups"
 GAMETEST_ARTIFACTS="$REPO_ROOT/build/gametest"
 
