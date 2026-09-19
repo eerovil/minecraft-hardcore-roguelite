@@ -105,6 +105,11 @@ MHR_GAMETEST_WORKSPACE=/pvc/gametest/workspace-mine scripts/dev.sh gametest
 
 The Gradle cache stays shared either way, which is the part worth sharing.
 
+A tree of your own does not make two runs independent, though. The client GameTests start a real
+dedicated server on port 25565, and there is one of those per pod, so a run started while somebody
+else's client step is going says **FAILED TO BIND TO PORT** and then times out waiting for a server
+that never came up. That is a collision, not a broken test: wait for the other run and start again.
+
 Two things had to be arranged for the client to start headless at all, both in `scripts/dev.sh`:
 
 - **`SDL_VIDEO_FORCE_EGL=1`.** 26.3 asks SDL for the OpenGL context, SDL prefers GLX, and llvmpipe
@@ -228,6 +233,62 @@ which has no trees in vanilla either, and "no logs where there never were any" p
 | Fresh forest, trees locked | ...and a fresh forest after `mhr unlock world.trees` |
 | -------------------------- | ---------------------------------------------------- |
 | ![grass and flowers, no trees](images/gametest-fresh-forest-trees-locked.png) | ![the same kind of land, full of oaks](images/gametest-fresh-forest-trees-unlocked.png) |
+
+#### The world border
+
+Where each border ends up is arithmetic, so most of it is a **server GameTest**, in
+`src/gametest/java/fi/vilpponen/mhr/gametest/WorldBorderGameTest.java`. Every scenario picks its
+tier the way a player does, with `mhr border <tier>`, and then reads the border vanilla itself is
+enforcing rather than asking the mod to repeat its own sums back. Each one also moves the run's
+spawn a long way from the origin first, because a border centered on 0, 0 passes whether the
+centering works or not:
+
+- **everyTierTakesItsSizeFromBalance** — tiny, medium and large are each exactly as wide as
+  `worldBorder.<tier>.size` says, in the overworld and in the nether. The expected number is read
+  out of the balance in effect, so retuning a tier does not break its test.
+- **infiniteRemovesThePracticalLimit** — the unbounded tier is vanilla's own maximum, wider than
+  the largest finite tier, and covers a point two million blocks out.
+- **theBorderCentersOnTheRunSpawn** — the overworld border sits on the run's spawn, and a tiny
+  border a thousand blocks out no longer covers the origin, which is what "it never moved" would
+  look like.
+- **theNetherBorderFollowsTheCoordinateScale** — the nether center is the spawn through the
+  dimension's own 1:8 mapping, and every corner of the overworld border maps inside the nether one.
+  That last check is the real promise: a portal built *anywhere* in the allowed area is safe, not
+  only one built on spawn.
+- **theEndSitsOnTheOriginAndHoldsTheArrivalPlatform** — the end is centered on the origin whatever
+  the run did, is widened to `endBorder.minimumSize` when the tier is narrower than that, covers
+  both the island and the obsidian arrival platform, and keeps its own size when the tier is wider.
+- **aBalanceOverrideAndAReloadResizeATier** — writing a `worldBorder.medium.size` into the config
+  override and running `mhr reload` resizes the tier on the spot, in every dimension, with no
+  rebuild; taking the override away puts the bundled number back.
+
+A portal transition is not arithmetic, though, and it is the one place a wrong border hides: vanilla
+drags a portal destination back inside whatever border it is given, so a nether border left on the
+raw overworld coordinates strands nobody — it quietly lands them hundreds of blocks from the portal
+they walked into. That has to be walked through, so it is a **client GameTest**, in
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/WorldBorderPortalClientTest.java`. The
+assertions are still all server-side; the client is there because it is the only traveller the
+harness has.
+
+- **the-border-wall-stands-at-the-tier-size** — the wall photographed from eight blocks short of
+  its own edge on tiny and again on medium, each checked against half the tier's width in the
+  balance file.
+- **a-nether-portal-inside-the-border-lands-inside-the-nether-border** — a real four-by-five
+  obsidian portal, built fifty blocks from the run's spawn and so inside the tiny border but nowhere
+  near its center, walked through by the connected player. The arrival has to be inside the nether
+  border *and* within a few blocks of where the 1:8 mapping puts the portal.
+- **a-real-end-transition-lands-inside-the-end-border** — a real end portal, and the obsidian
+  platform the player lands on is inside the end border. It is a hundred blocks from the origin,
+  which is further out than the tiny tier is wide — the `endBorder.minimumSize` floor is what makes
+  the difference between arriving and arriving outside the wall.
+
+| The tiny wall, 64 blocks from spawn | The medium wall, 256 blocks from spawn |
+| ----------------------------------- | -------------------------------------- |
+| ![the border wall seen from eight blocks away](images/gametest-border-tiny-wall.png) | ![the same wall, a tier wider out](images/gametest-border-medium-wall.png) |
+
+| Out of the portal, inside the nether border | On the end's arrival platform |
+| ------------------------------------------- | ----------------------------- |
+| ![the player standing in the portal vanilla built for them in the nether](images/gametest-border-nether-arrival.png) | ![the obsidian platform east of the end island](images/gametest-border-end-arrival.png) |
 
 ### What is still manual
 
@@ -377,6 +438,16 @@ the server eventually gets killed.
 
 ## Testing the world border
 
+Nothing here needs doing by hand any more:
+
+```sh
+scripts/dev.sh gametest
+```
+
+covers all four tiers, all three dimensions, the balance reload, and a real portal walked through in
+both directions of travel. See [Automated gameplay tests](#automated-gameplay-tests). What follows
+is how to poke at it on the dev server when you want to *see* it rather than prove it.
+
 A run starts on the `tiny` tier, and the border is placed when the server starts, centered on the
 world spawn. The sizes come from the `worldBorder` section of the balance file, not from Java, so
 retuning one is editing `default-balance.json` or the config override. Change the tier with the dev
@@ -401,19 +472,24 @@ World border tier tiny: 128 blocks across, overworld centered on 500, -700
 ```
 
 The nether center is the overworld spawn through the 1:8 portal mapping, so a portal built anywhere
-inside the overworld border comes out inside the nether one. To check that for real, move the spawn
-somewhere far from the origin, build a portal there and send a mob through:
+inside the overworld border comes out inside the nether one. That is the check
+`a-nether-portal-inside-the-border-lands-inside-the-nether-border` makes on every run, with a real
+portal and a real traveller. To watch it happen rather than take the test's word for it, move the
+spawn far from the origin, build a portal there and walk through it:
 
 ```sh
 scripts/dev.sh rcon "setworldspawn 500 70 -700"
 scripts/dev.sh rcon "mhr border tiny"
-scripts/dev.sh rcon "fill 500 69 -700 503 74 -700 minecraft:obsidian"
-scripts/dev.sh rcon "fill 501 70 -700 502 73 -700 minecraft:air"
-scripts/dev.sh rcon "setblock 501 70 -700 minecraft:nether_portal[axis=x]"   # and 502 70, 501 71, 502 71
-scripts/dev.sh rcon "summon minecraft:pig 501.5 70.0 -699.5"
-# a mob takes 300 ticks in the portal, then:
+scripts/dev.sh rcon "fill 550 69 -700 553 73 -700 minecraft:obsidian"
+scripts/dev.sh rcon "fill 551 70 -700 552 72 -700 minecraft:nether_portal[axis=x]"
+# then join and step in, or send a mob:
+scripts/dev.sh rcon "summon minecraft:pig 551.5 70.0 -699.5"
+# a mob waits 300 ticks in the portal, then:
 scripts/dev.sh rcon "execute in minecraft:the_nether run data get entity @e[type=pig,limit=1] Pos"
 ```
+
+The portal is fifty blocks from the spawn rather than on it on purpose: a border that only thought
+about the spawn point looks perfect from a portal standing on the spawn.
 
 ## Testing the ore unlocks
 
