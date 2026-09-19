@@ -20,6 +20,24 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * {@code NaturalSpawner.canSpawnMobAt} asks it on the spawn tick afterwards. Saying no here is
  * the same answer the game already gives when a biome is wrong for a mob, so nothing downstream
  * needs to know the mod exists.
+ *
+ * <p>It is tempting to think the locked species should instead be taken out of the biome's
+ * weighted list before the game draws from it, so that a locked draw is not "wasted". Two things
+ * say otherwise, and both matter for the rule that locking one animal must not disturb the rest:
+ *
+ * <ul>
+ * <li>Removing an entry renormalises the draw. Every remaining species goes from {@code w/total}
+ * to {@code w/(total - w_locked)}, so locking cows would make sheep spawn more often than vanilla.
+ * <li>The wasted draw costs nobody else anything. On the spawn tick the drawn species is kept for
+ * the rest of that attempt, but {@code spawnCategoryForPosition} clears it at the top of each of
+ * its three attempts, so a locked draw ends that attempt and no other. Chunk generation likewise
+ * draws afresh every pass, and the pass count comes from a coin flip that ignores whether a pass
+ * produced anything. In both, the attempt a locked animal consumes is the attempt vanilla had
+ * already given to that same animal.
+ * </ul>
+ *
+ * <p>So refusing the outcome and leaving the draw alone is the one option that keeps every other
+ * mob at exactly its vanilla rate.
  */
 @Mixin(SpawnPlacements.class)
 public class AnimalSpawnMixin {
