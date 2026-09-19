@@ -105,7 +105,9 @@ public final class BalanceManager {
 		JsonObject merged = readBundledDefaults();
 		Path override = overrideFile();
 		if (Files.isRegularFile(override)) {
-			merge(merged, readOverride(override));
+			JsonObject over = readOverride(override);
+			checkOverrideIds(merged, over, override.toString());
+			merge(merged, over);
 		}
 		return bind(merged);
 	}
@@ -141,10 +143,99 @@ public final class BalanceManager {
 	}
 
 	/**
+	 * Every id the override names must already be in the catalogue.
+	 *
+	 * <p>The three id maps — {@code unlocks}, {@code currency.advancements} and {@code worldBorder} —
+	 * are lists of things that exist, and the bundled file is the list. Left unchecked, an override
+	 * saying {@code world.ore.diamod} would merge cleanly into a brand new entry nothing reads,
+	 * while the real diamond kept its bundled price: a balance change that appears to work, does
+	 * nothing, and says nothing. That is the exact failure this layer exists to prevent, and the one
+	 * a typo makes most easily.
+	 *
+	 * <p>Only these maps are checked. A new top-level section is still free to appear, because that
+	 * is how a vanilla+ system gets tuning values before it has a typed accessor — see
+	 * {@link Balance#number}. Adding a genuinely new unlock means adding it to
+	 * {@code default-balance.json}, which is where the catalogue belongs anyway.
+	 */
+	static void checkOverrideIds(JsonObject defaults, JsonObject over, String where) {
+		checkIds(childObject(defaults, "unlocks"), childObject(over, "unlocks"), "unlocks", "unlock", where);
+		checkIds(childObject(childObject(defaults, "currency"), "advancements"),
+				childObject(childObject(over, "currency"), "advancements"),
+				"currency.advancements", "advancement", where);
+		checkIds(childObject(defaults, "worldBorder"), childObject(over, "worldBorder"),
+				"worldBorder", "border tier", where);
+	}
+
+	/** The named child if it is an object, or null — a wrong-shaped one is bind's to complain about. */
+	private static JsonObject childObject(JsonObject parent, String key) {
+		if (parent == null) {
+			return null;
+		}
+		JsonElement found = parent.get(key);
+		return found != null && found.isJsonObject() ? found.getAsJsonObject() : null;
+	}
+
+	private static void checkIds(JsonObject known, JsonObject over, String section, String noun, String where) {
+		if (known == null || over == null) {
+			return;
+		}
+		for (String id : over.keySet()) {
+			if (known.has(id)) {
+				continue;
+			}
+			String closest = closestTo(id, known.keySet());
+			String hint = closest != null
+					? " Did you mean '" + closest + "'?"
+					// Without the leading slash: as a message it is the name of a file someone edits,
+					// not the classpath resource the constant is.
+					: " A new " + noun + " goes in " + DEFAULT_RESOURCE.substring(1) + ", not in the override.";
+			throw new BalanceException("The balance override " + where + " sets '" + section + "." + id
+					+ "', but there is no such " + noun + "." + hint);
+		}
+	}
+
+	/** The known id within a typo or two of this one, or null if nothing is close enough. */
+	private static String closestTo(String id, Set<String> known) {
+		String best = null;
+		int bestDistance = Integer.MAX_VALUE;
+		for (String candidate : known) {
+			int distance = editDistance(id, candidate);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				best = candidate;
+			}
+		}
+		return bestDistance <= Math.max(1, Math.min(3, id.length() / 4)) ? best : null;
+	}
+
+	/** Plain Levenshtein distance, only ever run on a handful of short ids while reporting an error. */
+	private static int editDistance(String a, String b) {
+		int[] previous = new int[b.length() + 1];
+		int[] row = new int[b.length() + 1];
+		for (int j = 0; j <= b.length(); j++) {
+			previous[j] = j;
+		}
+		for (int i = 1; i <= a.length(); i++) {
+			row[0] = i;
+			for (int j = 1; j <= b.length(); j++) {
+				int substitute = previous[j - 1] + (a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1);
+				row[j] = Math.min(substitute, Math.min(previous[j] + 1, row[j - 1] + 1));
+			}
+			int[] swap = previous;
+			previous = row;
+			row = swap;
+		}
+		return previous[b.length()];
+	}
+
+	/**
 	 * Deep-merge {@code over} into {@code base}.
 	 *
 	 * <p>Objects are merged key by key so an override can name one price without repeating its
 	 * neighbours. Anything else — a number, a string, an array — replaces what was there.
+	 *
+	 * <p>Shape-blind on purpose: what each section is meant to look like is {@link #bind}'s to know,
+	 * and {@link #checkOverrideIds} has already rejected ids that do not exist.
 	 */
 	private static void merge(JsonObject base, JsonObject over) {
 		for (Map.Entry<String, JsonElement> entry : over.entrySet()) {

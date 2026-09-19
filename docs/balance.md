@@ -24,6 +24,19 @@ The override is deep-merged over the defaults, so it only names what it changes:
 That file is complete. Every other price, every reward, every border tier keeps its bundled value.
 Objects merge key by key; anything else — a number, a string, an array — replaces what was there.
 
+The override changes things that exist; it does not add them. Every id it names under `unlocks`,
+`currency.advancements` or `worldBorder` has to be in the bundled catalogue already, so a misspelt
+`world.ore.diamod` is refused rather than quietly becoming a new entry nothing reads while the real
+diamond keeps its old price:
+
+```
+The balance override ./config/hardcore-roguelite-balance.json sets 'unlocks.world.ore.diamod',
+but there is no such unlock. Did you mean 'world.ore.diamond'?
+```
+
+A genuinely new unlock goes in `default-balance.json`, which is where the catalogue lives. New
+top-level sections are the exception and stay free — see [Adding values](#adding-values).
+
 If the override does not exist, the defaults are used as they are. Nothing writes the file for you,
 on purpose: a generated copy of the whole catalogue would go stale the moment a default changed.
 
