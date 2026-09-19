@@ -157,6 +157,12 @@ When the system settles down, give it a record and an accessor in `Balance` and 
 `BalanceManager.bind`. The path lookup splits on `.`, so it cannot reach into `unlocks` — those keys
 contain dots themselves. Use `unlockPrice` for those.
 
+A path that is simply absent gives you the fallback; that is what it is for. A path that runs into
+something that is not an object on the way down — `vanillaPlus.speed` holding `12` when the code
+expects it to hold `stepPercent` — is an error, and is reported like any other bad balance value.
+The same rule as everywhere else here: a missing value falls back, a wrong one is never quietly
+papered over.
+
 ## Where this sits in the mod
 
 ```

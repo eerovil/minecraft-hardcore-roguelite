@@ -3,6 +3,7 @@ package fi.vilpponen.mhr.core;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -117,7 +118,8 @@ public final class Balance {
 	 * themselves. Use {@link #unlockPrice} for those.
 	 *
 	 * @param fallback returned when the path is absent
-	 * @throws BalanceException if the path exists but does not hold a number
+	 * @throws BalanceException if the path exists but does not hold a number, or if it runs into a
+	 *     value that is not an object on the way down
 	 */
 	public double number(String path, double fallback) {
 		JsonElement found = resolve(path);
@@ -144,13 +146,29 @@ public final class Balance {
 		return Collections.unmodifiableSet(source.keySet());
 	}
 
+	/**
+	 * Walk a dotted path, or null if nothing is there.
+	 *
+	 * <p>A key that is simply absent is not an error — that is what the caller's fallback is for.
+	 * Running into something that is not an object part-way down is a different thing entirely: the
+	 * file says {@code vanillaPlus.speed} is 12 while the code expects it to hold
+	 * {@code stepPercent}, and one of the two is wrong. Returning the fallback there would hide a
+	 * real mistake behind a plausible number, which is the one thing this layer is not allowed to
+	 * do.
+	 */
 	private JsonElement resolve(String path) {
+		String[] parts = path.split("\\.");
 		JsonElement here = source;
-		for (String part : path.split("\\.")) {
-			if (!(here instanceof JsonObject object) || !object.has(part)) {
+		for (int i = 0; i < parts.length; i++) {
+			if (!(here instanceof JsonObject object)) {
+				String prefix = String.join(".", Arrays.copyOfRange(parts, 0, i));
+				throw new BalanceException("Balance section '" + prefix + "' should be an object, not " + here
+						+ ", so '" + path + "' cannot be read");
+			}
+			if (!object.has(parts[i])) {
 				return null;
 			}
-			here = object.get(part);
+			here = object.get(parts[i]);
 		}
 		return here;
 	}
