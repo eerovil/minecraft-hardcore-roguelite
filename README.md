@@ -33,7 +33,12 @@ There is no shop and no currency yet, so unlocks are toggled with a dev command:
 /mhr unlock slot_boots
 ```
 
+Prices, rewards, border sizes and the mob damage multiplier are data, not code: they live in
+`default-balance.json`, a config file can override any of them, and `/mhr reload` picks up an edit
+without restarting. See [`docs/balance.md`](docs/balance.md).
+
 - [`docs/design-v0.2.fi.md`](docs/design-v0.2.fi.md) — full design document (v0.2, in Finnish)
+- [`docs/balance.md`](docs/balance.md) — how balance numbers are configured and reloaded
 - [`docs/open-questions.md`](docs/open-questions.md) — things the design deliberately hasn't settled
 - [`docs/dev-environment.md`](docs/dev-environment.md) — how to build and test it
 
