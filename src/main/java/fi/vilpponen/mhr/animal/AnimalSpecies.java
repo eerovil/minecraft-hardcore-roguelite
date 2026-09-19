@@ -43,6 +43,16 @@ public enum AnimalSpecies {
 		return BY_TYPE.get(entityType);
 	}
 
+	/** Whether this unlock is one of the six, for anything that has to treat them as a group. */
+	public static boolean isAnimalUnlock(Unlock unlock) {
+		for (AnimalSpecies species : values()) {
+			if (species.unlock == unlock) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public Unlock unlock() {
 		return unlock;
 	}

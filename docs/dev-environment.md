@@ -162,9 +162,10 @@ The server tells the client which slots are open when you join and again wheneve
 Enforcement never reads that copy — it is for drawing only.
 ## Testing the animal unlocks
 
-Animals only appear in terrain generated after the species was unlocked, so the test is always
-"force-load a patch of land nobody has been to yet, then count what is standing in it". No client
-needed — rcon does all of it.
+Unlike trees, an animal unlock takes effect at once — natural spawning asks every time, so land you
+have already visited starts or stops producing that species straight away. That half needs a player
+online to test, though, because the spawn tick only runs near one. What rcon alone can test is the
+other half: force-load a patch of land nobody has been to yet, then count what is standing in it.
 
 ```sh
 scripts/dev.sh rcon "mhr lock world.animal.cow"

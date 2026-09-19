@@ -7,6 +7,7 @@ import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import fi.vilpponen.mhr.Unlock;
 import fi.vilpponen.mhr.UnlockState;
+import fi.vilpponen.mhr.animal.AnimalSpecies;
 import fi.vilpponen.mhr.equipment.EquipmentLocks;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
 import net.minecraft.commands.CommandSourceStack;
@@ -103,10 +104,20 @@ public final class UnlockCommand {
 		String verb = owned > 0 ? "Unlocked " : "Locked ";
 		String at = unlock.isRepeatable() ? " at level " + owned + "/" + unlock.maxLevel() : "";
 		String note = changed ? "" : " (no change)";
-		// Equipment slots take effect at once; the worldgen unlocks do not.
-		String suffix = EquipmentLocks.isSlotUnlock(unlock) || unlock == Unlock.CRAFT_ENCHANT
-				? "."
-				: " — worldgen changes apply to new chunks only.";
+		// Three different answers, and giving the wrong one sends you looking in the wrong place
+		// for the change you just paid for. An equipment slot and a crafted enchant are yours the
+		// moment you buy them. A worldgen unlock is stuck with the terrain that already exists. An
+		// animal is in between: natural spawning re-asks every time, so land you have already walked
+		// starts or stops producing that species at once, while the animals already alive stay put.
+		String suffix;
+		if (EquipmentLocks.isSlotUnlock(unlock) || unlock == Unlock.CRAFT_ENCHANT) {
+			suffix = ".";
+		} else if (AnimalSpecies.isAnimalUnlock(unlock)) {
+			suffix = " — new terrain and later natural spawns follow this at once;"
+					+ " mobs already in the world stay.";
+		} else {
+			suffix = " — worldgen changes apply to new chunks only.";
+		}
 		context.getSource().sendSuccess(() -> Component.literal(verb + unlock.id() + at + note + suffix), true);
 		return changed ? 1 : 0;
 	}
