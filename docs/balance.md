@@ -84,6 +84,10 @@ on purpose: a generated copy of the whole catalogue would go stale the moment a 
 - **`worldBorder`** — one entry per tier. `size` is the edge-to-edge width in blocks; leaving it out
   means the border is never in the way. A tier's unlock id is `world.border.` plus its key, but its
   price sits here so the size and the price stay next to each other.
+- **`endBorder.minimumSize`** — the smallest the end's own border may be, whatever tier the run is
+  on. Centered on the origin it has to hold both the main island and the obsidian arrival platform
+  100 blocks east of it, or an end portal would drop you outside the border. Read by path, as
+  [Adding values](#adding-values) describes.
 - **`difficulty.mobDamageMultiplier`** — how much harder than vanilla mobs hit. `1.0` is vanilla.
 
 `default-balance.json` may hold sections nothing reads yet, which is how a new vanilla+ system gets
