@@ -363,6 +363,66 @@ can start a dedicated server on a seed of our choosing. No client ever connects,
 screenshots — there is nothing to see, the evidence is the counts, and they are printed per block
 per world in the client log.
 
+#### The crafted-tool enchant
+
+Split the same way, and for the same reason. What may be rolled, on what and how high needs no
+client at all, so it is a **server GameTest** in
+`src/gametest/java/fi/vilpponen/mhr/gametest/CraftEnchantGameTest.java`. Each scenario builds a
+crafting result the way the mixin does — a fresh stack handed to `CraftEnchant.enchantCrafted` — and
+then asks what came out, which covers seventeen tools times forty rolls in about a second:
+
+- **locked-unlock-leaves-every-tool-plain** / **every-supported-tool-comes-out-enchanted** — one
+  level bought, and every tool kind and material comes out with something on it.
+- **unsupported-items-stay-plain** — a bow, a crossbow, a trident, a fishing rod, shears, armour, a
+  shield, planks, a chest. Half of them *are* enchantable and have an enchanting-table pool of their
+  own, so the only reason they stay plain is the item tag. The other half is the control against a
+  rule that started enchanting everything.
+- **only-enchantments-that-fit-the-item-are-rolled** — the *"nothing impossible ever lands"* check.
+  Every roll has to be one the game itself calls a primary fit for the item, inside the enchanting
+  table's pool, not treasure, not a curse, and exactly one of them.
+- **one-unlock-level-rolls-the-weakest-level** / **the-top-unlock-level-rolls-the-enchantments-own-maximum**
+  — the curve, both ends. The second one also insists that something with more than one level turned
+  up, because Silk Touch only goes to I and would satisfy "equals the maximum" for free.
+- **recomputing-the-same-result-does-not-reroll** / **crafting-one-moves-the-roll-on** — the seed.
+
+The crafting itself needs hands, so it is a **client GameTest** in
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/CraftEnchantClientTest.java`. The client stands
+on a real crafting table, right-clicks it open, and carries the ingredients into the 3x3 grid one
+square at a time with the real mouse:
+
+- **a-locked-unlock-crafts-a-plain-pickaxe** — the whole recipe laid out by hand, and a plain result.
+- **unlocking-while-connected-fills-the-output-slot** — `mhr unlock player.craft.enchant` with the
+  table open, and the next recompute of the grid puts the enchanted pickaxe in the output slot.
+  Asserted on the server *and* on the client's own copy, because the point of the feature is that
+  you can see it before you take it.
+- **taking-the-result-by-clicking-it** / **taking-the-result-by-shift-clicking-it** — both ways of
+  getting it out give the item the output slot promised, and neither duplicates it.
+- **the-recipe-book-gives-the-same-enchanted-item** — the third way in, covered below.
+- **jiggling-the-grid-is-not-a-reroll** — an ingredient pulled out and put back six times over. Same
+  enchantment every time.
+- **crafting-one-and-setting-up-the-next-is-a-new-roll** — and the counterpart: really crafting one
+  does move it on.
+- **a-higher-unlock-level-rolls-higher** — at level 4, every roll is the enchantment's own maximum.
+- **a-bow-in-the-same-grid-stays-plain** — with a pickaxe crafted straight afterwards as the control,
+  so "plain" cannot mean "the unlock was off".
+- **a-balance-reload-changes-the-curve** — writes an override into the config directory, runs
+  `mhr reload`, and the very next item crafted comes out at the new level with the same enchantment
+  on it. Then it takes the override away again and checks the shipped curve came back.
+
+| The output slot, unlock locked | ...and after `mhr unlock player.craft.enchant` |
+| ------------------------------ | --------------------------------------------- |
+| ![a plain wooden pickaxe in the output slot](images/gametest-crafting-result-plain.png) | ![the same slot, Wooden Pickaxe with Fortune I](images/gametest-crafting-result-enchanted.png) |
+
+The pointer is parked on the output slot for both, so the tooltip spells out what is in there. The
+enchantment line is what appears; the state assertions are still the proof.
+
+Two things are worth knowing about the recipe book. A recipe has to be *known* before the book can
+place it, and a fresh test player knows almost nothing, so the scenario runs `recipe give` first.
+And the click on the recipe itself goes through `handlePlaceRecipe`, the method the recipe-book
+button calls, rather than through the mouse: the book lays its recipes out in a paged component with
+no stable handle on a single one, so aiming the pointer at whatever happens to be in that spot would
+be a test of the page layout. Everything after that call is the real path, server round trip and all.
+
 ### What is still manual
 
 - The padlock **artwork**. The tests screenshot the inventory with the helmet slot locked and again
@@ -372,6 +432,7 @@ per world in the client log.
   interaction rather than an inventory screen.
 - The **full-inventory fallback**, where a refused item falls at the player's feet.
 - Nothing about trees or animals, beyond looking at a world by eye if you want to.
+- Nothing about the crafted enchant either, beyond the recipe-book button noted above.
 
 ## Joining the server
 
@@ -648,21 +709,20 @@ scripts/dev.sh rcon "mhr balance"   # shows vanillaPlus.craftEnchant
 scripts/dev.sh rcon "mhr reload"    # after editing config/hardcore-roguelite-balance.json
 ```
 
-The crafting itself needs a real client, because there is no way to craft from the server console.
-Join through the port-forward and check:
+The crafting itself cannot be done from the server console at all, and it used to be the one thing
+here that needed a human in a real client. It does not any more:
 
-- With the unlock locked, craft a wooden pickaxe: it comes out plain.
-- `mhr unlock player.craft.enchant`, then put the ingredients back in the grid. The output slot already
-  shows the enchantment before you take it — that is the point, it is the crafting result that is
-  enchanted, not the item in your hand afterwards.
-- Take it out by clicking, by shift-clicking and through the recipe book. All three give the same
-  enchanted item.
-- Leave the ingredients sitting in the grid and pull the last one out and back a few times. The
-  enchantment stays the same, so jiggling the grid is not a way to reroll. Craft one and set up the
-  next: that one is a new roll.
-- `mhr unlock player.craft.enchant 4` and craft a few more. Efficiency now turns up at V rather than I.
-- Craft something that is not a tool — planks, a chest, a bow — and it stays plain.
-- Nothing impossible ever lands: no Sharpness on a pickaxe, no Mending, no curses.
+```sh
+scripts/dev.sh gametest
+```
+
+covers the whole unlock — a real client at a real crafting table, the plain result while it is
+locked, the enchanted one sitting in the output slot before it is taken, clicking, shift-clicking,
+the recipe book, the no-free-reroll rule, the level curve at both ends, a bow staying plain, and a
+balance reload landing on the next item crafted. See
+[Automated gameplay tests](#automated-gameplay-tests). What follows is how to poke at it on the dev
+server when you want to *see* it rather than prove it: join through the port-forward, buy a level
+with the command above, and put a pickaxe recipe in a crafting table.
 
 ## Testing the starter chest
 
@@ -727,6 +787,11 @@ removes both pods but keeps the volume, so bringing it back is fast.
 - The mouse button is `InputConstants.MOUSE_BUTTON_LEFT`, which is **1** in 26.3, not 0. 26.3
   takes its input from SDL and SDL numbers buttons from one. Pressing 0 presses nothing at all and
   the test then fails somewhere much later, so it is worth knowing before writing the next one.
+- **A shift-click cannot be pressed.** 26.3 reads the modifier keys off the mouse event itself, and
+  the harness's `pressMouse` always sends an event with no modifiers on it — so holding shift and
+  clicking is an ordinary click, silently. `TestPlayer.shiftClickSlot` puts the button in through
+  `MouseHandler.onButton` instead, which is the door the operating system's own mouse callback comes
+  through, carrying the modifier a real shift-click carries.
 - The gametest pod apt-gets its virtual display on every start, so the first `scripts/dev.sh
   gametest` after a pod restart waits a minute for that, and a run with a cold Gradle cache waits
   rather longer while it downloads Minecraft again.
