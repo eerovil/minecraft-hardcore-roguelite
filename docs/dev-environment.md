@@ -160,6 +160,27 @@ Join through the port-forward and check:
 The server tells the client which slots are open when you join and again whenever `mhr unlock` or
 `mhr lock` changes something, so the client's own config file is never consulted while connected.
 Enforcement never reads that copy — it is for drawing only.
+## Testing the animal unlocks
+
+Animals only appear in terrain generated after the species was unlocked, so the test is always
+"force-load a patch of land nobody has been to yet, then count what is standing in it". No client
+needed — rcon does all of it.
+
+```sh
+scripts/dev.sh rcon "mhr lock world.animal.cow"
+scripts/dev.sh rcon "execute positioned 8000 100 8000 run locate biome minecraft:plains"
+scripts/dev.sh rcon "forceload add 7904 7904 8159 8159"   # 256 chunks, the per-command maximum
+# wait a minute or so for the chunks to generate
+scripts/dev.sh rcon "execute if entity @e[type=minecraft:cow,x=7904,y=-64,z=7904,dx=256,dy=384,dz=256]"
+```
+
+That answers "Test failed" while the species is locked and "Test passed. Count: N" once it is
+unlocked and a *different* fresh patch has been generated. Plains is the biome to pick: cows,
+sheep, pigs and chickens all populate it, so one patch tests four species at once. Rabbits and
+foxes make a good control — they are not part of this unlock and should keep showing up.
+
+Force-loaded chunks stay loaded and cost memory, so `forceload remove all` between rounds, or
+the server eventually gets killed.
 
 ## Testing the world border
 

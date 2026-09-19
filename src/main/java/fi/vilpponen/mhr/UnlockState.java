@@ -40,16 +40,23 @@ public final class UnlockState {
 	 *
 	 * <p>A save written before the rename is migrated on load and rewritten once, so nobody loses a
 	 * purchase to a refactor. An entry can be dropped once no save that old can plausibly exist —
-	 * for {@code trees} and the five {@code slot_*} names that is as soon as the mod has shipped
-	 * anywhere, since they predate the namespaced ids and only ever existed in development.
+	 * for {@code trees}, the five {@code slot_*} names and the six bare animal names that is as
+	 * soon as the mod has shipped anywhere, since they predate the namespaced ids and only ever
+	 * existed in development.
 	 */
-	private static final Map<String, String> RENAMED_IDS = Map.of(
-			"trees", "world.trees",
-			"slot_helmet", "player.slot.helmet",
-			"slot_chestplate", "player.slot.chestplate",
-			"slot_leggings", "player.slot.leggings",
-			"slot_boots", "player.slot.boots",
-			"slot_offhand", "player.slot.offhand");
+	private static final Map<String, String> RENAMED_IDS = Map.ofEntries(
+			Map.entry("trees", "world.trees"),
+			Map.entry("cow", "world.animal.cow"),
+			Map.entry("pig", "world.animal.pig"),
+			Map.entry("sheep", "world.animal.sheep"),
+			Map.entry("chicken", "world.animal.chicken"),
+			Map.entry("horse", "world.animal.horse"),
+			Map.entry("wolf", "world.animal.wolf"),
+			Map.entry("slot_helmet", "player.slot.helmet"),
+			Map.entry("slot_chestplate", "player.slot.chestplate"),
+			Map.entry("slot_leggings", "player.slot.leggings"),
+			Map.entry("slot_boots", "player.slot.boots"),
+			Map.entry("slot_offhand", "player.slot.offhand"));
 
 	private static volatile UnlockState instance;
 

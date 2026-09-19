@@ -24,6 +24,9 @@ Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks im
 - **villages** — until you buy it, new land generates with no villages in it.
 - **the ores** — coal, iron, copper, gold, redstone, lapis and diamond, each bought separately.
   A locked ore is missing from new terrain. Mining, recipes and loot are untouched.
+- **passive animals** — cow, pig, sheep, chicken, horse and wolf are sold one species at a
+  time. A locked species never spawns by itself, in new terrain or later. Everything else
+  about it is vanilla: spawn eggs, `/summon`, breeding, drops and recipes all still work.
 - **the five equipment slots** — helmet, chestplate, leggings, boots and offhand, each bought
   separately. A locked slot shows a padlock in the inventory and refuses every item. You can still
   craft, pick up and store the gear; you just can't wear it.
@@ -40,6 +43,7 @@ There is no shop and no currency yet, so unlocks are toggled with a dev command:
 /mhr unlock world.trees
 /mhr unlock world.village
 /mhr unlock world.ore.iron
+/mhr unlock world.animal.cow
 /mhr unlock player.slot.boots
 /mhr unlock player.craft.enchant      # buys the next level
 /mhr unlock player.craft.enchant 4    # or jump straight to one
