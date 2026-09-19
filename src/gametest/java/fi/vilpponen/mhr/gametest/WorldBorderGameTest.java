@@ -46,6 +46,9 @@ public final class WorldBorderGameTest {
 	/** What the override in the reload scenario retunes {@code medium} to, in blocks. */
 	private static final int RETUNED_MEDIUM_SIZE = 777;
 
+	/** Where the end's own floor sits in the balance file — the same path the feature reads it by. */
+	private static final String END_MINIMUM_SIZE = "endBorder.minimumSize";
+
 	// --- the tiers -----------------------------------------------------------------------------
 
 	/**
@@ -163,33 +166,78 @@ public final class WorldBorderGameTest {
 	/**
 	 * The end ignores where the run began: every arrival lands on the obsidian platform east of the
 	 * island, so the border goes on the origin and never shrinks below what it takes to hold both.
+	 *
+	 * <p>The width expected of each tier is the rule the feature follows — the wider of the tier and
+	 * {@code endBorder.minimumSize} — rather than which side of the floor today's numbers happen to
+	 * fall. Both of those are balance data, so a legitimate retune that lifts a tier above the floor
+	 * must not turn this red. Which side of the floor the two branches are on is
+	 * {@link #theEndIsWidenedOnlyWhenTheTierIsNarrowerThanItsFloor}'s question, and that one builds
+	 * itself a fixture instead of hoping.
 	 */
 	@GameTest
 	public void theEndSitsOnTheOriginAndHoldsTheArrivalPlatform(GameTestHelper helper) {
 		MinecraftServer server = helper.getLevel().getServer();
 		withRunSpawn(server, () -> {
-			double minimum = BalanceManager.get().number("endBorder.minimumSize");
-			double large = BorderTier.LARGE.balance(BalanceManager.get()).size().orElseThrow();
+			double minimum = BalanceManager.get().number(END_MINIMUM_SIZE);
 
-			selectTier(server, BorderTier.TINY);
-			WorldBorder border = border(server, Level.END);
+			for (BorderTier tier : List.of(BorderTier.TINY, BorderTier.MEDIUM, BorderTier.LARGE)) {
+				double tierSize = tier.balance(BalanceManager.get()).size().orElseThrow();
+				selectTier(server, tier);
+				WorldBorder border = border(server, Level.END);
 
-			helper.assertValueEqual(border.getCenterX(), 0.5,
-					"the end border must sit on the origin however far out the run spawn is");
-			helper.assertValueEqual(border.getCenterZ(), 0.5,
-					"the end border must sit on the origin however far out the run spawn is");
-			helper.assertValueEqual(border.getSize(), minimum,
-					"a tier narrower than endBorder.minimumSize must be widened to it in the end");
-			helper.assertTrue(border.isWithinBounds(ServerLevel.END_SPAWN_POINT),
-					"the obsidian arrival platform at " + ServerLevel.END_SPAWN_POINT
-							+ " must be inside the end border, or arriving is a death sentence");
-			helper.assertTrue(border.isWithinBounds(BlockPos.ZERO),
-					"the main island at the origin must be inside the end border");
+				helper.assertValueEqual(border.getCenterX(), 0.5,
+						"the end border must sit on the origin however far out the run spawn is");
+				helper.assertValueEqual(border.getCenterZ(), 0.5,
+						"the end border must sit on the origin however far out the run spawn is");
+				helper.assertValueEqual(border.getSize(), Math.max(tierSize, minimum),
+						"the end on the " + tier.id() + " tier must be the wider of that tier and "
+								+ END_MINIMUM_SIZE);
+				helper.assertTrue(border.isWithinBounds(ServerLevel.END_SPAWN_POINT),
+						"the obsidian arrival platform at " + ServerLevel.END_SPAWN_POINT
+								+ " must be inside the end border, or arriving is a death sentence");
+				helper.assertTrue(border.isWithinBounds(BlockPos.ZERO),
+						"the main island at the origin must be inside the end border");
+			}
+		});
+		helper.succeed();
+	}
 
-			// A tier wider than the floor is not clamped down to it.
-			selectTier(server, BorderTier.LARGE);
-			helper.assertValueEqual(border(server, Level.END).getSize(), large,
-					"a tier wider than endBorder.minimumSize must keep its own size in the end");
+	/**
+	 * The floor itself, on a fixture rather than on whatever the bundled numbers are today.
+	 *
+	 * <p>A tier is retuned to a quarter of {@code endBorder.minimumSize} and another to four times
+	 * it, so one tier is certainly below the floor and one certainly above it whatever the catalogue
+	 * says. The overworld is checked alongside: the widening is the end's alone, and a floor that
+	 * leaked into the other dimensions would hand the player a world the tier never sold them.
+	 */
+	@GameTest
+	public void theEndIsWidenedOnlyWhenTheTierIsNarrowerThanItsFloor(GameTestHelper helper) {
+		MinecraftServer server = helper.getLevel().getServer();
+		Path override = BalanceManager.overrideFile();
+		double minimum = BalanceManager.get().number(END_MINIMUM_SIZE);
+		long narrow = Math.max(1, Math.round(minimum / 4));
+		long wide = Math.round(minimum * 4);
+
+		withRunSpawn(server, () -> {
+			try {
+				write(override, "{\"worldBorder\": {\"" + BorderTier.TINY.id() + "\": {\"size\": " + narrow
+						+ "}, \"" + BorderTier.LARGE.id() + "\": {\"size\": " + wide + "}}}");
+				runCommand(server, "mhr reload");
+
+				selectTier(server, BorderTier.TINY);
+				helper.assertValueEqual(border(server, Level.END).getSize(), minimum,
+						"a tier narrower than " + END_MINIMUM_SIZE + " must be widened to it in the end");
+				helper.assertValueEqual(border(server, Level.OVERWORLD).getSize(), (double) narrow,
+						"the end's floor must not widen the overworld, which the tier sold as " + narrow
+								+ " blocks across");
+
+				selectTier(server, BorderTier.LARGE);
+				helper.assertValueEqual(border(server, Level.END).getSize(), (double) wide,
+						"a tier wider than " + END_MINIMUM_SIZE + " must keep its own size in the end");
+			} finally {
+				delete(override);
+				runCommand(server, "mhr reload");
+			}
 		});
 		helper.succeed();
 	}

@@ -337,9 +337,14 @@ centering works or not:
   dimension's own 1:8 mapping, and every corner of the overworld border maps inside the nether one.
   That last check is the real promise: a portal built *anywhere* in the allowed area is safe, not
   only one built on spawn.
-- **theEndSitsOnTheOriginAndHoldsTheArrivalPlatform** — the end is centered on the origin whatever
-  the run did, is widened to `endBorder.minimumSize` when the tier is narrower than that, covers
-  both the island and the obsidian arrival platform, and keeps its own size when the tier is wider.
+- **theEndSitsOnTheOriginAndHoldsTheArrivalPlatform** — on every tier the end is centered on the
+  origin whatever the run did, is the wider of that tier and `endBorder.minimumSize`, and covers
+  both the island and the obsidian arrival platform. The width expected is the rule rather than
+  today's number, because a retune that lifted a tier above the floor would otherwise turn a
+  working feature red.
+- **theEndIsWidenedOnlyWhenTheTierIsNarrowerThanItsFloor** — the floor itself, on a fixture that
+  cannot drift: one tier retuned to a quarter of the minimum and another to four times it. The
+  narrow one is widened in the end and left alone in the overworld, the wide one keeps its size.
 - **aBalanceOverrideAndAReloadResizeATier** — writing a `worldBorder.medium.size` into the config
   override and running `mhr reload` resizes the tier on the spot, in every dimension, with no
   rebuild; taking the override away puts the bundled number back.
