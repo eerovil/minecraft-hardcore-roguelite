@@ -5,9 +5,9 @@ import fi.vilpponen.mhr.core.BalanceManager;
 /**
  * Everything the shop can sell that is permanent across runs.
  *
- * <p>Only {@link #TREES}, {@link #VILLAGE}, the ores, the five equipment slots and
- * {@link #CRAFT_ENCHANT} do anything yet. The rest of the catalogue from the design document
- * (animals, world border, status effects, start chest) gets added here as each one is implemented.
+ * <p>Only {@link #TREES}, {@link #VILLAGE}, the ores, the six passive animals, the five equipment
+ * slots and {@link #CRAFT_ENCHANT} do anything yet. The rest of the catalogue from the design
+ * document (world border, status effects, start chest) gets added here as each one is implemented.
  *
  * <p>The id is one string used everywhere: it is the key in {@code default-balance.json}, the value
  * written to the unlock save file, and what the dev command takes. It is namespaced — {@code world.}
@@ -34,6 +34,17 @@ public enum Unlock {
 	REDSTONE("world.ore.redstone"),
 	LAPIS("world.ore.lapis"),
 	DIAMOND("world.ore.diamond"),
+
+	/**
+	 * The six passive animals, one unlock each, because the design document sells them a species
+	 * at a time. See {@code fi.vilpponen.mhr.animal}.
+	 */
+	ANIMAL_COW("world.animal.cow"),
+	ANIMAL_PIG("world.animal.pig"),
+	ANIMAL_SHEEP("world.animal.sheep"),
+	ANIMAL_CHICKEN("world.animal.chicken"),
+	ANIMAL_HORSE("world.animal.horse"),
+	ANIMAL_WOLF("world.animal.wolf"),
 
 	/** The five equipment slots, one unlock each. See {@code fi.vilpponen.mhr.equipment}. */
 	SLOT_HELMET("player.slot.helmet"),
