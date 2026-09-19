@@ -459,6 +459,7 @@ pass at all.
 | Fresh land, villages unlocked | ...and the same spot with `world.village` locked |
 | ----------------------------- | ----------------------------------------------- |
 | ![a village in open land](images/gametest-fresh-village-unlocked.png) | ![the same land, empty](images/gametest-fresh-village-locked.png) |
+
 #### The starter chest
 
 Split the same way, for the same reason: what goes in the chest is exact and needs no client, and
