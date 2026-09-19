@@ -10,6 +10,7 @@
 	"entrypoints": {
 		"fabric-gametest": [
 			"fi.vilpponen.mhr.gametest.TreeUnlockGameTest",
+			"fi.vilpponen.mhr.gametest.CraftEnchantGameTest",
 			"fi.vilpponen.mhr.gametest.server.AnimalSpawnGameTest",
 			"fi.vilpponen.mhr.gametest.server.OreFeatureTest",
 			"fi.vilpponen.mhr.gametest.server.StarterChestGameTest"
@@ -17,6 +18,7 @@
 		"fabric-client-gametest": [
 			"fi.vilpponen.mhr.gametest.client.EquipmentLockClientTest",
 			"fi.vilpponen.mhr.gametest.client.TreeWorldgenClientTest",
+			"fi.vilpponen.mhr.gametest.client.CraftEnchantClientTest",
 			"fi.vilpponen.mhr.gametest.client.AnimalWorldgenClientTest",
 			"fi.vilpponen.mhr.gametest.client.OreWorldgenClientTest",
 			"fi.vilpponen.mhr.gametest.client.StarterChestClientTest"

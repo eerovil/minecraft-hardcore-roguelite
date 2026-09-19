@@ -1,5 +1,6 @@
 package fi.vilpponen.mhr.gametest.client;
 
+import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.starter.RunStart;
 import fi.vilpponen.mhr.starter.StarterItems;
 import java.util.ArrayList;
@@ -41,6 +42,12 @@ import org.slf4j.LoggerFactory;
  * world before it starts a server, and the flag that says "this run has had its chest" lives in the
  * world's own save while the purchases live outside it. That is exactly the difference between
  * rejoining and starting over, and no shortcut can imitate it.
+ *
+ * <p>Which is also why the purchases are made once, before the first run, and never again. The
+ * second run buys nothing: it asserts the three are still owned and then expects its chest, so a
+ * change that reset the unlocks along with the world would fail here rather than quietly re-buying
+ * them. The third run is the only one that touches the catalogue again, to clear it for the
+ * nothing-bought control.
  *
  * <p>See {@code docs/dev-environment.md} for how to run this.
  */
@@ -86,9 +93,9 @@ public class StarterChestClientTest implements FabricClientGameTest {
 					() -> reconnectGivesNoSecondChest(context, server));
 		}
 
-		// Run two: same purchases, a world that has never been played.
+		// Run two: a world that has never been played, and deliberately nothing bought here. The
+		// purchases have to be the ones run one was given, or the scenario proves nothing.
 		try (TestDedicatedServerContext server = context.worldBuilder().createServer()) {
-			own(server, PURCHASES);
 			scenario(context, "a-genuinely-new-run-gets-its-starter-chest-again",
 					() -> aNewRunGrantsAgain(context, server));
 		}
@@ -208,11 +215,22 @@ public class StarterChestClientTest implements FabricClientGameTest {
 		}
 	}
 
-	/** A new world is a new run, and the purchases are permanent, so the chest comes back. */
+	/**
+	 * A new world is a new run, and the purchases are permanent, so the chest comes back.
+	 *
+	 * <p>Nothing is bought in this run on purpose. The purchases are the ones run one was given,
+	 * still owned across a world that was deleted and a server that was replaced, which is the
+	 * whole point of keeping unlocks out of the save — and re-buying them here would make the
+	 * scenario pass just as happily if they had been lost.
+	 */
 	private void aNewRunGrantsAgain(
 			ClientGameTestContext context, TestDedicatedServerContext server) {
 		check(!alreadyGranted(server),
 				"a world the harness has just made must not be carrying the last run's flag");
+		for (String id : PURCHASES) {
+			check(owns(server, id), "the purchases are permanent and must outlive the run that used"
+					+ " them, and " + id + " is not owned any more in the new run");
+		}
 
 		try (TestDedicatedServerConnection connection = server.connect()) {
 			connection.waitForChunksRender();
@@ -364,6 +382,11 @@ public class StarterChestClientTest implements FabricClientGameTest {
 	 * join, so a purchase made afterwards is too late — and what a player does, since between runs
 	 * is when the shop is open.
 	 */
+	/** Does the player still own this, as the server sees it right now? */
+	private static boolean owns(TestDedicatedServerContext server, String id) {
+		return server.computeOnServer(unused -> UnlockState.get().isOwned(id));
+	}
+
 	private static void own(TestDedicatedServerContext server, List<String> ids) {
 		for (String id : server.computeOnServer(unused -> StarterItems.ids())) {
 			server.runCommand("mhr lock " + id);

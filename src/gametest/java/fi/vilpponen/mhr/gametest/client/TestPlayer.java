@@ -3,14 +3,19 @@ package fi.vilpponen.mhr.gametest.client;
 import fi.vilpponen.mhr.gametest.mixin.ContainerScreenAccessor;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.fabric.api.client.gametest.v1.TestInput;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestServerConnection;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestServerContext;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.inventory.CraftingScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.input.MouseButtonInfo;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.NonNullList;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -19,6 +24,7 @@ import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.Blocks;
 
 /**
  * One connected test player, and the few things the equipment tests do to it.
@@ -30,6 +36,13 @@ import net.minecraft.world.item.ItemStack;
 final class TestPlayer {
 	/** The head armor square. InventoryMenu adds the four armor slots head-first. */
 	static final int HEAD_SLOT = InventoryMenu.ARMOR_SLOT_START;
+
+	// GLFW's own numbers for a mouse button going down and coming back up, and for the shift
+	// modifier it hands over with them. LWJGL is not on this source set's compile path, so they are
+	// spelled out rather than imported.
+	private static final int BUTTON_UP = 0;
+	private static final int BUTTON_DOWN = 1;
+	private static final int SHIFT_HELD = 0x0001;
 
 	private final ClientGameTestContext context;
 	private final TestServerContext server;
@@ -253,6 +266,27 @@ final class TestPlayer {
 		settle();
 	}
 
+	/**
+	 * Left-clicks a slot with shift held, which is the "send it straight across" move — out of the
+	 * crafting output and into the inventory without anything ever sitting on the cursor.
+	 */
+	void shiftClickSlot(int slotIndex) {
+		moveCursorToSlot(slotIndex);
+		// 26.3 reads shift off the mouse event itself rather than asking the keyboard, and the test
+		// harness's own pressMouse always sends a modifier-less event — holding the shift key and
+		// clicking would be an ordinary click. So the button goes in through MouseHandler.onButton,
+		// which is the same door the operating system's mouse callback comes through, carrying the
+		// modifier a real shift-click would have carried.
+		context.runOnClient(client -> client.mouseHandler.onButton(client.getWindow().handle(),
+				new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, SHIFT_HELD),
+				BUTTON_DOWN));
+		context.waitTick();
+		context.runOnClient(client -> client.mouseHandler.onButton(client.getWindow().handle(),
+				new MouseButtonInfo(InputConstants.MOUSE_BUTTON_LEFT, SHIFT_HELD),
+				BUTTON_UP));
+		settle();
+	}
+
 	/** Moves the mouse onto a slot and checks the screen agrees. */
 	void moveCursorToSlot(int slotIndex) {
 		double[] position = context.computeOnClient(client -> {
@@ -268,19 +302,119 @@ final class TestPlayer {
 		context.getInput().setCursorPos(position[0], position[1]);
 		context.waitTicks(2);
 
+		// Compared by position in the menu rather than by the slot's own container index, because
+		// those are not unique: a crafting menu's result slot and the first grid square are both
+		// index 0 of their own container, and confusing the two is exactly the mistake this check
+		// exists to catch.
 		int hovered = context.computeOnClient(client -> {
-			ContainerScreenAccessor accessor = (ContainerScreenAccessor) containerScreen(client.gui.screen());
-			Slot slot = accessor.mhr$hoveredSlot();
-			return slot == null ? -1 : slot.index;
+			AbstractContainerScreen<?> screen = containerScreen(client.gui.screen());
+			Slot slot = ((ContainerScreenAccessor) screen).mhr$hoveredSlot();
+			return slot == null ? -1 : screen.getMenu().slots.indexOf(slot);
 		});
-		int wanted = context.computeOnClient(client ->
-				containerScreen(client.gui.screen()).getMenu().getSlot(slotIndex).index);
-		if (hovered != wanted) {
+		if (hovered != slotIndex) {
 			throw new AssertionError("Wanted the cursor on menu slot " + slotIndex
-					+ " (container index " + wanted + ") at window position "
-					+ position[0] + "," + position[1] + ", but the screen says it is on "
-					+ (hovered == -1 ? "nothing" : "container index " + hovered));
+					+ " at window position " + position[0] + "," + position[1]
+					+ ", but the screen says it is on "
+					+ (hovered == -1 ? "nothing" : "menu slot " + hovered));
 		}
+	}
+
+	/**
+	 * Opens a real crafting table, the way a player does: stand on one and right-click it.
+	 *
+	 * <p>The table is put under the player's own feet and the player is turned to look straight
+	 * down at it. That is the one aim that cannot be blocked by scenery, so the right-click lands on
+	 * the table or the test fails waiting for the screen — it can never quietly hit something else.
+	 */
+	void openCraftingTable() {
+		BlockPos feet = server.computeOnServer(unused -> connection.getServerPlayer().blockPosition());
+		int x = feet.getX();
+		int y = feet.getY();
+		int z = feet.getZ();
+
+		boolean alreadyThere = server.computeOnServer(unused -> {
+			ServerPlayer player = connection.getServerPlayer();
+			return player.level().getBlockState(player.blockPosition().below()).is(Blocks.CRAFTING_TABLE);
+		});
+		if (!alreadyThere) {
+			server.runCommand("fill " + x + " " + y + " " + z + " " + x + " " + (y + 1) + " " + z
+					+ " minecraft:air");
+			server.runCommand("setblock " + x + " " + (y - 1) + " " + z + " minecraft:crafting_table");
+		}
+		// Yaw 0, pitch 90: straight down at the block being stood on.
+		server.runCommand("tp Player0 " + (x + 0.5) + " " + y + " " + (z + 0.5) + " 0 90");
+		settle();
+
+		// MOUSE_BUTTON_RIGHT is the use key while no screen is open. SDL numbers the buttons from
+		// one, the same reason the left button is 1 and not 0.
+		context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_RIGHT);
+		context.waitForScreen(CraftingScreen.class);
+		context.waitTicks(3);
+		settle();
+	}
+
+	/** Puts one item in a numbered inventory square, so a test can click a known square. */
+	void giveAt(int inventoryIndex, Item item) {
+		giveAt(inventoryIndex, item, 1);
+	}
+
+	/** The same, with a count — for the paths that take their ingredients out of a stack. */
+	void giveAt(int inventoryIndex, Item item, int count) {
+		server.runOnServer(unused -> {
+			ServerPlayer player = connection.getServerPlayer();
+			player.getInventory().setItem(inventoryIndex, new ItemStack(item, count));
+			player.containerMenu.broadcastChanges();
+		});
+		settle();
+	}
+
+	/** The first stack in the player's own inventory holding this item, as the server has it. */
+	ItemStack inventoryStack(Item item) {
+		return server.computeOnServer(unused -> {
+			for (ItemStack stack : connection.getServerPlayer().getInventory().getNonEquipmentItems()) {
+				if (stack.is(item)) {
+					return stack.copy();
+				}
+			}
+			return ItemStack.EMPTY;
+		});
+	}
+
+	/** Runs something on the server thread and waits for both sides to catch up. */
+	void onServer(Consumer<MinecraftServer> action) {
+		server.runOnServer(action::accept);
+		settle();
+	}
+
+	/** Where a numbered inventory square shows up in the menu that is open now. */
+	int menuSlotForInventory(int inventoryIndex) {
+		int found = context.computeOnClient(client -> {
+			AbstractContainerScreen<?> screen = containerScreen(client.gui.screen());
+			NonNullList<Slot> slots = screen.getMenu().slots;
+			for (int i = 0; i < slots.size(); i++) {
+				Slot slot = slots.get(i);
+				if (slot.container instanceof Inventory && slot.getContainerSlot() == inventoryIndex) {
+					return i;
+				}
+			}
+			return -1;
+		});
+		if (found < 0) {
+			throw new AssertionError("The open screen has no square for inventory slot " + inventoryIndex);
+		}
+		return found;
+	}
+
+	/** What the server has in a slot of the open menu. The authority on what a slot really holds. */
+	ItemStack menuItem(int slotIndex) {
+		return server.computeOnServer(unused ->
+				connection.getServerPlayer().containerMenu.getSlot(slotIndex).getItem().copy());
+	}
+
+	/** What this client has been told is in that slot — what the player can actually see. */
+	ItemStack clientMenuItem(int slotIndex) {
+		return context.computeOnClient(client ->
+				containerScreen(client.gui.screen()).getMenu().getSlot(slotIndex).getItem().copy());
 	}
 
 	/** The menu index of the first slot holding this item, or -1. */
