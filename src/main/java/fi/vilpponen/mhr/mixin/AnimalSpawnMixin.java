@@ -36,8 +36,23 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * already given to that same animal.
  * </ul>
  *
- * <p>So refusing the outcome and leaving the draw alone is the one option that keeps every other
- * mob at exactly its vanilla rate.
+ * <p>So refusing the outcome and leaving the draw alone is the best available option. Be precise
+ * about what that buys, though, because "locking one animal changes nothing for the others" is
+ * not quite true and cannot be made true:
+ *
+ * <ul>
+ * <li><b>What is preserved.</b> Every species keeps its vanilla weight in the draw, and every
+ * spawn attempt a species wins plays out under vanilla's own rules. Nothing another mob does is
+ * decided differently because a species is locked.
+ * <li><b>What is not.</b> The spawn cap is per {@link net.minecraft.world.entity.MobCategory},
+ * not per species. A world with no cows in it keeps {@code CREATURE} further below its cap, so
+ * the spawner keeps trying and the animals that are still unlocked can fill the room the cows
+ * are not using. That is second-hand — a consequence of the world holding fewer animals, not of
+ * anything done to those animals — and there is no honest way around it. Restoring the pressure
+ * would mean counting cows that do not exist, which can only be paid for by suppressing real
+ * animals to stand in for them. Vanilla behaves exactly this way in a biome whose list has no
+ * cows in it.
+ * </ul>
  */
 @Mixin(SpawnPlacements.class)
 public class AnimalSpawnMixin {

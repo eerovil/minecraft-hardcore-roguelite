@@ -6,6 +6,7 @@
 		"AnimalSpawnMixin",
 		"CraftingResultEnchantMixin",
 		"EquipmentSlotLockMixin",
+		"JockeyAnimalMixin",
 		"LockedArmorSlotVisibleMixin",
 		"LockedSlotPlacementMixin",
 		"OreGenerationMixin",

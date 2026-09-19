@@ -25,8 +25,15 @@ Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks im
 - **the ores** — coal, iron, copper, gold, redstone, lapis and diamond, each bought separately.
   A locked ore is missing from new terrain. Mining, recipes and loot are untouched.
 - **passive animals** — cow, pig, sheep, chicken, horse and wolf are sold one species at a
-  time. A locked species never spawns by itself, in new terrain or later. Everything else
+  time. A locked species never spawns by itself: not in new terrain, not on the spawn tick
+  later, and not as the chicken a baby zombie would otherwise arrive riding. Everything else
   about it is vanilla: spawn eggs, `/summon`, breeding, drops and recipes all still work.
+
+  Locking one species leaves the others' spawning rules and their share of the draw exactly as
+  vanilla has them. It does not leave the world identical, and it can't: the spawn cap is
+  counted per category rather than per species, so a world with no cows in it keeps that
+  category further below its cap and the animals you *have* unlocked can use the room. Vanilla
+  does the same in any biome that has no cows to begin with.
 - **the five equipment slots** — helmet, chestplate, leggings, boots and offhand, each bought
   separately. A locked slot shows a padlock in the inventory and refuses every item. You can still
   craft, pick up and store the gear; you just can't wear it.
