@@ -160,6 +160,7 @@ Join through the port-forward and check:
 The server tells the client which slots are open when you join and again whenever `mhr unlock` or
 `mhr lock` changes something, so the client's own config file is never consulted while connected.
 Enforcement never reads that copy — it is for drawing only.
+
 ## Testing the world border
 
 A run starts on the `tiny` tier, and the border is placed when the server starts, centered on the
@@ -173,6 +174,30 @@ scripts/dev.sh rcon "worldborder get"       # vanilla's own read-back, in blocks
 
 The tier is not stored anywhere yet, so a server restart goes back to `tiny`. Remembering it
 between runs belongs to the permanent unlock state, which does not exist yet.
+
+Each dimension gets its own center, so the server log is the quickest way to see what was applied:
+
+```
+World border tier tiny: 128 blocks across, overworld centered on 500, -700
+  minecraft:overworld: 128 wide, centered on 500, -699
+  minecraft:the_nether: 128 wide, centered on 62, -87
+  minecraft:the_end: 512 wide, centered on 0, 0
+```
+
+The nether center is the overworld spawn through the 1:8 portal mapping, so a portal built anywhere
+inside the overworld border comes out inside the nether one. To check that for real, move the spawn
+somewhere far from the origin, build a portal there and send a mob through:
+
+```sh
+scripts/dev.sh rcon "setworldspawn 500 70 -700"
+scripts/dev.sh rcon "mhr border tiny"
+scripts/dev.sh rcon "fill 500 69 -700 503 74 -700 minecraft:obsidian"
+scripts/dev.sh rcon "fill 501 70 -700 502 73 -700 minecraft:air"
+scripts/dev.sh rcon "setblock 501 70 -700 minecraft:nether_portal[axis=x]"   # and 502 70, 501 71, 502 71
+scripts/dev.sh rcon "summon minecraft:pig 501.5 70.0 -699.5"
+# a mob takes 300 ticks in the portal, then:
+scripts/dev.sh rcon "execute in minecraft:the_nether run data get entity @e[type=pig,limit=1] Pos"
+```
 
 ## Testing the ore unlocks
 

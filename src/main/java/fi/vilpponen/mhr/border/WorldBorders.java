@@ -5,6 +5,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.border.WorldBorder;
 
 /**
@@ -22,6 +23,14 @@ import net.minecraft.world.level.border.WorldBorder;
  * changing the tier never means changing worldgen code.
  */
 public final class WorldBorders {
+	/**
+	 * The smallest the end is ever allowed to be, whatever the tier says. Centered on the origin
+	 * it has to hold both the main island and the obsidian arrival platform 100 blocks east of it,
+	 * or arriving through an end portal would drop you outside the border. A balance value like the
+	 * tier diameters, so it is a constant here.
+	 */
+	private static final double END_MIN_DIAMETER = 512.0;
+
 	private static volatile BorderTier selectedTier = BorderTier.DEFAULT;
 	private static volatile MinecraftServer runningServer;
 
@@ -58,19 +67,47 @@ public final class WorldBorders {
 		BorderTier tier = selectedTier;
 		// The world's own spawn point, not MinecraftServer.getRespawnData(): that one is already
 		// clamped inside the current border, so centering on it would drag the border around.
-		BlockPos center = server.getWorldData().overworldData().getRespawnData().pos();
+		BlockPos spawn = server.getWorldData().overworldData().getRespawnData().pos();
 
 		for (ServerLevel level : server.getAllLevels()) {
-			// Every dimension gets the same numbers, which is how vanilla's border behaves: the
-			// nether border sits at the same coordinates as the overworld one rather than being
-			// converted through the 1:8 scale.
-			WorldBorder border = level.getWorldBorder();
-			border.setCenter(center.getX() + 0.5, center.getZ() + 0.5);
-			border.setSize(tier.diameter());
+			apply(level, tier, spawn);
 		}
 
 		String size = tier.isInfinite() ? "no practical limit" : (long) tier.diameter() + " blocks across";
-		HardcoreRoguelite.LOGGER.info("World border tier {}: {}, centered on {}, {}",
-				tier.id(), size, center.getX(), center.getZ());
+		HardcoreRoguelite.LOGGER.info("World border tier {}: {}, overworld centered on {}, {}",
+				tier.id(), size, spawn.getX(), spawn.getZ());
+	}
+
+	/**
+	 * Each dimension is centered on wherever the run's spawn comes out in that dimension, not on
+	 * the overworld's raw coordinates. Getting this wrong is what makes a portal a trap: build one
+	 * well away from 0,0 and you arrive somewhere the border has never covered.
+	 */
+	private static void apply(ServerLevel level, BorderTier tier, BlockPos overworldSpawn) {
+		WorldBorder border = level.getWorldBorder();
+
+		if (level.dimension().equals(Level.END)) {
+			// The end ignores where you came from: every arrival lands on the obsidian platform at
+			// ServerLevel.END_SPAWN_POINT, and the island and the return portal sit at the origin.
+			// So it centers on the origin, and never gets smaller than it takes to hold both.
+			border.setCenter(0.5, 0.5);
+			border.setSize(Math.max(tier.diameter(), END_MIN_DIAMETER));
+			logLevel(level, border);
+			return;
+		}
+
+		// A nether portal maps overworld coordinates through the dimension's own scale — 1:8 for
+		// the nether — so the center has to travel the same way. Reading it off the dimension type
+		// rather than hardcoding 8 means a custom scaled dimension lands in the right place too.
+		double scale = level.dimensionType().coordinateScale();
+		border.setCenter((overworldSpawn.getX() + 0.5) / scale, (overworldSpawn.getZ() + 0.5) / scale);
+		border.setSize(tier.diameter());
+		logLevel(level, border);
+	}
+
+	private static void logLevel(ServerLevel level, WorldBorder border) {
+		HardcoreRoguelite.LOGGER.info("  {}: {} wide, centered on {}, {}",
+				level.dimension().identifier(), (long) border.getSize(),
+				(long) border.getCenterX(), (long) border.getCenterZ());
 	}
 }
