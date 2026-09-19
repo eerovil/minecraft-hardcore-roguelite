@@ -5,6 +5,7 @@
 	"mixins": [
 		"EquipmentSlotLockMixin",
 		"LockedArmorSlotVisibleMixin",
+		"LockedOffhandSwapMixin",
 		"LockedSlotPlacementMixin",
 		"TreeGenerationMixin"
 	],

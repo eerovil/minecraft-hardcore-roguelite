@@ -118,6 +118,10 @@ have to come from a player. Join through the port-forward and check:
 - Try to click, shift-click or number-key an armor piece into a locked slot — nothing moves.
 - Right-click a helmet held in hand: it stays in your hand.
 - Nothing can be dropped into a locked offhand, so there is never an offhand item to use with.
+- Hold something in your main hand and press the swap-hands key (**F** by default): nothing moves.
+  Both hands must be exactly as they were — the point of the check is that it refuses the whole
+  swap rather than half of it, so watch that the main-hand item is still there. Then
+  `mhr unlock slot_offhand` and press F again: now it swaps normally.
 - `mhr unlock slot_helmet` while the inventory is open: the helmet padlock disappears at once, the
   other four stay. Equipping a helmet then works and nothing else changed.
 

@@ -18,8 +18,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * number-key swap and a drag all consult. Armor slots override {@code mayPlace} and are already
  * stopped by {@link EquipmentSlotLockMixin}; this is a second line for them rather than the first.
  *
- * <p>Because nothing can enter the offhand while it is locked, there is never an offhand item to
- * place or use with — which is the behaviour the design asks for.
+ * <p>This covers the inventory screen only. The swap-hands key bypasses it entirely and is handled
+ * by {@link LockedOffhandSwapMixin}. Between the two, nothing can enter a locked offhand, so there
+ * is never an offhand item to place or use with — which is the behaviour the design asks for.
  *
  * <p>Recognising the slot by its index in the player's own {@link Inventory} keeps this narrow: a
  * chest or a furnace is a different container and is never touched.
