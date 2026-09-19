@@ -467,29 +467,35 @@ Where each border ends up is arithmetic, so most of it is a **server GameTest**,
 tier the way a player does, with `mhr border <tier>`, and then reads the border vanilla itself is
 enforcing rather than asking the mod to repeat its own sums back. Each one also moves the run's
 spawn a long way from the origin first, because a border centered on 0, 0 passes whether the
-centering works or not:
+centering works or not.
 
-- **everyTierTakesItsSizeFromBalance** — tiny, medium and large are each exactly as wide as
+They are one test method, for the same reason the ore ones are: there is one border per dimension,
+one run spawn and one balance override file for the whole server, and GameTest runs the tests of a
+batch side by side in the same world — so as separate methods they would take each other's border
+away mid-assertion. Inside the one method they run in order, each setting up the spawn and tier it
+needs, and each is named in the log the way the client scenarios are:
+
+- **every-tier-takes-its-size-from-balance** — tiny, medium and large are each exactly as wide as
   `worldBorder.<tier>.size` says, in the overworld and in the nether. The expected number is read
   out of the balance in effect, so retuning a tier does not break its test.
-- **infiniteRemovesThePracticalLimit** — the unbounded tier is vanilla's own maximum, wider than
+- **infinite-removes-the-practical-limit** — the unbounded tier is vanilla's own maximum, wider than
   the largest finite tier, and covers a point two million blocks out.
-- **theBorderCentersOnTheRunSpawn** — the overworld border sits on the run's spawn, and a tiny
+- **the-border-centers-on-the-run-spawn** — the overworld border sits on the run's spawn, and a tiny
   border a thousand blocks out no longer covers the origin, which is what "it never moved" would
   look like.
-- **theNetherBorderFollowsTheCoordinateScale** — the nether center is the spawn through the
+- **the-nether-border-follows-the-coordinate-scale** — the nether center is the spawn through the
   dimension's own 1:8 mapping, and every corner of the overworld border maps inside the nether one.
   That last check is the real promise: a portal built *anywhere* in the allowed area is safe, not
   only one built on spawn.
-- **theEndSitsOnTheOriginAndHoldsTheArrivalPlatform** — on every tier the end is centered on the
+- **the-end-sits-on-the-origin-and-holds-the-arrival-platform** — on every tier the end sits on the
   origin whatever the run did, is the wider of that tier and `endBorder.minimumSize`, and covers
   both the island and the obsidian arrival platform. The width expected is the rule rather than
   today's number, because a retune that lifted a tier above the floor would otherwise turn a
   working feature red.
-- **theEndIsWidenedOnlyWhenTheTierIsNarrowerThanItsFloor** — the floor itself, on a fixture that
+- **the-end-is-widened-only-when-the-tier-is-narrower-than-its-floor** — the floor itself, on a fixture that
   cannot drift: one tier retuned to a quarter of the minimum and another to four times it. The
   narrow one is widened in the end and left alone in the overworld, the wide one keeps its size.
-- **aReloadedOverrideResizesTheTierOnItsNextApplication** — writing a `worldBorder.medium.size`
+- **a-reloaded-override-resizes-the-tier-on-its-next-application** — writing a `worldBorder.medium.size`
   into the config override and running `mhr reload` leaves the border the run is already inside
   exactly as it was, which is what the reload command promises: a world is never resized under the
   player. The *next* application of that tier — the next run, or a tier change — comes out at the
