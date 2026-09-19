@@ -94,6 +94,17 @@ It has a Gradle cache of its own (`/pvc/gradle-gametest`) and a source tree of i
 The container is root only so that apt-get works; Gradle itself is dropped back to uid 1000, so
 nothing root-owned lands on the volume.
 
+That source tree is shared between people, though, the same way the build pod's is. Two `gametest`
+runs at once overwrite each other's `src/` halfway through, which shows up as *somebody else's*
+tests failing in your output — a scenario name you have never heard of is the giveaway. Give
+yourself a tree of your own to stay out of the way:
+
+```sh
+MHR_GAMETEST_WORKSPACE=/pvc/gametest/workspace-mine scripts/dev.sh gametest
+```
+
+The Gradle cache stays shared either way, which is the part worth sharing.
+
 Two things had to be arranged for the client to start headless at all, both in `scripts/dev.sh`:
 
 - **`SDL_VIDEO_FORCE_EGL=1`.** 26.3 asks SDL for the OpenGL context, SDL prefers GLX, and llvmpipe
@@ -108,8 +119,10 @@ Two things had to be arranged for the client to start headless at all, both in `
 Nothing carries over between runs. Loom wipes `build/run/clientGameTest` before each one, and that
 directory is the client's *and* the dedicated server's game directory, so the world, the config
 directory, `hardcore-roguelite-unlocks.json` and the player's inventory all start empty. On top of
-that every scenario begins from a known state of its own — all five slots locked and the player
-emptied, or all six animal species locked — so one scenario cannot make the next one pass.
+that every scenario sets up the state it depends on rather than inheriting it — the equipment ones
+lock all five slots and empty the player, the tree ones set `world.trees` to what they need and
+clear their own patch of ground, the animal ones lock all six species — so one scenario cannot make
+the next one pass, and the order they run in does not matter.
 
 The *pod*, on the other hand, is shared, and two runs at once do collide in two ways: they overwrite
 each other's `src/` halfway through, and the second one's dedicated server cannot bind port 25565
@@ -187,6 +200,46 @@ inventory being closed and reopened.
 The clicks are real. The cursor is moved to the middle of the square and the click is only sent once
 the screen itself agrees that is the square under the pointer, so a layout change makes the test
 fail rather than silently click somewhere else.
+
+#### The trees unlock
+
+Trees need no client, so most of them are **server GameTests** — the fast step, seconds rather than
+minutes. They live in `src/gametest/java/fi/vilpponen/mhr/gametest/TreeUnlockGameTest.java` and each
+one lays its own patch of dirt and asks a vanilla feature to place itself on it, which is the same
+call worldgen, bonemeal and a sapling all come down to:
+
+- **locked-world-refuses-a-tree-feature** / **unlocked-world-places-a-tree-feature** — the
+  `place feature minecraft:oak` check the section below used to ask a human to type.
+- **locked-world-refuses-a-fallen-tree** / **unlocked-world-places-a-fallen-tree** — the same for
+  fallen trees, which are a free pile of logs and so have to go too.
+- **sapling-will-not-grow-while-locked** / **sapling-grows-once-unlocked** — a sapling pushed along
+  the way bonemeal pushes it. Locked, it is still standing afterwards and no logs exist; unlocked,
+  it is a tree.
+- **unrelated-vegetation-still-places-while-locked** — a flower patch still places while trees are
+  locked. This is the control: a mixin that quietly stopped *every* feature would pass all of the
+  above and be caught only here.
+
+The real worldgen path cannot be checked there, because Fabric's server GameTests run on a superflat
+world with no trees in it to suppress. So it gets a client GameTest of its own, in
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/TreeWorldgenClientTest.java`, which builds a
+dedicated server on an *ordinary* overworld instead of the harness's flat one:
+
+- **the-world-a-run-starts-in-has-no-trees** — the land the server made around spawn by itself, with
+  nothing force-loaded. No logs, and ground blocks in the thousands so that "no logs" means
+  something.
+- **fresh-land-has-no-trees-while-locked** — a plain `minecraft:forest` about six thousand blocks
+  out, force-loaded into existence on the spot. Still no logs.
+- **fresh-land-has-trees-once-unlocked** — `mhr unlock world.trees`, then a *different* forest six
+  thousand blocks the other way. Logs in the hundreds.
+
+Two different forests on purpose: worldgen only applies to chunks made after the change, so scanning
+the same patch twice would answer "no trees" both times and look exactly like the feature working.
+Plain `minecraft:forest` on purpose too — a biome *tag* also matches places like a mushroom island,
+which has no trees in vanilla either, and "no logs where there never were any" proves nothing.
+
+| Fresh forest, trees locked | ...and a fresh forest after `mhr unlock world.trees` |
+| -------------------------- | ---------------------------------------------------- |
+| ![grass and flowers, no trees](images/gametest-fresh-forest-trees-locked.png) | ![the same kind of land, full of oaks](images/gametest-fresh-forest-trees-unlocked.png) |
 
 #### The animal unlocks
 
@@ -271,6 +324,7 @@ nothing else, so the field has cows in it and nothing else the shop sells:
 - **Dispenser-fired armor** and **right-click-to-equip**, which need a block and an aimed
   interaction rather than an inventory screen.
 - The **full-inventory fallback**, where a refused item falls at the player's feet.
+- Nothing about trees or animals, beyond looking at a world by eye if you want to.
 
 ## Joining the server
 
@@ -293,6 +347,17 @@ scripts/dev.sh rcon "op <your-username>"
 ```
 
 ## Testing the trees unlock
+
+Nothing here needs doing by hand any more:
+
+```sh
+scripts/dev.sh gametest
+```
+
+covers the whole unlock — direct feature placement both ways, fallen trees, saplings, and real
+terrain generated from scratch with and without the unlock. See
+[Automated gameplay tests](#automated-gameplay-tests). What follows is how to poke at it on the dev
+server when you want to *see* it rather than prove it.
 
 Trees are off until the unlock is bought. There is no shop yet, so use the dev command:
 
