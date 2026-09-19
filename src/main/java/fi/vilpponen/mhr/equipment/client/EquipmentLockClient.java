@@ -1,7 +1,7 @@
 package fi.vilpponen.mhr.equipment.client;
 
-import fi.vilpponen.mhr.equipment.EquipmentLocks;
 import fi.vilpponen.mhr.equipment.EquipmentUnlockPayload;
+import fi.vilpponen.mhr.equipment.SyncedSlotUnlocks;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -14,9 +14,9 @@ public final class EquipmentLockClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		ClientPlayNetworking.registerGlobalReceiver(EquipmentUnlockPayload.TYPE,
-				(payload, context) -> EquipmentLocks.acceptFromServer(payload.unlockedBits()));
+				(payload, context) -> SyncedSlotUnlocks.accept(payload.unlockedBits()));
 
 		ClientPlayConnectionEvents.DISCONNECT.register(
-				(handler, client) -> EquipmentLocks.forgetServerAnswer());
+				(handler, client) -> SyncedSlotUnlocks.forget());
 	}
 }

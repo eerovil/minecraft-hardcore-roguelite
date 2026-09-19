@@ -112,25 +112,36 @@ scripts/dev.sh rcon "mhr unlock slot_offhand"
 ```
 
 The rest needs a real client, because the lock marker is drawn client-side and the equip attempts
-have to come from a player. Join through the port-forward and check:
+have to come from a player.
+
+There is one rule behind all of it: **nothing stays in a locked slot**. It is enforced in a single
+place, the write barrier on `PlayerEquipment.set`, so the cases below are not five separate
+features — they are five ways of asking the same question. What you are really checking each time
+is that the item is refused *and* that it is still somewhere you can reach.
+
+Join through the port-forward and check:
 
 - Open the inventory: the four armor squares and the offhand square carry a padlock.
-- Try to click, shift-click or number-key an armor piece into a locked slot — nothing moves.
+- Click, shift-click or number-key an armor piece into a locked slot — nothing moves.
 - Right-click a helmet held in hand: it stays in your hand.
-- Nothing can be dropped into a locked offhand, so there is never an offhand item to use with.
-- Hold something in your main hand and press the swap-hands key (**F** by default): nothing moves.
-  Both hands must be exactly as they were — the point of the check is that it refuses the whole
-  swap rather than half of it, so watch that the main-hand item is still there. Then
-  `mhr unlock slot_offhand` and press F again: now it swaps normally.
+- Hold something in your main hand and press the swap-hands key (**F** by default). The offhand
+  stays empty and the item ends up back in your inventory — check it is *there*, in a free slot,
+  not destroyed and not duplicated. Then `mhr unlock slot_offhand` and press F again: now it swaps
+  normally.
+- Put an item in a dispenser aimed at you and fire it — armor must not go on.
 - `mhr unlock slot_helmet` while the inventory is open: the helmet padlock disappears at once, the
   other four stay. Equipping a helmet then works and nothing else changed.
-- Locking a slot that is in use: `mhr unlock slot_offhand`, put a shield in the offhand, then
-  `mhr lock slot_offhand`. The shield should hop back into your inventory within a tick — or fall
-  at your feet if the inventory is full — and right-clicking must not raise it. The same goes for
-  a worn helmet and `mhr lock slot_helmet`. Nothing may be destroyed in either case.
+- Locking a slot that is in use: `mhr unlock slot_offhand`, raise a shield, then
+  `mhr lock slot_offhand`. The shield goes back to your inventory immediately and right-clicking
+  must not raise it. Same for a worn helmet and `mhr lock slot_helmet`.
+- The same with a full inventory: the item falls at your feet rather than vanishing.
+- Log out with a locked slot occupied — set it up with `/item replace entity <you> weapon.offhand
+  with minecraft:shield` — then log back in. The slot must be empty and the shield in your
+  inventory.
 
 The server tells the client which slots are open when you join and again whenever `mhr unlock` or
 `mhr lock` changes something, so the client's own config file is never consulted while connected.
+Enforcement never reads that copy — it is for drawing only.
 
 ## Resource use
 

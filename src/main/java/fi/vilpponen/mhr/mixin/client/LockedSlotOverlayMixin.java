@@ -30,11 +30,12 @@ public class LockedSlotOverlayMixin {
 	@Inject(method = "extractSlot", at = @At("RETURN"))
 	private void hardcoreRoguelite$markLocked(GuiGraphicsExtractor extractor, Slot slot,
 			int mouseX, int mouseY, CallbackInfo ci) {
-		if (!(slot.container instanceof Inventory)) {
+		if (!(slot.container instanceof Inventory inventory)) {
 			return;
 		}
 		EquipmentSlot equipmentSlot = Inventory.EQUIPMENT_SLOT_MAPPING.get(slot.getContainerSlot());
-		if (equipmentSlot == null || EquipmentLocks.isUnlocked(equipmentSlot)) {
+		if (equipmentSlot == null
+				|| EquipmentLocks.isUnlockedForDisplay(inventory.player, equipmentSlot)) {
 			return;
 		}
 

@@ -5,8 +5,8 @@
 	"mixins": [
 		"EquipmentSlotLockMixin",
 		"LockedArmorSlotVisibleMixin",
-		"LockedOffhandSwapMixin",
 		"LockedSlotPlacementMixin",
+		"PlayerEquipmentMixin",
 		"TreeGenerationMixin"
 	],
 	"client": [

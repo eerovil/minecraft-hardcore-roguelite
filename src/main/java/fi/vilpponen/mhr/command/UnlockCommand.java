@@ -7,7 +7,7 @@ import com.mojang.brigadier.context.CommandContext;
 import fi.vilpponen.mhr.Unlock;
 import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.equipment.EquipmentLocks;
-import fi.vilpponen.mhr.equipment.EquipmentUnlockSync;
+import fi.vilpponen.mhr.equipment.EquipmentSlots;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -65,8 +65,8 @@ public final class UnlockCommand {
 
 		boolean changed = UnlockState.get().set(unlock, owned);
 		if (changed) {
-			// Equipment slots show up in the inventory screen, so clients need to be told.
-			EquipmentUnlockSync.sendToAll(context.getSource().getServer());
+			// Tell the clients, and re-apply the slot rule to anyone already wearing something.
+			EquipmentSlots.onUnlocksChanged(context.getSource().getServer());
 		}
 		String verb = owned ? "Unlocked " : "Locked ";
 		String note = changed ? "" : " (no change)";

@@ -5,6 +5,7 @@ import fi.vilpponen.mhr.UnlockState;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 
 /**
@@ -19,10 +20,12 @@ import net.minecraft.world.entity.EquipmentSlot;
  * about the others. Slots that are not lockable — the main hand, a horse's saddle, a mob's body
  * armor — are always unlocked and never touched.
  *
- * <p><b>Sides.</b> The truth lives on the server in {@link UnlockState}. A connected client has no
- * access to that file, so the server sends it the set of unlocked slots (see
- * {@link EquipmentUnlockPayload}) and the client answers from that copy instead. In single player
- * the two are the same process and agree by construction.
+ * <p><b>Sides.</b> {@link #isUnlocked} is the server's answer and only ever reads
+ * {@link UnlockState}; it is what {@link EquipmentSlotRule} enforces. A connected client cannot
+ * read that file, so the server sends it the unlocked set (see {@link EquipmentUnlockPayload}) and
+ * the padlocks are drawn from {@link #isUnlockedForDisplay}, which consults that copy only for an
+ * entity on the logical client. Keeping the two apart matters in single player, where the client
+ * and the integrated server are one process.
  */
 public final class EquipmentLocks {
 	/**
@@ -49,13 +52,6 @@ public final class EquipmentLocks {
 		UNLOCKS.put(EquipmentSlot.OFFHAND, Unlock.SLOT_OFFHAND);
 	}
 
-	/**
-	 * What the server last told this client, one bit per entry of {@link #LOCKABLE}, or
-	 * {@code null} while this process has not been told anything — which is the normal state on a
-	 * dedicated server, where {@link UnlockState} is the answer.
-	 */
-	private static volatile Integer clientUnlockedBits;
-
 	private EquipmentLocks() {
 	}
 
@@ -79,21 +75,33 @@ public final class EquipmentLocks {
 		return UNLOCKS.containsKey(slot);
 	}
 
-	/** @return true if the player may use this slot. Always true for a slot that is not lockable. */
+	/**
+	 * The server's answer, and the only one enforcement ever asks for.
+	 *
+	 * @return true if the player may use this slot. Always true for a slot that is not lockable.
+	 */
 	public static boolean isUnlocked(EquipmentSlot slot) {
+		Unlock unlock = UNLOCKS.get(slot);
+		return unlock == null || UnlockState.get().isOwned(unlock);
+	}
+
+	/**
+	 * The same question asked for drawing and for letting vanilla decline politely, which has to
+	 * work on a client that has no unlock file. For anything on the logical client that is the set
+	 * the server last sent; everywhere else it is {@link #isUnlocked}.
+	 */
+	public static boolean isUnlockedForDisplay(Entity viewer, EquipmentSlot slot) {
 		Unlock unlock = UNLOCKS.get(slot);
 		if (unlock == null) {
 			return true;
 		}
-		Integer bits = clientUnlockedBits;
-		if (bits != null) {
-			return (bits & (1 << bitIndex(slot))) != 0;
+		if (viewer != null && viewer.level().isClientSide()) {
+			Integer bits = SyncedSlotUnlocks.bits();
+			if (bits != null) {
+				return (bits & (1 << bitIndex(slot))) != 0;
+			}
 		}
 		return UnlockState.get().isOwned(unlock);
-	}
-
-	public static boolean isLocked(EquipmentSlot slot) {
-		return !isUnlocked(slot);
 	}
 
 	/** The five unlocked slots as a bit set, for sending to a client. */
@@ -105,16 +113,6 @@ public final class EquipmentLocks {
 			}
 		}
 		return bits;
-	}
-
-	/** Called on the client when the server tells it which slots are open. */
-	public static void acceptFromServer(int bits) {
-		clientUnlockedBits = bits;
-	}
-
-	/** Called on the client when it leaves a server, so the next one starts from its own answer. */
-	public static void forgetServerAnswer() {
-		clientUnlockedBits = null;
 	}
 
 	private static int bitIndex(EquipmentSlot slot) {
