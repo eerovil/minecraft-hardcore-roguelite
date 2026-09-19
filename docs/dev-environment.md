@@ -316,6 +316,55 @@ Join through the port-forward and check:
 - Craft something that is not a tool — planks, a chest, a bow — and it stays plain.
 - Nothing impossible ever lands: no Sharpness on a pickaxe, no Mending, no curses.
 
+## Testing the starter chest
+
+Starter items are ordinary unlocks: they sit in `default-balance.json` under `unlocks` with every
+other price, and carry the stack they hand over. See [`balance.md`](balance.md#starter-items).
+
+```json
+"starter.bread": { "price": 3, "item": { "id": "minecraft:bread", "count": 16 } }
+```
+
+Because it is balance data, the local override on the volume —
+`/server/config/hardcore-roguelite-balance.json` — can retune the contents as well as the price,
+and `mhr reload` picks the edit up without a restart:
+
+```sh
+scripts/dev.sh rcon "mhr reload"
+```
+
+What the player *owns* is separate and lives with the other unlocks, outside the world, so it
+survives `newworld`.
+
+The chest normally appears when a player first joins a fresh world. That needs a real client, so
+for a quick check from the console place it by hand instead:
+
+```sh
+scripts/dev.sh rcon "mhr list"                      # unlocks, then the starter items
+scripts/dev.sh rcon "mhr unlock starter.bread"
+scripts/dev.sh rcon "mhr starterchest 0 64 0"       # position needed from the console
+scripts/dev.sh rcon "data get block -1 63 -1"       # it lands next to the spot you named
+```
+
+`mhr starterchest` with no position puts it next to you, and only works in game.
+
+Things worth checking:
+
+- Nothing owned: the command refuses and no block is placed.
+- Up to 27 filled slots is one chest; past that it is a double chest, and `data get block` on each
+  half shows the load split 27 and the rest.
+- Items stack the way the game would: two catalogue entries of the same thing become one stack, and
+  a count over a stack splits across slots.
+- Over 54 slots is a broken catalogue. The chest is still placed and still full, and everything left
+  out is named both in chat and in the server log, as one tally per item rather than one line per
+  slot — a `count` in the millions is legal balance data, and has to report rather than hang.
+- The chest lands next to you, at your level — not on the surface above you. Worth checking from
+  underground, since that is where the two used to differ: `mhr starterchest 0 20 0` inside solid
+  stone should refuse to find a clear spot and say so, while a spot in a cave at y 20 should get a
+  chest at y 20 rather than one on the hillside overhead.
+- `mhr list` ends with whether this run has had its chest yet. It is a flag in the world's own save,
+  so `newworld` clears it and logging out and back in does not give a second chest.
+
 ## Resource use
 
 The Mac node has 8 CPUs and 24 GB. The build pod is capped at 6 CPU / 8 GB and the server at

@@ -46,8 +46,26 @@ public final class Balance {
 		this.source = source;
 	}
 
-	/** What one unlock costs, and anything else the shop needs to know about it. */
-	public record UnlockBalance(String id, int price) {
+	/**
+	 * What one unlock costs, and anything else the shop needs to know about it.
+	 *
+	 * @param item for a starter item, the stack it puts in the run-start chest, written in the same
+	 *     shape {@code /give} and loot tables use. Empty for every other unlock — an unlock whose
+	 *     effect is code rather than an item. This is what keeps starter items in the one catalogue
+	 *     instead of a second one: the id, the price and the contents sit together, and the override
+	 *     file can retune any of the three.
+	 */
+	public record UnlockBalance(String id, int price, Optional<JsonObject> item) {
+		public UnlockBalance {
+			// Defensive copy in both directions: Balance is an immutable snapshot shared across
+			// threads, and JsonObject is not immutable.
+			item = item.map(JsonObject::deepCopy);
+		}
+
+		@Override
+		public Optional<JsonObject> item() {
+			return item.map(JsonObject::deepCopy);
+		}
 	}
 
 	/**

@@ -50,6 +50,22 @@
 		"player.slot.chestplate": { "price": 10 },
 		"player.slot.offhand": { "price": 30 },
 
+		"starter.bread": { "price": 3, "item": { "id": "minecraft:bread", "count": 16 } },
+		"starter.logs": { "price": 3, "item": { "id": "minecraft:oak_log", "count": 32 } },
+		"starter.torches": { "price": 3, "item": { "id": "minecraft:torch", "count": 32 } },
+		"starter.stone_pickaxe": { "price": 3, "item": { "id": "minecraft:stone_pickaxe", "count": 1 } },
+		"starter.iron_sword": { "price": 30, "item": { "id": "minecraft:iron_sword", "count": 1 } },
+		"starter.efficient_pickaxe": {
+			"price": 100,
+			"item": {
+				"id": "minecraft:diamond_pickaxe",
+				"count": 1,
+				"components": {
+					"minecraft:enchantments": { "minecraft:efficiency": 3 }
+				}
+			}
+		},
+
 		"player.craft.enchant": { "price": 100 }
 	},
 

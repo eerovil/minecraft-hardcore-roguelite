@@ -23,6 +23,8 @@ The override is deep-merged over the defaults, so it only names what it changes:
 
 That file is complete. Every other price, every reward, every border tier keeps its bundled value.
 Objects merge key by key; anything else — a number, a string, an array — replaces what was there.
+There is one exception, a starter item's `item`: that is one value, not a little tree of them, and
+an override naming it replaces the whole stack. See [Starter items](#starter-items).
 
 The override changes things that exist; it does not add them. The bundled file is the catalogue, so
 it is also the schema: every key the override names, at every depth, has to be in the bundled file
@@ -88,7 +90,8 @@ on purpose: a generated copy of the whole catalogue would go stale the moment a 
 - **`currency.advancements`** — currency for completing a vanilla advancement, by its full id. An
   advancement that is not listed pays nothing.
 - **`unlocks`** — what the shop sells, keyed by stable unlock id. `price` is in currency. A
-  repeatable unlock is priced once and costs that much each time it is bought.
+  repeatable unlock is priced once and costs that much each time it is bought. `item` is only for
+  starter items — see [Starter items](#starter-items).
 - **`worldBorder`** — one entry per tier. `size` is the edge-to-edge width in blocks; leaving it out
   means the border is never in the way. A tier's unlock id is `world.border.` plus its key, but its
   price sits here so the size and the price stay next to each other.
@@ -107,6 +110,88 @@ on purpose: a generated copy of the whole catalogue would go stale the moment a 
 balanced from data before it has a typed accessor — see [Adding values](#adding-values). Inside the
 four sections above, an unknown key is an error either way, so `mobDamageMultipler` is caught rather
 than silently ignored.
+
+## Starter items
+
+A starter item is an ordinary unlock that happens to hand over an item stack rather than switch on
+a piece of code, so it lives in the same catalogue under the same kind of id:
+
+```json
+"unlocks": {
+	"starter.bread": { "price": 3, "item": { "id": "minecraft:bread", "count": 16 } },
+
+	"starter.efficient_pickaxe": {
+		"price": 100,
+		"item": {
+			"id": "minecraft:diamond_pickaxe",
+			"count": 1,
+			"components": { "minecraft:enchantments": { "minecraft:efficiency": 3 } }
+		}
+	}
+}
+```
+
+`item` is a vanilla item stack, written the way `/give` and loot tables write one, and read by the
+game's own item codec. That is the whole reason there is no code per item: enchantments, custom
+names, dyed armor and anything Mojang adds to the component system work the day they are added.
+Adding a starter item is adding a key here.
+
+Two things are not quite vanilla's format. `count` may be more than one stack — 128 bread means two
+slots of bread, which the chest splits — where vanilla caps it at 99. And an unlock without `item`
+is not a starter item at all; nothing goes in the chest for it.
+
+`count` is a balance number like any other, so it is checked with the rest of them: a whole number
+of at least 1, with no upper bound. `0`, `-4` and `16.5` stop the file loading rather than being
+rounded into some other amount, for the same reason a misspelt key does — an edit that grants
+something different from what it says is exactly as invisible as one that grants nothing.
+
+A starter item is bought once, not levelled: there is no constant behind it, so nothing knows what
+a second level of it would mean. Its level in the save file is always 1.
+
+### The stack is one value
+
+`item` is the only thing in the balance file that is not walked into. An override naming it says
+what that item now **is**, whole:
+
+```json
+{
+	"unlocks": {
+		"starter.bread": {
+			"item": {
+				"id": "minecraft:bread",
+				"count": 16,
+				"components": { "minecraft:custom_name": "Packed Lunch" }
+			}
+		}
+	}
+}
+```
+
+That is what makes the stack retunable in both directions. Merging key by key would have let you
+add a component and change one but never remove one, since the old components object stayed
+underneath; and the key check, applied inside the stack, would have refused the example above
+outright — the bundled bread has no `components` key for it to match, so it reads a perfectly good
+edit as a typo. Neither is this layer's business: what may go inside an item stack is the game's.
+
+The price of that is no typo hint inside the stack. Instead the whole stack is put through the
+game's own item codec against the server's registries, and a candidate that fails never becomes the
+balance in effect:
+
+```
+Balance value 'unlocks.starter.bread.item' is not an item the game has: Unknown registry key ...
+```
+
+At startup that stops the game, and on reload the running game keeps the balance it already had —
+the same treatment a misspelt price gets. It happens as soon as the server is up, which is the
+earliest anything can tell `minecraft:bread` from `minecraft:braed`; the balance file itself is
+loaded before that, so the check is registered and run then rather than during mod init. Features
+with a value only they can validate can do the same through `BalanceManager.addCheck`.
+
+Everything the player owns goes in one chest at the start of a run, or a double chest if 27 slots
+is not enough. 54 filled slots is the ceiling: past that the chest is still placed full and the
+leftovers are named in chat and in the log, because a purchase that vanished without a word is
+exactly the kind of silent failure this layer exists to prevent. Trimming the catalogue brings them
+back — the purchases behind them are permanent.
 
 ## Unlock ids
 

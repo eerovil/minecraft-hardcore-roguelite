@@ -13,9 +13,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 import net.fabricmc.loader.api.FabricLoader;
 
 /**
@@ -43,7 +46,7 @@ public final class BalanceManager {
 	/** The optional override, in the Fabric config directory. */
 	public static final String OVERRIDE_FILE_NAME = "hardcore-roguelite-balance.json";
 
-	private static final Set<String> UNLOCK_KEYS = Set.of("price");
+	private static final Set<String> UNLOCK_KEYS = Set.of("price", "item");
 	private static final Set<String> BORDER_KEYS = Set.of("size", "price");
 	private static final Set<String> CURRENCY_KEYS = Set.of("advancements");
 	private static final Set<String> DIFFICULTY_KEYS = Set.of("mobDamageMultiplier");
@@ -51,8 +54,53 @@ public final class BalanceManager {
 	private static final Set<String> CRAFT_ENCHANT_KEYS = Set.of("maxUnlockLevel", "strengthPerLevel");
 
 	private static volatile Balance current;
+	private static final List<Check> CHECKS = new CopyOnWriteArrayList<>();
 
 	private BalanceManager() {
+	}
+
+	/**
+	 * A check on a candidate balance that this layer cannot make on its own.
+	 *
+	 * <p>Everything in a balance file is a number or a name to {@code core}, which is what keeps it
+	 * free of the game. Some values mean more than that somewhere else — a starter item's stack has
+	 * to name an item the registries actually have — and finding that out a run later, with the bad
+	 * balance already in effect, is exactly the silent failure this layer exists to prevent.
+	 *
+	 * <p>So a feature registers what it knows how to check, and it runs on the candidate before the
+	 * snapshot is swapped in: at startup a failure stops the game, on reload it leaves the running
+	 * game on the balance it already had.
+	 */
+	@FunctionalInterface
+	public interface Check {
+		/** @throws BalanceException if this candidate must not become the balance in effect. */
+		void check(Balance candidate);
+	}
+
+	/** Register a check. It applies from the next load or reload; see also {@link #recheck}. */
+	public static void addCheck(Check check) {
+		CHECKS.add(check);
+	}
+
+	/** Undo {@link #addCheck}, so a test's check does not outlive it. */
+	static void removeCheck(Check check) {
+		CHECKS.remove(check);
+	}
+
+	/**
+	 * Run every check against the balance already in effect.
+	 *
+	 * <p>Worth doing right after registering one: a check that needs the server's registries
+	 * cannot exist until the server is up, by which time a balance has been loaded and nothing
+	 * would look at it again until the next reload.
+	 *
+	 * @throws BalanceException if the balance in effect does not pass
+	 */
+	public static void recheck() {
+		Balance inEffect = get();
+		for (Check check : CHECKS) {
+			check.check(inEffect);
+		}
 	}
 
 	/** Where a local override would live, whether or not it exists. */
@@ -107,11 +155,30 @@ public final class BalanceManager {
 		JsonObject merged = readBundledDefaults();
 		Path override = overrideFile();
 		if (Files.isRegularFile(override)) {
-			JsonObject over = readOverride(override);
-			checkOverrideKeys(merged, over, override.toString());
-			merge(merged, over);
+			merged = applyOverride(merged, readOverride(override), override.toString());
 		}
-		return bind(merged);
+		return bindAndCheck(merged);
+	}
+
+	/** Check an override against the bundled catalogue and fold it in. Returns {@code defaults}. */
+	static JsonObject applyOverride(JsonObject defaults, JsonObject over, String where) {
+		checkOverrideKeys(defaults, over, where);
+		merge(defaults, over);
+		return defaults;
+	}
+
+	/**
+	 * Bind a candidate and put it through every registered {@link Check}.
+	 *
+	 * <p>Both happen before the caller can swap it in, which is the whole point: a throw here
+	 * leaves {@link #current} alone, so a bad reload costs the running game nothing.
+	 */
+	static Balance bindAndCheck(JsonObject merged) {
+		Balance candidate = bind(merged);
+		for (Check check : CHECKS) {
+			check.check(candidate);
+		}
+		return candidate;
 	}
 
 	private static JsonObject readBundledDefaults() {
@@ -164,12 +231,51 @@ public final class BalanceManager {
 	 * <p>So there is no extension point here, which is the point: a new tuning value goes in
 	 * {@code default-balance.json} first, where the rest of the catalogue already lives, and the
 	 * override tunes it afterwards. A config file cannot invent one.
+	 *
+	 * <p>One value is not walked into: a starter item's {@code item}. See {@link Where#isOpaque}.
 	 */
 	static void checkOverrideKeys(JsonObject defaults, JsonObject over, String where) {
-		checkKeys(defaults, over, "", where);
+		checkKeys(defaults, over, "", where, Where.ROOT);
 	}
 
-	private static void checkKeys(JsonObject known, JsonObject over, String prefix, String where) {
+	/**
+	 * Whereabouts in the file a walk has got to.
+	 *
+	 * <p>Only one question is asked of it, but it has to be asked structurally rather than by the
+	 * look of the path: unlock ids contain dots themselves, so {@code unlocks.starter.bread.item}
+	 * read as text could be an unlock called {@code starter.bread} with an item, or one called
+	 * {@code starter.bread.item}. Counting the levels down from the root cannot be fooled either
+	 * way.
+	 */
+	private enum Where {
+		ROOT, UNLOCKS, UNLOCK, ANYWHERE;
+
+		Where child(String key) {
+			return switch (this) {
+				case ROOT -> "unlocks".equals(key) ? UNLOCKS : ANYWHERE;
+				case UNLOCKS -> UNLOCK;
+				default -> ANYWHERE;
+			};
+		}
+
+		/**
+		 * Is this child one value rather than a little tree of them?
+		 *
+		 * <p>A starter item's {@code item} is a vanilla item stack, and this layer has no business
+		 * knowing what is allowed inside one. Walking into it did real damage in both directions:
+		 * the key check refused an override adding {@code components} to an item that had none,
+		 * because the bundled file had no such key to match, and the merge folded a new components
+		 * object into the old one, so a component could be changed but never removed. Treating the
+		 * stack as a single value makes an override say what the item now is, whole. What is
+		 * allowed inside it is the game's own codec's business, and is checked against the
+		 * registries by {@link #addCheck} before any of this takes effect.
+		 */
+		boolean isOpaque(String key) {
+			return this == UNLOCK && "item".equals(key);
+		}
+	}
+
+	private static void checkKeys(JsonObject known, JsonObject over, String prefix, String where, Where at) {
 		for (Map.Entry<String, JsonElement> entry : over.entrySet()) {
 			String path = prefix.isEmpty() ? entry.getKey() : prefix + "." + entry.getKey();
 			JsonElement expected = known.get(entry.getKey());
@@ -190,8 +296,8 @@ public final class BalanceManager {
 				throw new BalanceException("The balance override " + where + " sets '" + path + "' to "
 						+ actual + ", but the bundled balance has " + kindOf(expected) + " there.");
 			}
-			if (expected.isJsonObject()) {
-				checkKeys(expected.getAsJsonObject(), actual.getAsJsonObject(), path, where);
+			if (expected.isJsonObject() && !at.isOpaque(entry.getKey())) {
+				checkKeys(expected.getAsJsonObject(), actual.getAsJsonObject(), path, where, at.child(entry.getKey()));
 			}
 		}
 	}
@@ -260,12 +366,22 @@ public final class BalanceManager {
 	 *
 	 * <p>Shape-blind on purpose: what each section is meant to look like is {@link #bind}'s to know,
 	 * and {@link #checkOverrideKeys} has already rejected keys that do not exist.
+	 *
+	 * <p>The one exception is the value {@link Where#isOpaque} names, which is replaced whole like
+	 * a number is. An override that gives a starter item an {@code item} is saying what that item
+	 * now is, not adding to what it was.
 	 */
 	private static void merge(JsonObject base, JsonObject over) {
+		merge(base, over, Where.ROOT);
+	}
+
+	private static void merge(JsonObject base, JsonObject over, Where at) {
 		for (Map.Entry<String, JsonElement> entry : over.entrySet()) {
 			JsonElement existing = base.get(entry.getKey());
-			if (existing != null && existing.isJsonObject() && entry.getValue().isJsonObject()) {
-				merge(existing.getAsJsonObject(), entry.getValue().getAsJsonObject());
+			boolean mergeable = existing != null && existing.isJsonObject() && entry.getValue().isJsonObject()
+					&& !at.isOpaque(entry.getKey());
+			if (mergeable) {
+				merge(existing.getAsJsonObject(), entry.getValue().getAsJsonObject(), at.child(entry.getKey()));
 			} else {
 				base.add(entry.getKey(), entry.getValue());
 			}
@@ -290,7 +406,23 @@ public final class BalanceManager {
 		for (String id : unlockSection.keySet()) {
 			String path = "unlocks." + id;
 			JsonObject entry = object(unlockSection, id, path, UNLOCK_KEYS);
-			unlocks.put(id, new Balance.UnlockBalance(id, wholeNumber(entry, "price", path + ".price", 0)));
+			// The item stack itself is not balance's to understand — it is handed on to the game's
+			// own item codec, which is what makes an enchanted pickaxe no harder to sell than bread.
+			// The count is the exception, because it is the one part of a stack that is a balance
+			// number: it is checked here, with every other number in the file, so 0 or 16.5 is
+			// refused rather than quietly rounded into a different amount later. There is no upper
+			// bound — "128 bread" means two slots of bread, which is the chest's business, not a
+			// stack-size error.
+			Optional<JsonObject> item = Optional.empty();
+			if (entry.has("item")) {
+				JsonObject stack = object(entry, "item", path + ".item", null);
+				if (stack.has("count")) {
+					wholeNumber(stack, "count", path + ".item.count", 1);
+				}
+				item = Optional.of(stack);
+			}
+			unlocks.put(id,
+					new Balance.UnlockBalance(id, wholeNumber(entry, "price", path + ".price", 0), item));
 		}
 
 		JsonObject borderSection = object(merged, "worldBorder", "worldBorder", null);

@@ -7,6 +7,7 @@ import fi.vilpponen.mhr.command.UnlockCommand;
 import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
+import fi.vilpponen.mhr.starter.RunStart;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import org.slf4j.Logger;
@@ -29,6 +30,7 @@ public class HardcoreRoguelite implements ModInitializer {
 
 		EquipmentSlots.register();
 		WorldBorders.init();
+		RunStart.register();
 
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			UnlockCommand.register(dispatcher);
