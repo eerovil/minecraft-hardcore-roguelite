@@ -5,6 +5,8 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import fi.vilpponen.mhr.core.Balance;
+import fi.vilpponen.mhr.core.BalanceManager;
 import net.minecraft.network.chat.Component;
 
 /**
@@ -54,6 +56,9 @@ public final class BorderCommand {
 	}
 
 	private static String describe(BorderTier tier) {
-		return tier.isInfinite() ? " (no practical limit)" : " (" + (long) tier.diameter() + " blocks across)";
+		Balance.BorderBalance balance = tier.balance(BalanceManager.get());
+		return balance.isUnbounded()
+				? " (no practical limit)"
+				: " (" + (long) balance.size().getAsDouble() + " blocks across)";
 	}
 }

@@ -1,6 +1,8 @@
 package fi.vilpponen.mhr.border;
 
 import fi.vilpponen.mhr.HardcoreRoguelite;
+import fi.vilpponen.mhr.core.Balance;
+import fi.vilpponen.mhr.core.BalanceManager;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -21,15 +23,20 @@ import net.minecraft.world.level.border.WorldBorder;
  *
  * <p>Nothing about world generation is involved. The border is placed on the finished world, so
  * changing the tier never means changing worldgen code.
+ *
+ * <p>No size is written down here either: the tier sizes come from the balance file, read each time
+ * the border is applied. A balance reload mid-run therefore does not resize a world under the
+ * player — it is picked up the next time a border is set, which is the next run or the next tier
+ * change. See {@code docs/balance.md}.
  */
 public final class WorldBorders {
 	/**
-	 * The smallest the end is ever allowed to be, whatever the tier says. Centered on the origin
-	 * it has to hold both the main island and the obsidian arrival platform 100 blocks east of it,
-	 * or arriving through an end portal would drop you outside the border. A balance value like the
-	 * tier diameters, so it is a constant here.
+	 * Where the end's own floor size lives in the balance file. Centered on the origin the end has
+	 * to hold both the main island and the obsidian arrival platform 100 blocks east of it, or
+	 * arriving through an end portal would drop you outside the border. It is a balance number like
+	 * any other, so it sits in data rather than in Java.
 	 */
-	private static final double END_MIN_DIAMETER = 512.0;
+	private static final String END_MINIMUM_SIZE = "endBorder.minimumSize";
 
 	private static volatile BorderTier selectedTier = BorderTier.DEFAULT;
 	private static volatile MinecraftServer runningServer;
@@ -65,15 +72,21 @@ public final class WorldBorders {
 	/** Put the selected tier's border on every dimension of a running world. */
 	public static void apply(MinecraftServer server) {
 		BorderTier tier = selectedTier;
+		Balance balance = BalanceManager.get();
+		Balance.BorderBalance tierBalance = tier.balance(balance);
+		// An unbounded tier still has a number, because vanilla's border always does: its own
+		// maximum, which is also what a normal world starts with.
+		double diameter = tierBalance.size().orElse(WorldBorder.MAX_SIZE);
+
 		// The world's own spawn point, not MinecraftServer.getRespawnData(): that one is already
 		// clamped inside the current border, so centering on it would drag the border around.
 		BlockPos spawn = server.getWorldData().overworldData().getRespawnData().pos();
 
 		for (ServerLevel level : server.getAllLevels()) {
-			apply(level, tier, spawn);
+			apply(level, balance, diameter, spawn);
 		}
 
-		String size = tier.isInfinite() ? "no practical limit" : (long) tier.diameter() + " blocks across";
+		String size = tierBalance.isUnbounded() ? "no practical limit" : (long) diameter + " blocks across";
 		HardcoreRoguelite.LOGGER.info("World border tier {}: {}, overworld centered on {}, {}",
 				tier.id(), size, spawn.getX(), spawn.getZ());
 	}
@@ -83,7 +96,7 @@ public final class WorldBorders {
 	 * the overworld's raw coordinates. Getting this wrong is what makes a portal a trap: build one
 	 * well away from 0,0 and you arrive somewhere the border has never covered.
 	 */
-	private static void apply(ServerLevel level, BorderTier tier, BlockPos overworldSpawn) {
+	private static void apply(ServerLevel level, Balance balance, double diameter, BlockPos overworldSpawn) {
 		WorldBorder border = level.getWorldBorder();
 
 		if (level.dimension().equals(Level.END)) {
@@ -91,7 +104,7 @@ public final class WorldBorders {
 			// ServerLevel.END_SPAWN_POINT, and the island and the return portal sit at the origin.
 			// So it centers on the origin, and never gets smaller than it takes to hold both.
 			border.setCenter(0.5, 0.5);
-			border.setSize(Math.max(tier.diameter(), END_MIN_DIAMETER));
+			border.setSize(Math.max(diameter, balance.number(END_MINIMUM_SIZE)));
 			logLevel(level, border);
 			return;
 		}
@@ -101,7 +114,7 @@ public final class WorldBorders {
 		// rather than hardcoding 8 means a custom scaled dimension lands in the right place too.
 		double scale = level.dimensionType().coordinateScale();
 		border.setCenter((overworldSpawn.getX() + 0.5) / scale, (overworldSpawn.getZ() + 0.5) / scale);
-		border.setSize(tier.diameter());
+		border.setSize(diameter);
 		logLevel(level, border);
 	}
 

@@ -58,6 +58,10 @@
 		"infinite": { "price": 30 }
 	},
 
+	"endBorder": {
+		"minimumSize": 512
+	},
+
 	"difficulty": {
 		"mobDamageMultiplier": 1.5
 	}

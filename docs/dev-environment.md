@@ -164,7 +164,9 @@ Enforcement never reads that copy — it is for drawing only.
 ## Testing the world border
 
 A run starts on the `tiny` tier, and the border is placed when the server starts, centered on the
-world spawn. Change the tier with the dev command, which applies it to the running world at once:
+world spawn. The sizes come from the `worldBorder` section of the balance file, not from Java, so
+retuning one is editing `default-balance.json` or the config override. Change the tier with the dev
+command, which applies it to the running world at once:
 
 ```sh
 scripts/dev.sh rcon "mhr border"            # what tier is selected

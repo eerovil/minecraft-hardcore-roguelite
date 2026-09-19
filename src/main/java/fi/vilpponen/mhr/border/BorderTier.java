@@ -1,6 +1,7 @@
 package fi.vilpponen.mhr.border;
 
-import net.minecraft.world.level.border.WorldBorder;
+import fi.vilpponen.mhr.core.Balance;
+import fi.vilpponen.mhr.core.BalanceException;
 
 /**
  * How big the world is for one run.
@@ -8,42 +9,50 @@ import net.minecraft.world.level.border.WorldBorder;
  * <p>A run gets one of these and keeps it. There are deliberately only a few big steps rather than
  * many small ones, so moving up a tier is something you notice immediately.
  *
- * <p>The finite diameters are balance values. They are expected to move around during playtesting,
- * which is the whole reason they live here as plain constants: changing one is a one-line edit and
- * nothing else has to know.
+ * <p>Sizes are not written down here. They live in the {@code worldBorder} section of the balance
+ * file, next to what each tier costs, so retuning the world is editing data rather than Java — see
+ * {@code docs/balance.md}. A tier with no size is the unbounded one: the border stops being
+ * something a player can ever reach.
  */
 public enum BorderTier {
-	TINY("tiny", 128.0),
-	MEDIUM("medium", 512.0),
-	LARGE("large", 2048.0),
-	/**
-	 * Vanilla's own maximum, which is also the size a normal world starts with. Not literally
-	 * infinite, but the border stops being a restriction you can ever reach.
-	 */
-	INFINITE("infinite", WorldBorder.MAX_SIZE);
+	TINY("tiny"),
+	MEDIUM("medium"),
+	LARGE("large"),
+	INFINITE("infinite");
 
 	/** The tier a run has when nothing has been unlocked yet. */
 	public static final BorderTier DEFAULT = TINY;
 
 	private final String id;
-	private final double diameter;
 
-	BorderTier(String id, double diameter) {
+	BorderTier(String id) {
 		this.id = id;
-		this.diameter = diameter;
 	}
 
+	/** The short id, which is also this tier's key in the balance file. */
 	public String id() {
 		return id;
 	}
 
-	/** Border width in blocks, edge to edge. */
-	public double diameter() {
-		return diameter;
+	/**
+	 * The id the shop and the saved unlocks use, e.g. {@code world.border.medium}.
+	 *
+	 * <p>The price sits under {@code worldBorder} rather than {@code unlocks} so a tier's size and
+	 * price stay next to each other; this is the string that names the purchase everywhere else.
+	 */
+	public String unlockId() {
+		return "world.border." + id;
 	}
 
-	public boolean isInfinite() {
-		return this == INFINITE;
+	/**
+	 * What this tier is worth in the balance in effect.
+	 *
+	 * @throws BalanceException if the balance file has no such tier, which means the two lists have
+	 *     drifted apart and there is no safe number to invent
+	 */
+	public Balance.BorderBalance balance(Balance balance) {
+		return balance.border(id).orElseThrow(() -> new BalanceException(
+				"Balance is missing the border tier 'worldBorder." + id + "'"));
 	}
 
 	public static BorderTier byId(String id) {
