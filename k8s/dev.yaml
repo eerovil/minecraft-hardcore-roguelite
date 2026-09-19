@@ -65,6 +65,80 @@ spec:
           persistentVolumeClaim:
             claimName: mhr-data
 ---
+# Where the automated gameplay tests run. Same image as the build pod, plus a virtual display and
+# a software OpenGL driver, because the client GameTests start a real Minecraft client.
+#
+# It runs as root only so that apt-get can install those at startup; the image has no way to bake
+# them in. scripts/dev.sh drops back to uid 1000 before running Gradle, so nothing root-owned ever
+# lands in the Gradle cache the build pod shares.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mhr-gametest
+  namespace: mhr-dev
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mhr-gametest
+  template:
+    metadata:
+      labels:
+        app: mhr-gametest
+    spec:
+      containers:
+        - name: gametest
+          image: gradle:jdk25
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -eu
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends \
+                xvfb x11-utils mesa-utils \
+                libgl1-mesa-dri libglx-mesa0 libglu1-mesa libegl-mesa0 \
+                libx11-6 libxext6 libxrender1 libxrandr2 libxi6 libxcursor1 \
+                libxinerama1 libxfixes3 libxkbcommon0 libasound2t64
+              mkdir -p /pvc/gametest/workspace /pvc/gametest/home /pvc/gradle-gametest
+              chown 1000:1000 /pvc/gametest /pvc/gametest/workspace /pvc/gametest/home /pvc/gradle-gametest
+              touch /tmp/gametest-ready
+              exec sleep infinity
+          env:
+            # Its own Gradle cache, not the build pod's. They would otherwise fight over the
+            # same lock files, and a test run that fails because someone else pressed `go` is
+            # worse than downloading Minecraft a second time.
+            - name: GRADLE_USER_HOME
+              value: /pvc/gradle-gametest
+            # Mesa's software rasteriser. No GPU in the cluster, and the tests only need the
+            # client to render *something* — they assert on game state, not on pixels.
+            - name: LIBGL_ALWAYS_SOFTWARE
+              value: "1"
+            - name: MESA_LOADER_DRIVER_OVERRIDE
+              value: llvmpipe
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/gametest-ready"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 60
+          volumeMounts:
+            - name: data
+              mountPath: /pvc
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "6"
+              memory: 8Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mhr-data
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
