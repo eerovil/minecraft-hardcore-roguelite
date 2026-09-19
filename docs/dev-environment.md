@@ -161,6 +161,36 @@ The server tells the client which slots are open when you join and again wheneve
 `mhr lock` changes something, so the client's own config file is never consulted while connected.
 Enforcement never reads that copy — it is for drawing only.
 
+## Testing the ore unlocks
+
+Same shape, one unlock per ore: `world.ore.coal`, `world.ore.iron`, `world.ore.copper`,
+`world.ore.gold`, `world.ore.redstone`, `world.ore.lapis`, `world.ore.diamond`.
+The quick check places an ore vein in a block of stone and counts what landed:
+
+```sh
+scripts/dev.sh rcon "forceload add 0 0 16 16"
+scripts/dev.sh rcon "fill 0 96 0 10 106 10 minecraft:stone"
+scripts/dev.sh rcon "place feature minecraft:ore_iron 5 101 5"
+scripts/dev.sh rcon "fill 0 96 0 10 106 10 minecraft:stone replace minecraft:iron_ore"
+```
+
+Locked, the place fails and nothing is filled. After `mhr unlock world.ore.iron` it places and the
+last command counts the vein.
+
+For the real thing, force-load land that has never been generated and count what is in it:
+
+```sh
+scripts/dev.sh rcon "forceload add 5000 5000 5031 5031"
+scripts/dev.sh rcon "fill 5000 -59 5000 5015 60 5015 minecraft:stone replace minecraft:iron_ore"
+```
+
+A `fill ... replace` is a block counter that happens to destroy what it counts, so only do it in a
+throwaway world. `rcon-cli` also reads commands from stdin, which is much faster than one
+`scripts/dev.sh rcon` per command when you are counting fourteen ore blocks across several chunks.
+
+Note that the cluster is shared: if someone else runs `scripts/dev.sh go` while you are testing,
+the server restarts under you with their jar.
+
 ## Resource use
 
 The Mac node has 8 CPUs and 24 GB. The build pod is capped at 6 CPU / 8 GB and the server at
