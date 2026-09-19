@@ -136,6 +136,11 @@ MHR_GAMETEST_WORKSPACE=/pvc/gametest/workspace-mine scripts/dev.sh gametest
 The Gradle cache stays shared either way, which is the expensive part. The port is not shareable, so
 a client run still has to wait for whichever one is in flight.
 
+The ore scans go further, because worldgen only answers once per chunk: each of them builds a world
+of its own from a fixed seed, sets all seven ore unlocks explicitly before a single chunk of the
+scanned patch exists, and only then generates it. Land that had already been generated would answer
+for whatever the unlocks were when it was made.
+
 ### Artifacts
 
 `scripts/dev.sh gametest` copies logs, screenshots and crash reports back to `build/gametest/`
@@ -150,7 +155,7 @@ build/gametest/reports/tests/...                      the unit-test HTML report
 
 ### Reading a failure
 
-The client test log marks each scenario:
+Both test logs mark each scenario the same way:
 
 ```
 === scenario locked-helmet-slot-refuses-a-helmet ===
@@ -158,7 +163,8 @@ The client test log marks each scenario:
 ```
 
 A failed one logs `FAIL` with the assertion message, writes
-`screenshots/<n>_failed-<scenario-name>.png`, and carries on to the remaining scenarios — so one run
+`screenshots/<n>_failed-<scenario-name>.png` if it is a client scenario with a screen worth
+photographing, and carries on to the remaining scenarios — so one run
 tells you everything that is broken, not just the first thing. The run ends by throwing with the
 whole list, which is what turns the exit status non-zero.
 
@@ -315,6 +321,47 @@ And the mixed state, which is what a save in progress actually looks like — th
 nothing else, so the field has cows in it and nothing else the shop sells:
 
 ![two cows and nothing else](images/gametest-fresh-plains-only-cows-unlocked.png)
+
+#### The ore unlocks
+
+Two files, because the feature has two halves and they are reached in completely different ways.
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/server/OreFeatureTest.java` is a **server GameTest**:
+no client, no terrain, a box of stone inside the test region and the real vanilla ore feature run at
+the middle of it. It is the console's `place feature` check, one command instead of a human:
+
+- **locked-`<ore>`-places-nothing** — for all seven ores. With the ore locked, none of eight fixed
+  seeds places anything and the stone is untouched.
+- **unlocked-`<ore>`-places-while-the-others-stay-locked** — buy that one ore, and its vein lands;
+  then every *other* ore's feature is tried in the same breath and still refuses. That is the
+  mixed-state check, and it runs 42 times, once per ordered pair.
+- **locked-gold-covers-nether-gold-ore** — nether gold ore is gold, in netherrack, same unlock.
+- **features-we-do-not-sell-are-untouched** — emerald, andesite, diorite and blackstone come out of
+  the same two feature classes the mod intercepts, and all four place with every ore locked.
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/OreWorldgenClientTest.java` is the other half:
+**real terrain, generated for real**. It builds three worlds from one fixed seed — every ore locked,
+iron and diamond only, everything unlocked — and counts the same 12×12 chunks of never-visited land
+in each:
+
+- **the-three-scans-generated-the-same-world** — all three hold exactly the same bedrock. Nothing
+  places or ticks bedrock, so this is what says the seed really did repeat and the ore counts differ
+  because of the unlocks and nothing else.
+- **locked-`<ore>`-is-missing-from-fresh-terrain** / **unlocked-`<ore>`-is-back-in-fresh-terrain** —
+  for all seven, zero blocks against thousands.
+- **mixed-state-restores-only-what-was-bought** — iron and diamond are in the ground, the other five
+  are not.
+- **large-iron-and-copper-veins-follow-their-unlock** — the deep veins, counted by their raw blocks,
+  which nothing else in the game produces. Buying iron gives back *exactly* the veins the fully
+  unlocked world has, while copper's stay out.
+- **features-we-do-not-sell-are-untouched** — andesite, diorite and emerald are still down there
+  with every ore locked. Only their presence is asserted, never their exact count: an ore vein is
+  allowed to replace andesite, so a world with seven ores in it really does hold a little less.
+
+It is a client game test for one reason: the client harness's world builder is the only thing that
+can start a dedicated server on a seed of our choosing. No client ever connects, and it takes no
+screenshots — there is nothing to see, the evidence is the counts, and they are printed per block
+per world in the client log.
 
 #### The starter chest
 
@@ -575,8 +622,19 @@ scripts/dev.sh rcon "execute in minecraft:the_nether run data get entity @e[type
 
 ## Testing the ore unlocks
 
-Same shape, one unlock per ore: `world.ore.coal`, `world.ore.iron`, `world.ore.copper`,
-`world.ore.gold`, `world.ore.redstone`, `world.ore.lapis`, `world.ore.diamond`.
+One unlock per ore: `world.ore.coal`, `world.ore.iron`, `world.ore.copper`, `world.ore.gold`,
+`world.ore.redstone`, `world.ore.lapis`, `world.ore.diamond`. None of this needs doing by hand any
+more:
+
+```sh
+scripts/dev.sh gametest
+```
+
+That covers all seven ores locked and unlocked, every mixed pair, nether gold, the deep iron and
+copper veins, and the features we do not sell — see
+[What is automated now](#the-ore-unlocks). The rest of this section is how to poke at it on the dev
+server, which is still the quicker way to look at something surprising.
+
 The quick check places an ore vein in a block of stone and counts what landed:
 
 ```sh
@@ -610,16 +668,20 @@ directory of your own under `/pvc`, build there, and run a second server deploym
 
 The deep veins do not come from an ore feature, so `place feature` cannot reach them and a scan of a
 few chunks will usually miss them: they are rare, and only about one block in fifty of a vein is a
-raw ore block. Two things make them testable:
+raw ore block. Two things make them testable, and both are what the automated scan does:
 
 - `raw_iron_block` and `raw_copper_block` only ever come from a vein, so counting them counts veins
   and nothing else.
-- With a fixed `SEED` on the server, deleting the world regenerates exactly the same terrain. Scan
-  the same coordinates once with the ore unlocked and once with it locked and the two runs are
-  directly comparable. 16×16 chunks is enough to contain a few veins.
+- With a fixed seed, a world generated again is exactly the same terrain. Scan the same coordinates
+  once with the ore unlocked and once with it locked and the two runs are directly comparable.
+  12×12 chunks is enough: the seed the test uses holds 107 raw iron blocks and 5 raw copper ones.
 
-Something that is unlocked in both runs — coal is a good choice — should come out at roughly the
-same count, which is how you know you really did regenerate the same world.
+Something not affected by the unlocks should come out at the same count, which is how you know you
+really did regenerate the same world. Bedrock is the one to pick, and the one the test compares:
+nothing places it, nothing ticks it and no vein reaches it. Do not use coal or any other ore for
+this, and do not use a stone variant — an ore vein replaces andesite, diorite and granite as happily
+as it replaces stone, so those counts really do change when you lock an ore.
+
 ## Testing the crafted-tool enchant
 
 The unlock is repeatable, so `mhr list` shows a level next to it and `mhr unlock` buys the next one:
