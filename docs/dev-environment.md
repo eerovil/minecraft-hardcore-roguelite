@@ -108,8 +108,20 @@ Two things had to be arranged for the client to start headless at all, both in `
 Nothing carries over between runs. Loom wipes `build/run/clientGameTest` before each one, and that
 directory is the client's *and* the dedicated server's game directory, so the world, the config
 directory, `hardcore-roguelite-unlocks.json` and the player's inventory all start empty. On top of
-that every scenario begins by locking all five slots and emptying the player, so one scenario
-cannot make the next one pass.
+that every scenario begins from a known state of its own — all five slots locked and the player
+emptied, or all six animal species locked — so one scenario cannot make the next one pass.
+
+The *pod*, on the other hand, is shared, and two runs at once do collide in two ways: they overwrite
+each other's `src/` halfway through, and the second one's dedicated server cannot bind port 25565
+and dies with `Address already in use`. Neither is a failure of the thing being tested. Stay out of
+the way with a source tree of your own:
+
+```sh
+MHR_GAMETEST_WORKSPACE=/pvc/gametest/workspace-mine scripts/dev.sh gametest
+```
+
+The Gradle cache stays shared either way, which is the expensive part. The port is not shareable, so
+a client run still has to wait for whichever one is in flight.
 
 ### Artifacts
 
@@ -143,6 +155,8 @@ count they found.
 
 ### What is automated now
 
+#### The equipment slots
+
 These were manual client checks and are not any more, in
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/EquipmentLockClientTest.java`:
 
@@ -173,6 +187,81 @@ inventory being closed and reopened.
 The clicks are real. The cursor is moved to the middle of the square and the click is only sent once
 the screen itself agrees that is the square under the pointer, so a layout change makes the test
 fail rather than silently click somewhere else.
+
+#### The animal unlocks
+
+The whole of [Testing the animal unlocks](#testing-the-animal-unlocks) used to be a page of rcon
+commands and a warning that half of it needed a player online. It does not any more. Two tests
+share the work, because the feature has a fast exact half and a slow realistic half and neither
+one is enough on its own.
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/server/AnimalSpawnGameTest.java` is the exact half:
+one server GameTest, no client, 29 scenarios in under two seconds. It asks the two vanilla calls
+the feature actually hangs off — `SpawnPlacements.checkSpawnRules`, which both halves of natural
+spawning consult, and `EntityType.create`, which is how a mob is built once something has decided
+to make one. Per species, and then across species:
+
+- **unlocked-&lt;species&gt;-spawns-the-vanilla-way** — with the species bought, vanilla's own rules
+  say yes on a lit patch of grass and the game hands back a real animal. This is the scenario that
+  stops every "must not spawn" check below from passing for the wrong reason.
+- **locked-&lt;species&gt;-never-spawns-by-itself** — the spawn tick, chunk generation and the jockey
+  door all refuse it.
+- **locked-&lt;species&gt;-can-still-be-made-on-purpose** — spawn eggs, commands, breeding, spawners,
+  structures, dispensers, conversions and events all still work while it is locked.
+- **unlocking-&lt;species&gt;-leaves-the-other-five-locked** — the mixed state a real save is almost
+  always in.
+- **summon-still-works-with-every-species-locked** — a real `/summon` through the real command
+  dispatcher, once per species, counted afterwards.
+- **locking-every-species-leaves-other-mobs-alone** — eleven bystanders, from a rabbit to a creeper
+  by way of a mooshroom and a donkey, must answer exactly what they answered with all six bought.
+  The two states are compared rather than "yes" being demanded, because some of them cannot spawn
+  on a lit patch of grass in the first place.
+- **locked-chicken-gets-no-jockey-chicken** and **unlocked-chicken-gets-its-jockey-back** — 200 real
+  baby zombies, finalized the way the natural spawner finalizes them. The zombies are forced to be
+  babies through `ZombieGroupData`, so the only roll left is vanilla's own 5% jockey chance, and
+  200 tries miss it about three times in a hundred thousand runs.
+- **a-locked-chicken-does-not-stop-the-other-jockeys** — spider, strider, skeleton and zombified
+  piglin are somebody else's mobs.
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/AnimalWorldgenClientTest.java` is the realistic
+half, and the only one that can answer "does fresh terrain come out empty". It builds a dedicated
+server on a *normal* overworld, walks out to land nobody has been to, force-loads 15×15 chunks of it
+and counts what is standing there:
+
+- **fresh-plains-have-no-animals-while-every-species-is-locked** — zero of all six, with the ground
+  count as the control so an ungenerated patch cannot pass.
+- **fresh-plains-fill-up-once-every-species-is-bought** — all six turn up again, which is what makes
+  the scenario above mean something.
+- **a-mixed-lock-state-shows-up-in-fresh-land** — only the cow bought: cows walk in, the other five
+  do not.
+- **locking-every-species-leaves-other-animals-alone** — a patch of taiga, whose list is mostly
+  *not* ours, keeps its foxes and rabbits with all six locked.
+
+A different patch is used for every unlock state on purpose. The animals a chunk is born with are
+placed once, while it is being made, so scanning the same patch twice would answer "no cows" both
+times and look exactly like the feature working.
+
+Two things had to be arranged for any of this to be a test rather than a coincidence, and both are
+worth knowing before writing the next worldgen test:
+
+- **`gamerule spawn_mobs true`.** The harness makes its world with mob spawning off, so its own
+  tests are not disturbed by wandering mobs. Without turning it back on, every patch generates empty
+  and every count reads zero — which is indistinguishable from the feature working.
+- **`mhr border infinite`.** A run starts on the tiny border tier and land outside the border never
+  gets its animals at all. Same failure, same disguise.
+
+The two plains shots are the pair worth looking at. Same camera geometry both times — aimed at the
+thickest cluster of animals when the patch has any and at its most level open ground when it has
+none — so the only difference in the picture is the thing the test is about:
+
+| Fresh plains, every species locked | ...and fresh plains with all six bought |
+| ---------------------------------- | --------------------------------------- |
+| ![empty plains](images/gametest-fresh-plains-animals-locked.png) | ![sheep, chickens and cows](images/gametest-fresh-plains-animals-unlocked.png) |
+
+And the mixed state, which is what a save in progress actually looks like — the cow bought and
+nothing else, so the field has cows in it and nothing else the shop sells:
+
+![two cows and nothing else](images/gametest-fresh-plains-only-cows-unlocked.png)
 
 ### What is still manual
 
@@ -280,19 +369,33 @@ The server tells the client which slots are open when you join and again wheneve
 Enforcement never reads that copy — it is for drawing only.
 ## Testing the animal unlocks
 
-Unlike trees, an animal unlock takes effect at once — natural spawning asks every time, so land you
-have already visited starts or stops producing that species straight away. That half needs a player
-online to test, though, because the spawn tick only runs near one. What rcon alone can test is the
-other half: force-load a patch of land nobody has been to yet, then count what is standing in it.
+Nothing here needs a human in a Minecraft client any more:
 
-**Widen the border first.** New land only gets its animals if it is inside the world border, and
-the border starts 128 blocks wide, so a patch out at x=8000 generates perfectly empty and every
-count reads zero whether the species is locked or not. That looks exactly like the feature working
-and is not.
+```sh
+scripts/dev.sh gametest
+```
+
+See [What is automated now](#the-animal-unlocks). All six species, the mixed lock states, `/summon`,
+the bystanders and the chicken jockey are covered by the server GameTest, and fresh terrain coming
+out empty is covered by the client one. Between them that is every check this section used to ask
+for by hand.
+
+The dev server is still the place to *look* at it. Unlike trees, an animal unlock takes effect at
+once — natural spawning asks every time, so land you have already visited starts or stops producing
+that species straight away:
+
+```sh
+scripts/dev.sh rcon "mhr lock world.animal.cow"
+scripts/dev.sh rcon "mhr list"
+```
+
+**Widen the border first** if you go counting animals in fresh land by hand. New land only gets its
+animals if it is inside the world border, and the border starts 128 blocks wide, so a patch out at
+x=8000 generates perfectly empty and every count reads zero whether the species is locked or not.
+That looks exactly like the feature working and is not.
 
 ```sh
 scripts/dev.sh rcon "mhr border infinite"
-scripts/dev.sh rcon "mhr lock world.animal.cow"
 scripts/dev.sh rcon "execute positioned 8000 100 8000 run locate biome minecraft:plains"
 scripts/dev.sh rcon "forceload add 7904 7904 8159 8159"   # 256 chunks, the per-command maximum
 # wait a minute or so for the chunks to generate
@@ -302,8 +405,8 @@ scripts/dev.sh rcon "execute if entity @e[type=minecraft:cow,x=7904,y=-64,z=7904
 That answers "Test failed" while the species is locked and "Test passed. Count: N" once it is
 unlocked and a *different* fresh patch has been generated. Plains is the biome to pick: cows,
 sheep, pigs and chickens all populate it, so one patch tests four species at once — but do not
-reach for rabbits or foxes as a control there, because plains has neither. Pick the control out of
-the biome you are actually standing in.
+reach for rabbits or foxes as a control there, because plains has neither. Taiga is the biome for
+that, which is why the automated test uses it.
 
 Force-loaded chunks stay loaded and cost memory, so `forceload remove all` between rounds, or
 the server eventually gets killed.
