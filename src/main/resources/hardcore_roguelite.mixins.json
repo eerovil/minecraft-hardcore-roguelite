@@ -6,6 +6,8 @@
 		"EquipmentSlotLockMixin",
 		"LockedArmorSlotVisibleMixin",
 		"LockedSlotPlacementMixin",
+		"OreGenerationMixin",
+		"OreVeinMixin",
 		"PlayerEquipmentMixin",
 		"TreeGenerationMixin",
 		"VillageGenerationMixin"
