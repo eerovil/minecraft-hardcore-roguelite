@@ -1,0 +1,24 @@
+{
+	"schemaVersion": 1,
+	"id": "hardcore_roguelite",
+	"version": "${version}",
+	"name": "Hardcore Roguelite",
+	"description": "Turns Minecraft Hardcore into a roguelite: one life per world, permanent unlocks bought between runs.",
+	"authors": ["Eero Vilpponen"],
+	"contact": {
+		"homepage": "https://github.com/eerovil/minecraft-hardcore-roguelite",
+		"sources": "https://github.com/eerovil/minecraft-hardcore-roguelite"
+	},
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["fi.vilpponen.mhr.HardcoreRoguelite"]
+	},
+	"mixins": ["hardcore_roguelite.mixins.json"],
+	"depends": {
+		"fabricloader": ">=0.19.0",
+		"minecraft": "~26.3",
+		"java": ">=21",
+		"fabric-api": "*"
+	}
+}

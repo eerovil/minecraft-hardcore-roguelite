@@ -18,14 +18,31 @@ first run if you can afford it, so you pick your own path.
 
 ## Status
 
-Design only. No code yet.
+Early. Fabric mod for Minecraft 26.3 that builds and runs, with one unlock implemented:
+**trees**. Until you buy it, the world generates without trees and saplings won't grow.
+
+There is no shop and no currency yet, so unlocks are toggled with a dev command:
+
+```
+/mhr list
+/mhr unlock trees
+```
 
 - [`docs/design-v0.2.fi.md`](docs/design-v0.2.fi.md) — full design document (v0.2, in Finnish)
 - [`docs/open-questions.md`](docs/open-questions.md) — things the design deliberately hasn't settled
+- [`docs/dev-environment.md`](docs/dev-environment.md) — how to build and test it
 
-## Planned target
+## Building
 
-Fabric, Minecraft 1.21.x.
+Builds and the test server run in a kubernetes cluster, not on your machine:
+
+```sh
+scripts/dev.sh up   # once
+scripts/dev.sh go   # build, install, restart the server
+```
+
+See [`docs/dev-environment.md`](docs/dev-environment.md). A plain `gradle build` with JDK 25 also
+works if you'd rather build locally.
 
 ## Design rules of thumb
 

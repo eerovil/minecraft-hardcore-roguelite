@@ -1,0 +1,58 @@
+plugins {
+	// The unobfuscated-Minecraft plugin id. The bare 'fabric-loom' id is the legacy one and
+	// still demands a mappings dependency; 'net.fabricmc.fabric-loom-remap' is for 1.21.11
+	// and older, which are still obfuscated.
+	id 'net.fabricmc.fabric-loom' version '1.18.2'
+	id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	maven {
+		name = 'Fabric'
+		url = 'https://maven.fabricmc.net/'
+	}
+	mavenCentral()
+}
+
+dependencies {
+	// No mappings dependency: Minecraft is shipped unobfuscated from 26.1 onwards, so the
+	// names in the jar are the real ones. Yarn and intermediary stopped at 1.21.11, and the
+	// `fabric-loom` plugin is the unobfuscated one (`fabric-loom-remap` is for 1.21.11 and older).
+	//
+	// There is no `modImplementation` either: that exists only to remap a dependency, and
+	// nothing needs remapping any more.
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+}
+
+processResources {
+	inputs.property 'version', project.version
+
+	filesMatching('fabric.mod.json') {
+		expand 'version': project.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+	from('LICENSE') {
+		rename { "${it}_${project.base.archivesName.get()}" }
+	}
+}
