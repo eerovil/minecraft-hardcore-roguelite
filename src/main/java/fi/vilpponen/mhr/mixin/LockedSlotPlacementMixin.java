@@ -19,8 +19,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * stopped by {@link EquipmentSlotLockMixin}; this is a second line for them rather than the first.
  *
  * <p>This covers the inventory screen only. The swap-hands key bypasses it entirely and is handled
- * by {@link LockedOffhandSwapMixin}. Between the two, nothing can enter a locked offhand, so there
- * is never an offhand item to place or use with — which is the behaviour the design asks for.
+ * by {@link LockedOffhandSwapMixin}, and anything already sitting in a locked slot is emptied out
+ * by {@code LockedSlotEvacuation}. Between the three, a locked offhand stays empty, so there is
+ * never an offhand item to place or use with — which is the behaviour the design asks for.
  *
  * <p>Recognising the slot by its index in the player's own {@link Inventory} keeps this narrow: a
  * chest or a furnace is a different container and is never touched.

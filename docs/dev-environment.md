@@ -124,6 +124,10 @@ have to come from a player. Join through the port-forward and check:
   `mhr unlock slot_offhand` and press F again: now it swaps normally.
 - `mhr unlock slot_helmet` while the inventory is open: the helmet padlock disappears at once, the
   other four stay. Equipping a helmet then works and nothing else changed.
+- Locking a slot that is in use: `mhr unlock slot_offhand`, put a shield in the offhand, then
+  `mhr lock slot_offhand`. The shield should hop back into your inventory within a tick — or fall
+  at your feet if the inventory is full — and right-clicking must not raise it. The same goes for
+  a worn helmet and `mhr lock slot_helmet`. Nothing may be destroyed in either case.
 
 The server tells the client which slots are open when you join and again whenever `mhr unlock` or
 `mhr lock` changes something, so the client's own config file is never consulted while connected.

@@ -3,6 +3,7 @@ package fi.vilpponen.mhr.equipment;
 import fi.vilpponen.mhr.Unlock;
 import fi.vilpponen.mhr.UnlockState;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import net.minecraft.world.entity.EquipmentSlot;
 
@@ -36,6 +37,8 @@ public final class EquipmentLocks {
 			EquipmentSlot.OFFHAND,
 	};
 
+	private static final List<EquipmentSlot> LOCKABLE_VIEW = List.of(LOCKABLE);
+
 	private static final Map<EquipmentSlot, Unlock> UNLOCKS = new EnumMap<>(EquipmentSlot.class);
 
 	static {
@@ -47,13 +50,18 @@ public final class EquipmentLocks {
 	}
 
 	/**
-	 * What the server last told this client, as a bit per {@link EquipmentSlot#getId()}, or
+	 * What the server last told this client, one bit per entry of {@link #LOCKABLE}, or
 	 * {@code null} while this process has not been told anything — which is the normal state on a
 	 * dedicated server, where {@link UnlockState} is the answer.
 	 */
 	private static volatile Integer clientUnlockedBits;
 
 	private EquipmentLocks() {
+	}
+
+	/** @return the five slots that can be locked, in no meaningful order. */
+	public static List<EquipmentSlot> lockableSlots() {
+		return LOCKABLE_VIEW;
 	}
 
 	/** @return the unlock that opens this slot, or null for a slot that is never locked. */
