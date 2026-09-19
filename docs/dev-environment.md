@@ -423,6 +423,43 @@ button calls, rather than through the mouse: the book lays its recipes out in a 
 no stable handle on a single one, so aiming the pointer at whatever happens to be in that spot would
 be a test of the page layout. Everything after that call is the real path, server round trip and all.
 
+#### The villages unlock
+
+Villages have nothing to place directly — there is no `place feature` for a structure — so unlike
+trees there is no fast server-GameTest half. It is all real terrain, in
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/VillageWorldgenClientTest.java`, and it builds
+**two** dedicated servers on ordinary overworlds, one for each side of the unlock:
+
+- **a-fresh-world-has-a-village-to-find** / **the-village-really-generated** — with the unlock
+  bought, `locate` finds a vanilla village out at x 8000, and the chunks around it, generated on the
+  spot, record a village start. Found is not the same as built, which is why both are checked.
+- **a-fresh-world-has-no-village-to-find** — a second world, built from scratch, with the unlock
+  locked: no village anywhere within 48 chunks of the same starting point.
+- **the-village-that-would-be-there-is-gone** — the same spot the first world put a village, in the
+  same terrain, generated again: no village started there. Ground blocks in the thousands, so "no
+  village" is not "no land".
+- **unrelated-structures-still-generate** — a pillager outpost and a mineshaft still turn up while
+  villages are locked. These are the two controls: a mixin that quietly refused *every* structure
+  would pass everything above and be caught only here.
+- **a-world-already-searched-cannot-prove-the-unlock** — buys the unlock in the world that has
+  already been searched and shows the search still answers "nothing". This is the trap the two
+  worlds exist to avoid, asserted rather than described.
+
+Two whole worlds rather than two places in one, because `locate` writes down what it has already
+looked at: a chunk searched while villages were locked keeps answering "nothing here" afterwards. The
+harness pins the seed, so the two worlds are the same terrain — which is what makes "there was a
+village at this spot, and now there is not" a sentence about the unlock rather than about two
+different pieces of land. The unlocked world runs first, because only a world that has villages can
+say where this seed puts one.
+
+The harness also turns structure generation *off* in the worlds it makes, which the test turns back
+on. Without that the locked half would pass for the wrong reason and the unlocked half could never
+pass at all.
+
+| Fresh land, villages unlocked | ...and the same spot with `world.village` locked |
+| ----------------------------- | ----------------------------------------------- |
+| ![a village in open land](images/gametest-fresh-village-unlocked.png) | ![the same land, empty](images/gametest-fresh-village-locked.png) |
+
 ### What is still manual
 
 - The padlock **artwork**. The tests screenshot the inventory with the helmet slot locked and again
@@ -431,7 +468,7 @@ be a test of the page layout. Everything after that call is the real path, serve
 - **Dispenser-fired armor** and **right-click-to-equip**, which need a block and an aimed
   interaction rather than an inventory screen.
 - The **full-inventory fallback**, where a refused item falls at the player's feet.
-- Nothing about trees or animals, beyond looking at a world by eye if you want to.
+- Nothing about trees, animals or villages, beyond looking at a world by eye if you want to.
 - Nothing about the crafted enchant either, beyond the recipe-book button noted above.
 
 ## Joining the server
@@ -487,6 +524,17 @@ Locked, that answers "Failed to place feature". After `mhr unlock world.trees` i
 on the volume — outside the world, because unlocks are meant to survive it.
 
 ## Testing the villages unlock
+
+Nothing here needs doing by hand any more:
+
+```sh
+scripts/dev.sh gametest
+```
+
+covers the whole unlock — a village found and built in fresh land with the unlock bought, nothing
+found and nothing built in the same terrain without it, and a pillager outpost and a mineshaft still
+generating either way. See [Automated gameplay tests](#automated-gameplay-tests). What follows is how
+to poke at it on the dev server when you want to *see* it rather than prove it.
 
 Villages are off until the unlock is bought. There is nothing to place directly here, so this one
 needs a fresh world each way:
@@ -792,6 +840,15 @@ removes both pods but keeps the volume, so bringing it back is fast.
   clicking is an ordinary click, silently. `TestPlayer.shiftClickSlot` puts the button in through
   `MouseHandler.onButton` instead, which is the door the operating system's own mouse callback comes
   through, carrying the modifier a real shift-click carries.
+- The port-25565 clash in [Test isolation](#test-isolation) has a second cause that no amount of
+  waiting clears: a run that ends red sometimes leaves its client JVM alive in the pod. The dedicated
+  server lives inside that JVM, so the port stays taken and the *next* run dies early with `FAILED TO
+  BIND TO PORT` and a `TimeoutException` out of `createServer` — which looks like a broken test and
+  is not. The giveaway is that it fails before any scenario is named. Clear it before rerunning:
+
+  ```sh
+  kubectl -n mhr-dev exec deploy/mhr-gametest -- pkill -f KnotClient
+  ```
 - The gametest pod apt-gets its virtual display on every start, so the first `scripts/dev.sh
   gametest` after a pod restart waits a minute for that, and a run with a cold Gradle cache waits
   rather longer while it downloads Minecraft again.
