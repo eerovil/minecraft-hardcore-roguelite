@@ -102,6 +102,24 @@ scripts/dev.sh rcon "place feature minecraft:oak 4 101 4"
 Locked, that answers "Failed to place feature". After `mhr unlock world.trees` it answers "Placed". The unlock file lives at `/server/config/hardcore-roguelite-unlocks.json`
 on the volume — outside the world, because unlocks are meant to survive it.
 
+## Testing the villages unlock
+
+Villages are off until the unlock is bought. There is nothing to place directly here, so this one
+needs a fresh world each way:
+
+```sh
+scripts/dev.sh newworld
+scripts/dev.sh rcon "locate structure #minecraft:village"      # "Could not find a structure"
+scripts/dev.sh rcon "locate structure minecraft:pillager_outpost"   # still found — other structures are untouched
+
+scripts/dev.sh rcon "mhr unlock world.village"
+scripts/dev.sh newworld
+scripts/dev.sh rcon "locate structure #minecraft:village"      # found again
+```
+
+The second `newworld` matters: `locate` remembers that it already looked at a chunk, so a world
+scanned while villages were locked keeps answering "not found" even after the unlock.
+
 ## Testing the equipment slots
 
 All five slots start locked. On the server side you can flip them and see the state:
