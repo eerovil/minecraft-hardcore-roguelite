@@ -1,0 +1,64 @@
+{
+	"currency": {
+		"advancements": {
+			"minecraft:story/mine_stone": 3,
+			"minecraft:story/upgrade_tools": 3,
+			"minecraft:story/smelt_iron": 10,
+			"minecraft:story/obtain_armor": 10,
+			"minecraft:story/lava_bucket": 10,
+			"minecraft:story/iron_tools": 10,
+			"minecraft:story/deflect_arrow": 10,
+			"minecraft:story/form_obsidian": 10,
+			"minecraft:story/mine_diamond": 30,
+			"minecraft:story/enter_the_nether": 30,
+			"minecraft:story/shiny_gear": 30,
+			"minecraft:story/enchant_item": 30,
+			"minecraft:story/cure_zombie_villager": 100,
+			"minecraft:story/follow_ender_eye": 100,
+			"minecraft:nether/root": 100,
+			"minecraft:nether/find_fortress": 100,
+			"minecraft:nether/obtain_blaze_rod": 100,
+			"minecraft:nether/get_wither_skull": 300,
+			"minecraft:nether/summon_wither": 500,
+			"minecraft:end/root": 500,
+			"minecraft:end/kill_dragon": 1000
+		}
+	},
+
+	"unlocks": {
+		"world.trees": { "price": 3 },
+		"world.village": { "price": 30 },
+
+		"world.ore.coal": { "price": 3 },
+		"world.ore.copper": { "price": 3 },
+		"world.ore.iron": { "price": 30 },
+		"world.ore.redstone": { "price": 30 },
+		"world.ore.lapis": { "price": 30 },
+		"world.ore.gold": { "price": 30 },
+		"world.ore.diamond": { "price": 100 },
+
+		"world.animal.cow": { "price": 10 },
+		"world.animal.pig": { "price": 10 },
+		"world.animal.sheep": { "price": 10 },
+		"world.animal.chicken": { "price": 10 },
+		"world.animal.horse": { "price": 30 },
+		"world.animal.wolf": { "price": 30 },
+
+		"player.slot.helmet": { "price": 3 },
+		"player.slot.boots": { "price": 3 },
+		"player.slot.leggings": { "price": 10 },
+		"player.slot.chestplate": { "price": 10 },
+		"player.slot.offhand": { "price": 30 }
+	},
+
+	"worldBorder": {
+		"tiny": { "size": 128, "price": 0 },
+		"medium": { "size": 512, "price": 3 },
+		"large": { "size": 2048, "price": 10 },
+		"infinite": { "price": 30 }
+	},
+
+	"difficulty": {
+		"mobDamageMultiplier": 1.5
+	}
+}
