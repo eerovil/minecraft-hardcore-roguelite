@@ -9,15 +9,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.NetherPortalBlock;
 import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.storage.LevelData;
+import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,9 +44,11 @@ import org.slf4j.LoggerFactory;
  * another one was still reading. Inside one method they are strictly sequential, and each sets up
  * the spawn and the tier it needs, so the order they run in does not matter either.
  *
- * <p>What is deliberately not here is whether a portal actually comes out inside the border it was
- * promised. That takes real ticks and a real traveller, so it lives in
- * {@link fi.vilpponen.mhr.gametest.client.WorldBorderPortalClientTest}.
+ * <p>Whether a portal actually comes out inside the border it was promised is here too, at the end:
+ * that one needs a real traveller and real ticks rather than arithmetic, so a pig walks into a real
+ * obsidian portal and the sequence waits for it to arrive. The only thing left to a client is what
+ * a connected player is shown, in
+ * {@link fi.vilpponen.mhr.gametest.client.WorldBorderClientTest}.
  *
  * <p>Every scenario moves the run's spawn somewhere awkward and puts it back afterwards, because a
  * border centered on the origin would pass whether the centering works or not. It also leaves the
@@ -61,7 +71,55 @@ public final class WorldBorderGameTest {
 	/** Where the end's own floor sits in the balance file — the same path the feature reads it by. */
 	private static final String END_MINIMUM_SIZE = "endBorder.minimumSize";
 
-	@GameTest
+	/**
+	 * Where in the test area the nether portal is built, in the area's own coordinates: a four-by-five
+	 * obsidian frame standing in the z = 1 plane, with the doorway at x 1..2, y 2..4.
+	 */
+	private static final BlockPos PORTAL_DOORWAY = new BlockPos(1, 2, 1);
+
+	/** Where the end portal goes, well clear of the nether one. */
+	private static final BlockPos END_PORTAL = new BlockPos(6, 1, 6);
+
+	/**
+	 * How far west of the portal the run's spawn is put, in blocks.
+	 *
+	 * <p>Not on the portal, on purpose: the promise is that a portal built <em>anywhere</em> inside
+	 * the allowed area is safe, and a portal standing exactly on the center would be safe even if
+	 * only the center had ever been thought about. It has to stay inside the tiny border, which is
+	 * 128 blocks across.
+	 */
+	private static final int SPAWN_OFFSET = 50;
+
+	/**
+	 * How far from the portal's own coordinates, scaled, the arrival may be.
+	 *
+	 * <p>Vanilla builds the far-side portal near the scaled position but not exactly on it, so some
+	 * slack is needed. It has to stay small, because the failure this catches is a border in the
+	 * wrong place: vanilla clamps a destination into the border it is given, so a nether border
+	 * left on the raw overworld coordinates does not strand anybody — it quietly lands the traveller
+	 * hundreds of blocks from where the portal maths says, which an "is it inside the border" check
+	 * cannot see on its own.
+	 */
+	private static final double ARRIVAL_SLACK = 32.0;
+
+	private static final String NETHER_JOURNEY =
+			"a-real-nether-portal-lands-the-traveller-inside-the-nether-border";
+	private static final String END_JOURNEY =
+			"a-real-end-transition-lands-the-traveller-inside-the-end-border";
+
+	/** The run spawn as the world had it, put back when the journeys are over. */
+	private LevelData.RespawnData spawnBeforeTheJourneys;
+
+	/** The pigs, by uuid: a traveller is a new object in the dimension it arrives in. */
+	private UUID netherTraveller;
+	private UUID endTraveller;
+
+	/**
+	 * The whole suite. The arithmetic scenarios run first and take no time at all; the two real
+	 * journeys follow on a sequence, because a portal transition happens over ticks and cannot be
+	 * asked for synchronously.
+	 */
+	@GameTest(maxTicks = 800)
 	public void theBorderTiersLandWhereTheBalanceFileSays(GameTestHelper helper) {
 		MinecraftServer server = helper.getLevel().getServer();
 		List<String> failures = new ArrayList<>();
@@ -81,13 +139,27 @@ public final class WorldBorderGameTest {
 		scenario(failures, "a-reloaded-override-resizes-the-tier-on-its-next-application",
 				() -> aReloadedOverrideResizesTheTierOnItsNextApplication(server));
 
+		helper.startSequence()
+				.thenExecute(() -> aTravellerStandsInARealNetherPortal(helper))
+				.thenWaitUntil(() -> waitForArrival(helper, netherTraveller, Level.NETHER, NETHER_JOURNEY))
+				.thenExecute(() -> verdict(failures, NETHER_JOURNEY,
+						() -> theNetherArrivalIsInsideTheNetherBorder(helper)))
+				.thenExecute(() -> aTravellerStandsInARealEndPortal(helper))
+				.thenWaitUntil(() -> waitForArrival(helper, endTraveller, Level.END, END_JOURNEY))
+				.thenExecute(() -> verdict(failures, END_JOURNEY,
+						() -> theEndArrivalIsInsideTheEndBorder(helper)))
+				.thenExecute(() -> putTheWorldBack(helper))
+				.thenExecute(() -> report(helper, failures))
+				.thenSucceed();
+	}
+
+	private static void report(GameTestHelper helper, List<String> failures) {
 		// Through the helper rather than a bare AssertionError: GameTest turns anything else into
 		// "Unknown internal error" in the line it prints at the end, which is the line somebody
 		// reads first, and the scenario names would only be findable further up the log.
 		helper.assertTrue(failures.isEmpty(), failures.size() + " world-border scenario(s) failed: "
 				+ String.join(" | ", failures));
 		LOGGER.info("All world-border server scenarios passed.");
-		helper.succeed();
 	}
 
 	// --- the tiers -----------------------------------------------------------------------------
@@ -340,6 +412,167 @@ public final class WorldBorderGameTest {
 		});
 	}
 
+	// --- the journeys ----------------------------------------------------------------------------
+
+	/**
+	 * Builds a real nether portal inside the border and stands a pig in it.
+	 *
+	 * <p>A pig rather than a player because this server has no players, and a real portal rather
+	 * than a teleport because the thing being checked is exactly what vanilla decides when somebody
+	 * walks through one. The frame is the four-by-five every player builds, and the doorway is
+	 * walled off on both sides so the traveller stays in it rather than wandering off while the
+	 * portal counts down.
+	 */
+	private void aTravellerStandsInARealNetherPortal(GameTestHelper helper) {
+		beginScenario(NETHER_JOURNEY);
+		MinecraftServer server = helper.getLevel().getServer();
+		spawnBeforeTheJourneys = server.getWorldData().overworldData().getRespawnData();
+		buildTheNetherPortal(helper);
+
+		BlockPos doorway = helper.absolutePos(PORTAL_DOORWAY);
+		runCommand(server, "setworldspawn " + (doorway.getX() - SPAWN_OFFSET) + " " + doorway.getY()
+				+ " " + doorway.getZ());
+		selectTier(server, BorderTier.TINY);
+		check(border(server, Level.OVERWORLD).isWithinBounds(doorway),
+				"this scenario is meant to send a traveller through a portal that is inside the"
+						+ " overworld border, and the portal at " + doorway + " is not");
+
+		netherTraveller = helper.spawn(EntityTypes.PIG, PORTAL_DOORWAY).getUUID();
+		LOGGER.info("A pig is standing in a portal at {}, with the run spawn {} blocks west",
+				doorway, SPAWN_OFFSET);
+	}
+
+	/**
+	 * Where the traveller came out, and the two things that have to be true about it.
+	 *
+	 * <p>Both are needed. Vanilla clamps a portal destination into whatever border it is given, so
+	 * a nether border in the wrong place still answers "inside" — while quietly putting the
+	 * traveller a long way from the portal they walked into.
+	 */
+	private void theNetherArrivalIsInsideTheNetherBorder(GameTestHelper helper) {
+		MinecraftServer server = helper.getLevel().getServer();
+		Entity traveller = traveller(helper, netherTraveller, NETHER_JOURNEY);
+		Vec3 arrival = traveller.position();
+		double scale = level(server, Level.NETHER).dimensionType().coordinateScale();
+		BlockPos doorway = helper.absolutePos(PORTAL_DOORWAY);
+		double expectedX = (doorway.getX() + 0.5) / scale;
+		double expectedZ = (doorway.getZ() + 0.5) / scale;
+		double drift = Math.hypot(arrival.x() - expectedX, arrival.z() - expectedZ);
+		LOGGER.info("Nether arrival at {}, {} — the 1:{} mapping of the portal is {}, {} ({} blocks away)",
+				(long) arrival.x(), (long) arrival.z(), (long) scale,
+				(long) expectedX, (long) expectedZ, (long) drift);
+
+		check(border(server, Level.NETHER).isWithinBounds(arrival),
+				"a traveller who went through a portal inside the overworld border must arrive inside"
+						+ " the nether border, and " + (long) arrival.x() + ", " + (long) arrival.z()
+						+ " is outside it");
+		check(drift <= ARRIVAL_SLACK,
+				"the arrival must be where the 1:" + (long) scale + " portal mapping puts the portal,"
+						+ " but it came out " + (long) drift + " blocks away from " + (long) expectedX
+						+ ", " + (long) expectedZ + " — which is what a nether border in the wrong"
+						+ " place looks like, because vanilla drags the destination inside it");
+	}
+
+	/**
+	 * The same again for the end, which takes everybody to the same place whatever portal they left
+	 * from — the obsidian platform a hundred blocks east of the island, further out than the tiny
+	 * tier is wide.
+	 */
+	private void aTravellerStandsInARealEndPortal(GameTestHelper helper) {
+		beginScenario(END_JOURNEY);
+		// Into the portal block rather than onto it: an end portal is a shallow slab with a
+		// collision shape, so anything dropped from above stands on its lid forever.
+		helper.setBlock(END_PORTAL.below(), Blocks.OBSIDIAN);
+		helper.setBlock(END_PORTAL, Blocks.END_PORTAL);
+		endTraveller = helper.spawn(EntityTypes.PIG, END_PORTAL).getUUID();
+	}
+
+	private void theEndArrivalIsInsideTheEndBorder(GameTestHelper helper) {
+		MinecraftServer server = helper.getLevel().getServer();
+		Entity traveller = traveller(helper, endTraveller, END_JOURNEY);
+		Vec3 arrival = traveller.position();
+		LOGGER.info("End arrival at {}, {}", (long) arrival.x(), (long) arrival.z());
+
+		check(border(server, Level.END).isWithinBounds(arrival),
+				"a real end transition must land inside the end border, and " + (long) arrival.x()
+						+ ", " + (long) arrival.z() + " is outside it");
+		check(border(server, Level.END).isWithinBounds(ServerLevel.END_SPAWN_POINT),
+				"the obsidian arrival platform at " + ServerLevel.END_SPAWN_POINT + " must be inside"
+						+ " the end border whatever tier the run is on");
+	}
+
+	/** The frame every player builds: four wide, five tall, a two-by-three doorway inside it. */
+	private static void buildTheNetherPortal(GameTestHelper helper) {
+		for (int x = 0; x <= 3; x++) {
+			helper.setBlock(new BlockPos(x, 1, 1), Blocks.OBSIDIAN);
+			helper.setBlock(new BlockPos(x, 5, 1), Blocks.OBSIDIAN);
+		}
+		for (int y = 2; y <= 4; y++) {
+			helper.setBlock(new BlockPos(0, y, 1), Blocks.OBSIDIAN);
+			helper.setBlock(new BlockPos(3, y, 1), Blocks.OBSIDIAN);
+		}
+		for (int x = 1; x <= 2; x++) {
+			for (int y = 2; y <= 4; y++) {
+				// The walls either side of the doorway are this test's own, not a player's: they
+				// keep the traveller in the portal for the three hundred ticks it takes.
+				helper.setBlock(new BlockPos(x, y, 0), Blocks.OBSIDIAN);
+				helper.setBlock(new BlockPos(x, y, 2), Blocks.OBSIDIAN);
+				helper.setBlock(new BlockPos(x, y, 1), Blocks.NETHER_PORTAL.defaultBlockState()
+						.setValue(NetherPortalBlock.AXIS, Direction.Axis.X));
+			}
+		}
+	}
+
+	/**
+	 * Keeps the sequence waiting until the traveller is in the dimension it set off for.
+	 *
+	 * <p>Thrown through the helper rather than as a plain {@code AssertionError}, because the
+	 * sequence only treats a {@code GameTestAssertException} as "not yet" — anything else ends the
+	 * test on the first tick. The message doubles as the timeout's, so it says where the traveller
+	 * is stuck.
+	 */
+	private void waitForArrival(GameTestHelper helper, UUID uuid, ResourceKey<Level> dimension,
+			String scenario) {
+		Entity traveller = helper.getLevel().getEntityInAnyDimension(uuid);
+		if (traveller == null) {
+			throw helper.assertionException(Component.literal(scenario
+					+ ": the traveller is gone, so it can never arrive in " + dimension.identifier()));
+		}
+		if (!traveller.level().dimension().equals(dimension)) {
+			throw helper.assertionException(Component.literal(scenario + ": the traveller is still in "
+					+ traveller.level().dimension().identifier() + " at "
+					+ (long) traveller.position().x() + ", " + (long) traveller.position().z()
+					+ " rather than " + dimension.identifier()));
+		}
+	}
+
+	private Entity traveller(GameTestHelper helper, UUID uuid, String scenario) {
+		Entity traveller = helper.getLevel().getEntityInAnyDimension(uuid);
+		if (traveller == null) {
+			throw new AssertionError(scenario + ": the traveller went away before it could be asked"
+					+ " where it ended up");
+		}
+		return traveller;
+	}
+
+	/**
+	 * Puts back everything the journeys moved: the run's spawn, a border wide enough not to fence
+	 * anybody in, and the two pigs, which are in other dimensions by now.
+	 */
+	private void putTheWorldBack(GameTestHelper helper) {
+		MinecraftServer server = helper.getLevel().getServer();
+		if (spawnBeforeTheJourneys != null) {
+			server.getWorldData().overworldData().setSpawn(spawnBeforeTheJourneys);
+		}
+		runCommand(server, "mhr border " + BorderTier.INFINITE.id());
+		for (UUID uuid : new UUID[] {netherTraveller, endTraveller}) {
+			Entity traveller = uuid == null ? null : helper.getLevel().getEntityInAnyDimension(uuid);
+			if (traveller != null) {
+				traveller.discard();
+			}
+		}
+	}
+
 	// --- plumbing ----------------------------------------------------------------------------------
 
 	/**
@@ -406,7 +639,17 @@ public final class WorldBorderGameTest {
 	 * every criterion that is red instead of only the first.
 	 */
 	private static void scenario(List<String> failures, String name, Runnable body) {
+		beginScenario(name);
+		verdict(failures, name, body);
+	}
+
+	/** The start of a scenario whose verdict comes ticks later, once a traveller has arrived. */
+	private static void beginScenario(String name) {
 		LOGGER.info("=== scenario {} ===", name);
+	}
+
+	/** The end of one: a failure is recorded rather than thrown, so the rest still runs. */
+	private static void verdict(List<String> failures, String name, Runnable body) {
 		try {
 			body.run();
 			LOGGER.info("=== scenario {}: PASS ===", name);

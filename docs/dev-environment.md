@@ -524,7 +524,7 @@ the unlock file, which is exactly the difference between rejoining and starting 
 
 #### The world border
 
-Where each border ends up is arithmetic, so most of it is a **server GameTest**, in
+Almost all of it is a **server GameTest**, in
 `src/gametest/java/fi/vilpponen/mhr/gametest/WorldBorderGameTest.java`. Every scenario picks its
 tier the way a player does, with `mhr border <tier>`, and then reads the border vanilla itself is
 enforcing rather than asking the mod to repeat its own sums back. Each one also moves the run's
@@ -564,33 +564,41 @@ needs, and each is named in the log the way the client scenarios are:
   retuned size, in every dimension and with no rebuild. Taking the override away puts the bundled
   number back the same way.
 
-A portal transition is not arithmetic, though, and it is the one place a wrong border hides: vanilla
-drags a portal destination back inside whatever border it is given, so a nether border left on the
-raw overworld coordinates strands nobody — it quietly lands them hundreds of blocks from the portal
-they walked into. That has to be walked through, so it is a **client GameTest**, in
-`src/gametest/java/fi/vilpponen/mhr/gametest/client/WorldBorderPortalClientTest.java`. The
-assertions are still all server-side; the client is there because it is the only traveller the
-harness has.
+The last two are the same method's work, but they are not arithmetic and they do not finish in the
+tick they start in, so they run on a sequence at the end of it. A portal transition is the one place
+a wrong border hides: vanilla drags a portal destination back inside whatever border it is given, so
+a nether border left on the raw overworld coordinates strands nobody — it quietly lands the traveller
+hundreds of blocks from the portal they walked into, and an "is it inside the border" check on its
+own sees nothing wrong. A pig is the traveller, because this server has no players and a mob goes
+through a portal the same way one does:
 
-- **the-border-wall-stands-at-the-tier-size** — the wall photographed from eighteen blocks short of
-  its own edge on tiny and again on medium, each checked against half the tier's width in the
-  balance file.
-- **a-nether-portal-inside-the-border-lands-inside-the-nether-border** — a real four-by-five
-  obsidian portal, built fifty blocks from the run's spawn and so inside the tiny border but nowhere
-  near its center, walked through by the connected player. The arrival has to be inside the nether
-  border *and* within a few blocks of where the 1:8 mapping puts the portal.
-- **a-real-end-transition-lands-inside-the-end-border** — a real end portal, and the obsidian
-  platform the player lands on is inside the end border. It is a hundred blocks from the origin,
-  which is further out than the tiny tier is wide — the `endBorder.minimumSize` floor is what makes
-  the difference between arriving and arriving outside the wall.
+- **a-real-nether-portal-lands-the-traveller-inside-the-nether-border** — a real four-by-five
+  obsidian frame built in the test area, with the run's spawn set fifty blocks west of it so the
+  portal is inside the tiny border but nowhere near its center. A pig stands in the doorway, walled
+  in so it cannot wander off, and the sequence waits for it to turn up in the nether. The arrival
+  has to be inside the nether border *and* within a few blocks of where the 1:8 mapping puts the
+  portal.
+- **a-real-end-transition-lands-the-traveller-inside-the-end-border** — a real end portal block, a
+  pig standing in it, and the obsidian platform it lands on has to be inside the end border. That
+  platform is a hundred blocks from the origin, which is further out than the tiny tier is wide, so
+  the `endBorder.minimumSize` floor is what makes the difference between arriving and arriving
+  outside the wall.
+
+Only one thing about this feature needs a client, and it is not the border — it is the *copy of* the
+border. A connected player never sees the server's; they see their own, kept up to date by packets,
+and the wall is drawn from that. A tier bought mid-run that never reached the client would leave the
+player stopped by a wall they cannot see while the server looked perfectly correct. So
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/WorldBorderClientTest.java` has one scenario:
+
+- **a-tier-change-reaches-the-connected-client** — `mhr border tiny` and then `mhr border medium`
+  while a player is connected. After each, the client's own border has to match the server's size
+  and center, and the wall has to be drawn half the tier's width from the run's spawn. Two tiers
+  rather than one, because a client that never updated its copy would still match on the first —
+  that is the border it was handed when it joined.
 
 | The tiny wall, 64 blocks from spawn | The medium wall, 256 blocks from spawn |
 | ----------------------------------- | -------------------------------------- |
 | ![the border wall seen from eighteen blocks away](images/gametest-border-tiny-wall.png) | ![the same wall, a tier wider out](images/gametest-border-medium-wall.png) |
-
-| Out of the portal, inside the nether border | On the end's arrival platform |
-| ------------------------------------------- | ----------------------------- |
-| ![the player standing in the portal vanilla built for them in the nether](images/gametest-border-nether-arrival.png) | ![the obsidian platform east of the end island](images/gametest-border-end-arrival.png) |
 
 ### What is still manual
 
@@ -775,9 +783,9 @@ Nothing here needs doing by hand any more:
 scripts/dev.sh gametest
 ```
 
-covers all four tiers, all three dimensions, what a balance reload does and does not change, and two
-real transitions walked out of the overworld: a nether portal, and an end portal. Coming back is a
-command teleport, because the way home is not what the border promises anything about. See [Automated gameplay tests](#automated-gameplay-tests). What follows
+covers all four tiers, all three dimensions, what a balance reload does and does not change, two
+real transitions out of the overworld — a nether portal and an end portal, with a pig as the
+traveller — and that a tier change reaches a connected client's own copy of the border. See [Automated gameplay tests](#automated-gameplay-tests). What follows
 is how to poke at it on the dev server when you want to *see* it rather than prove it.
 
 A run starts on the `tiny` tier, and the border is placed when the server starts, centered on the
