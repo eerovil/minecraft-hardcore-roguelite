@@ -28,9 +28,13 @@ Things to decide:
 
 - Natural regeneration: which vanilla+ tiers exist and what each one does.
 - Hunger easing: which of the four ideas in section 10 is actually used.
-- Armor slots: one unlock for all four, or four separate unlocks.
 - Start chest: exact item list and pricing, including the enchanted tiers.
 - Which positive status effects are safe to sell permanently, and which break the game.
+
+Settled since:
+
+- Armor slots are four separate unlocks, not one. Offhand is a fifth. Implemented in
+  `fi.vilpponen.mhr.equipment`.
 
 ## Technical, once coding starts
 

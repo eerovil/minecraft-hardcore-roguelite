@@ -3,7 +3,14 @@
 	"package": "fi.vilpponen.mhr.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"mixins": [
+		"EquipmentSlotLockMixin",
+		"LockedArmorSlotVisibleMixin",
+		"LockedSlotPlacementMixin",
+		"PlayerEquipmentMixin",
 		"TreeGenerationMixin"
+	],
+	"client": [
+		"client.LockedSlotOverlayMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

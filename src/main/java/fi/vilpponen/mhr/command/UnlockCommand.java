@@ -6,6 +6,8 @@ import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import fi.vilpponen.mhr.Unlock;
 import fi.vilpponen.mhr.UnlockState;
+import fi.vilpponen.mhr.equipment.EquipmentLocks;
+import fi.vilpponen.mhr.equipment.EquipmentSlots;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -62,9 +64,16 @@ public final class UnlockCommand {
 		}
 
 		boolean changed = UnlockState.get().set(unlock, owned);
+		if (changed) {
+			// Tell the clients, and re-apply the slot rule to anyone already wearing something.
+			EquipmentSlots.onUnlocksChanged(context.getSource().getServer());
+		}
 		String verb = owned ? "Unlocked " : "Locked ";
 		String note = changed ? "" : " (no change)";
-		String suffix = " — worldgen changes apply to new chunks only.";
+		// Equipment slots take effect at once; the worldgen unlocks do not.
+		String suffix = EquipmentLocks.isSlotUnlock(unlock)
+				? "."
+				: " — worldgen changes apply to new chunks only.";
 		context.getSource().sendSuccess(() -> Component.literal(verb + unlock.id() + note + suffix), true);
 		return changed ? 1 : 0;
 	}
