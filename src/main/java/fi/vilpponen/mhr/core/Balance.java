@@ -127,16 +127,16 @@ public final class Balance {
 		if (!(found instanceof JsonPrimitive primitive) || !primitive.isNumber()) {
 			throw new BalanceException("Balance value '" + path + "' should be a number, not " + found);
 		}
-		return found.getAsDouble();
+		return Numbers.finite(found.getAsDouble(), path);
 	}
 
-	/** Same as {@link #number}, for a value that must be whole. */
+	/**
+	 * Same as {@link #number}, for a value that must be whole.
+	 *
+	 * @throws BalanceException if the value is fractional, or too big to be an {@code int}
+	 */
 	public int integer(String path, int fallback) {
-		double value = number(path, fallback);
-		if (value != Math.rint(value)) {
-			throw new BalanceException("Balance value '" + path + "' should be a whole number, not " + value);
-		}
-		return (int) value;
+		return Numbers.toInt(number(path, fallback), path);
 	}
 
 	/** Top-level sections present in the merged file, including ones nothing reads yet. */

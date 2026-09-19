@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import net.fabricmc.loader.api.FabricLoader;
@@ -24,6 +25,22 @@ import net.fabricmc.loader.api.FabricLoader;
 public final class UnlockState {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final String FILE_NAME = "hardcore-roguelite-unlocks.json";
+
+	/**
+	 * Unlock ids that have been renamed, old name to current one.
+	 *
+	 * <p>A save written before the rename is migrated on load and rewritten once, so nobody loses a
+	 * purchase to a refactor. An entry can be dropped once no save that old can plausibly exist —
+	 * for {@code trees} and the five {@code slot_*} names that is as soon as the mod has shipped
+	 * anywhere, since they predate the namespaced ids and only ever existed in development.
+	 */
+	private static final Map<String, String> RENAMED_IDS = Map.of(
+			"trees", "world.trees",
+			"slot_helmet", "player.slot.helmet",
+			"slot_chestplate", "player.slot.chestplate",
+			"slot_leggings", "player.slot.leggings",
+			"slot_boots", "player.slot.boots",
+			"slot_offhand", "player.slot.offhand");
 
 	private static volatile UnlockState instance;
 
@@ -79,21 +96,34 @@ public final class UnlockState {
 		if (!Files.isRegularFile(file)) {
 			return;
 		}
+		boolean migrated = false;
 		try (Reader reader = Files.newBufferedReader(file)) {
 			String[] ids = GSON.fromJson(reader, String[].class);
 			if (ids == null) {
 				return;
 			}
 			for (String id : ids) {
-				Unlock unlock = Unlock.byId(id);
+				String current = RENAMED_IDS.getOrDefault(id, id);
+				Unlock unlock = Unlock.byId(current);
 				if (unlock == null) {
 					HardcoreRoguelite.LOGGER.warn("Ignoring unknown unlock id '{}' in {}", id, file);
 				} else {
+					if (!current.equals(id)) {
+						HardcoreRoguelite.LOGGER.info("Unlock '{}' is now called '{}'", id, current);
+						migrated = true;
+					}
 					owned.add(unlock);
 				}
 			}
 		} catch (IOException | RuntimeException e) {
 			HardcoreRoguelite.LOGGER.error("Could not read {}, starting with nothing unlocked", file, e);
+			return;
+		}
+
+		// Write the new names back straight away, so the migration happens once rather than on
+		// every start, and so the file on disk always says what the code says.
+		if (migrated) {
+			save();
 		}
 	}
 

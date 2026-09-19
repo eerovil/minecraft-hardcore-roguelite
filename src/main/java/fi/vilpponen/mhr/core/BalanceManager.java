@@ -218,14 +218,11 @@ public final class BalanceManager {
 
 	private static int wholeNumber(JsonObject parent, String key, String path, int min) {
 		double value = number(parent, key, path);
-		if (value != Math.rint(value)) {
-			throw new BalanceException("Balance value '" + path + "' should be a whole number, not " + value);
+		int whole = Numbers.toInt(value, path);
+		if (whole < min) {
+			throw new BalanceException("Balance value '" + path + "' should be at least " + min + ", not " + whole);
 		}
-		if (value < min) {
-			throw new BalanceException("Balance value '" + path + "' should be at least " + min + ", not "
-					+ (long) value);
-		}
-		return (int) value;
+		return whole;
 	}
 
 	private static double positiveNumber(JsonObject parent, String key, String path) {
@@ -244,6 +241,6 @@ public final class BalanceManager {
 		if (!(found instanceof JsonPrimitive primitive) || !primitive.isNumber()) {
 			throw new BalanceException("Balance value '" + path + "' should be a number, not " + found);
 		}
-		return found.getAsDouble();
+		return Numbers.finite(found.getAsDouble(), path);
 	}
 }

@@ -29,8 +29,8 @@ There is no shop and no currency yet, so unlocks are toggled with a dev command:
 
 ```
 /mhr list
-/mhr unlock trees
-/mhr unlock slot_boots
+/mhr unlock world.trees
+/mhr unlock player.slot.boots
 ```
 
 Prices, rewards, border sizes and the mob damage multiplier are data, not code: they live in

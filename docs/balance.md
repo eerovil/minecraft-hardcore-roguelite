@@ -79,12 +79,19 @@ player.slot.offhand
 world.border.medium
 ```
 
+There is exactly one id per unlock. The same string is the key in the balance file, the value
+written to `config/hardcore-roguelite-unlocks.json`, the argument the dev command takes, and what
+`Unlock.id()` returns — so `balance.unlockPrice(unlock.id())` finds the price, and nothing needs a
+table translating one id into another.
+
 An id is written into config files and saved state, so it has to survive constants being reordered,
 renamed or removed. Adding an unlock later is adding a key to the balance file — no change to how
 state is persisted, how the shop is built, or how balance is loaded.
 
-Feature code that owns an enum of unlocks should return the full id from it, so
-`balance.unlockPrice(unlock.id())` just works.
+Renaming one is a save migration, not a rename. `UnlockState.RENAMED_IDS` holds the old names that
+still have to be understood: a save written before the rename is migrated on load and rewritten
+once, so a purchase is never orphaned. Adding an unlock never needs an entry there — only changing
+the name of one that already shipped.
 
 ## When a broken file is noticed
 
