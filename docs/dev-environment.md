@@ -102,6 +102,28 @@ scripts/dev.sh rcon "place feature minecraft:oak 4 101 4"
 Locked, that answers "Failed to place feature". After `mhr unlock trees` it answers "Placed". The unlock file lives at `/server/config/hardcore-roguelite-unlocks.json`
 on the volume — outside the world, because unlocks are meant to survive it.
 
+## Testing the equipment slots
+
+All five slots start locked. On the server side you can flip them and see the state:
+
+```sh
+scripts/dev.sh rcon "mhr list"
+scripts/dev.sh rcon "mhr unlock slot_offhand"
+```
+
+The rest needs a real client, because the lock marker is drawn client-side and the equip attempts
+have to come from a player. Join through the port-forward and check:
+
+- Open the inventory: the four armor squares and the offhand square carry a padlock.
+- Try to click, shift-click or number-key an armor piece into a locked slot — nothing moves.
+- Right-click a helmet held in hand: it stays in your hand.
+- Nothing can be dropped into a locked offhand, so there is never an offhand item to use with.
+- `mhr unlock slot_helmet` while the inventory is open: the helmet padlock disappears at once, the
+  other four stay. Equipping a helmet then works and nothing else changed.
+
+The server tells the client which slots are open when you join and again whenever `mhr unlock` or
+`mhr lock` changes something, so the client's own config file is never consulted while connected.
+
 ## Resource use
 
 The Mac node has 8 CPUs and 24 GB. The build pod is capped at 6 CPU / 8 GB and the server at

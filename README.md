@@ -18,14 +18,19 @@ first run if you can afford it, so you pick your own path.
 
 ## Status
 
-Early. Fabric mod for Minecraft 26.3 that builds and runs, with one unlock implemented:
-**trees**. Until you buy it, the world generates without trees and saplings won't grow.
+Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks implemented:
+
+- **trees** — until you buy it, the world generates without trees and saplings won't grow.
+- **the five equipment slots** — helmet, chestplate, leggings, boots and offhand, each bought
+  separately. A locked slot shows a padlock in the inventory and refuses every item. You can still
+  craft, pick up and store the gear; you just can't wear it.
 
 There is no shop and no currency yet, so unlocks are toggled with a dev command:
 
 ```
 /mhr list
 /mhr unlock trees
+/mhr unlock slot_boots
 ```
 
 - [`docs/design-v0.2.fi.md`](docs/design-v0.2.fi.md) — full design document (v0.2, in Finnish)

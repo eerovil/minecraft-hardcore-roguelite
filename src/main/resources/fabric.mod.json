@@ -12,7 +12,8 @@
 	"license": "MIT",
 	"environment": "*",
 	"entrypoints": {
-		"main": ["fi.vilpponen.mhr.HardcoreRoguelite"]
+		"main": ["fi.vilpponen.mhr.HardcoreRoguelite"],
+		"client": ["fi.vilpponen.mhr.equipment.client.EquipmentLockClient"]
 	},
 	"mixins": ["hardcore_roguelite.mixins.json"],
 	"depends": {
