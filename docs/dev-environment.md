@@ -586,7 +586,7 @@ harness has.
 
 | The tiny wall, 64 blocks from spawn | The medium wall, 256 blocks from spawn |
 | ----------------------------------- | -------------------------------------- |
-| ![the border wall seen from eight blocks away](images/gametest-border-tiny-wall.png) | ![the same wall, a tier wider out](images/gametest-border-medium-wall.png) |
+| ![the border wall seen from eighteen blocks away](images/gametest-border-tiny-wall.png) | ![the same wall, a tier wider out](images/gametest-border-medium-wall.png) |
 
 | Out of the portal, inside the nether border | On the end's arrival platform |
 | ------------------------------------------- | ----------------------------- |
