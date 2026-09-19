@@ -1,6 +1,7 @@
 package fi.vilpponen.mhr.enchant;
 
 import fi.vilpponen.mhr.HardcoreRoguelite;
+import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
@@ -12,9 +13,10 @@ import net.minecraft.world.item.enchantment.Enchantment;
 /**
  * What the crafted-tool enchant is worth, and what it may touch — all of it data.
  *
- * <p>Nothing here is a number. The two knobs are read out of {@code default-balance.json} at the
- * moment they are used, so a balance edit plus {@code /mhr reload} changes them mid-game, and the
- * two sets — which items count and which enchantments can turn up — are tags, so a datapack can
+ * <p>Nothing here is a number. The two knobs come from {@code default-balance.json}, checked as the
+ * balance loads and read again at the moment they are used, so a balance edit plus
+ * {@code /mhr reload} changes them mid-game while a bad one never becomes the balance in effect.
+ * The two sets — which items count and which enchantments can turn up — are tags, so a datapack can
  * widen or replace either without the mod being rebuilt.
  *
  * <p>See {@code docs/balance.md}.
@@ -36,9 +38,6 @@ public final class CraftEnchantBalance {
 	static final TagKey<Enchantment> POOL = TagKey.create(Registries.ENCHANTMENT,
 			Identifier.fromNamespaceAndPath(HardcoreRoguelite.MOD_ID, "craft_enchant_pool"));
 
-	private static final String MAX_UNLOCK_LEVEL = "vanillaPlus.craftEnchant.maxUnlockLevel";
-	private static final String STRENGTH_PER_LEVEL = "vanillaPlus.craftEnchant.strengthPerLevel";
-
 	private CraftEnchantBalance() {
 	}
 
@@ -49,7 +48,7 @@ public final class CraftEnchantBalance {
 
 	/** How many times the unlock can be bought. */
 	public static int maxUnlockLevel() {
-		return BalanceManager.get().integer(MAX_UNLOCK_LEVEL);
+		return BalanceManager.get().craftEnchant().maxUnlockLevel();
 	}
 
 	/**
@@ -59,8 +58,9 @@ public final class CraftEnchantBalance {
 	 * {@code /mhr reload} lands on the next item crafted.
 	 */
 	public static int enchantmentLevel(int unlockLevel, int maxEnchantmentLevel) {
+		Balance.CraftEnchantBalance tuning = BalanceManager.get().craftEnchant();
 		return enchantmentLevel(unlockLevel, maxEnchantmentLevel,
-				maxUnlockLevel(), BalanceManager.get().number(STRENGTH_PER_LEVEL));
+				tuning.maxUnlockLevel(), tuning.strengthPerLevel());
 	}
 
 	/**

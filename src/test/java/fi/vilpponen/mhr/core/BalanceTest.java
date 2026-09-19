@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 class BalanceTest {
 	private static Balance of(String json) {
 		JsonObject source = JsonParser.parseString(json).getAsJsonObject();
-		return new Balance(Map.of(), Map.of(), Map.of(), 1.0, source);
+		return new Balance(Map.of(), Map.of(), Map.of(), 1.0, new Balance.CraftEnchantBalance(4, 0.25), source);
 	}
 
 	@Test

@@ -47,6 +47,8 @@ public final class BalanceManager {
 	private static final Set<String> BORDER_KEYS = Set.of("size", "price");
 	private static final Set<String> CURRENCY_KEYS = Set.of("advancements");
 	private static final Set<String> DIFFICULTY_KEYS = Set.of("mobDamageMultiplier");
+	private static final Set<String> VANILLA_PLUS_KEYS = Set.of("craftEnchant");
+	private static final Set<String> CRAFT_ENCHANT_KEYS = Set.of("maxUnlockLevel", "strengthPerLevel");
 
 	private static volatile Balance current;
 
@@ -270,7 +272,12 @@ public final class BalanceManager {
 		}
 	}
 
-	private static Balance bind(JsonObject merged) {
+	/**
+	 * Turn the merged file into a snapshot, checking every value on the way.
+	 *
+	 * <p>Package-private rather than private so a test can hand it a file and see what it refuses.
+	 */
+	static Balance bind(JsonObject merged) {
 		JsonObject currency = object(merged, "currency", "currency", CURRENCY_KEYS);
 		JsonObject advancements = object(currency, "advancements", "currency.advancements", null);
 		Map<String, Integer> rewards = new LinkedHashMap<>();
@@ -300,7 +307,15 @@ public final class BalanceManager {
 		JsonObject difficulty = object(merged, "difficulty", "difficulty", DIFFICULTY_KEYS);
 		double mobDamage = positiveNumber(difficulty, "mobDamageMultiplier", "difficulty.mobDamageMultiplier");
 
-		return new Balance(rewards, unlocks, borders, mobDamage, merged);
+		JsonObject vanillaPlus = object(merged, "vanillaPlus", "vanillaPlus", VANILLA_PLUS_KEYS);
+		JsonObject craftEnchantSection = object(vanillaPlus, "craftEnchant", "vanillaPlus.craftEnchant",
+				CRAFT_ENCHANT_KEYS);
+		Balance.CraftEnchantBalance craftEnchant = new Balance.CraftEnchantBalance(
+				wholeNumber(craftEnchantSection, "maxUnlockLevel", "vanillaPlus.craftEnchant.maxUnlockLevel", 1),
+				positiveNumber(craftEnchantSection, "strengthPerLevel",
+						"vanillaPlus.craftEnchant.strengthPerLevel"));
+
+		return new Balance(rewards, unlocks, borders, mobDamage, craftEnchant, merged);
 	}
 
 	/**
