@@ -42,19 +42,10 @@ import net.fabricmc.loader.api.FabricLoader;
  * memory, not what the running game believes. There is nothing half-applied to notice, report or
  * recover from.
  *
- * <p>"Landed" means the rename, and {@link AtomicFile} says which side of it a failure is on,
- * because the two sides need opposite answers:
- *
- * <ul>
- *   <li><b>Before it</b> — nothing was written. Memory keeps the old snapshot and the caller is
- *       told the change did not happen.</li>
- *   <li><b>After it</b> — the file already <em>is</em> the new snapshot, so memory adopts it and
- *       the caller is told the change did happen, because it did. Holding on to the old snapshot
- *       here is what would let the next write put it back over a purchase that is on the disk.
- *       What is in doubt is only whether the rename survives a power cut, and that doubt becomes
- *       {@link #durabilityInDoubt}: it does not go away, and nothing further is written until the
- *       game is started again.</li>
- * </ul>
+ * <p>"Landed" means the atomic rename {@link AtomicFile} finishes with, and because that rename is
+ * the last thing it does, a failed write is always a write that did not happen. There is one case
+ * to handle and not a taxonomy of them: keep the old snapshot, and tell the caller the change did
+ * not happen.
  *
  * <p>Stored in the Fabric config directory rather than in a world, because a run is disposable and
  * progression is not. See {@code docs/codebase/progression.md}.
@@ -111,17 +102,6 @@ public final class Progress {
 	private final Path file;
 	private int currency;
 	private Map<String, Integer> levels = Map.of();
-
-	/**
-	 * Set once a snapshot reached the file but could not be made to survive a power cut.
-	 *
-	 * <p>Sticky on purpose, and the reason there is no second guess about it. The filesystem has
-	 * just failed on the step that makes a rename durable; writing more snapshots into it would
-	 * stack up more changes with the same doubt over them, each one reported as safely stored.
-	 * Refusing until the game is started again is the same fail-closed rule the reading side
-	 * follows.
-	 */
-	private AtomicFile.WrittenNotFlushed durabilityInDoubt;
 
 	private Progress(Path file) {
 		this.file = file;
@@ -224,12 +204,6 @@ public final class Progress {
 	 * a running game believing something the disk has never heard of.
 	 */
 	private synchronized void commit(int nextCurrency, Map<String, Integer> nextLevels) {
-		if (durabilityInDoubt != null) {
-			throw new PersistenceException("Not writing to " + file + ": the last snapshot reached it but"
-					+ " could not be made durable, so nothing more is written until the game is"
-					+ " started again.", durabilityInDoubt);
-		}
-
 		JsonObject root = new JsonObject();
 		root.addProperty(CURRENCY, nextCurrency);
 		JsonObject unlocks = new JsonObject();
@@ -240,24 +214,10 @@ public final class Progress {
 
 		try {
 			AtomicFile.write(file, GSON.toJson(root));
-		} catch (AtomicFile.WrittenNotFlushed e) {
-			// Past the commit point: the file is this snapshot now. Adopt it — the alternative is a
-			// running game whose idea of progression is older than the disk's, which is the shape
-			// that quietly undoes a purchase on the next write.
-			adopt(nextCurrency, nextLevels);
-			durabilityInDoubt = e;
-			HardcoreRoguelite.LOGGER.error(
-					"Progression was written to {} and may not survive a power cut. It is in effect and"
-							+ " nothing further will be written this session.", file, e);
-			return;
 		} catch (IOException e) {
 			throw new PersistenceException("Could not write " + file, e);
 		}
 
-		adopt(nextCurrency, nextLevels);
-	}
-
-	private synchronized void adopt(int nextCurrency, Map<String, Integer> nextLevels) {
 		currency = nextCurrency;
 		levels = Collections.unmodifiableMap(new TreeMap<>(nextLevels));
 	}

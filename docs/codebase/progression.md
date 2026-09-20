@@ -250,23 +250,27 @@ Rules to keep:
   and own nothing. Do not add a second file for a new kind of permanent progression — add a key to
   the snapshot.
 - **Never change memory before the write.** That is the whole of the guarantee.
-- **The rename is the commit point, and the two sides of it get opposite answers.** `AtomicFile`
-  says which side a failure is on, and that distinction is the contract:
-  - *before it* — `NotWritten`. The file still holds what it held, memory keeps the old snapshot,
-    the purchase is refused. Nothing happened and saying so is honest.
-  - *after it* — `WrittenNotFlushed`. The file already **is** the new snapshot, so memory adopts it
-    and the purchase is reported as what it was: bought. Keeping the old snapshot in memory here is
-    exactly what lets the next write put it back over a purchase that is on the disk. What is in
-    doubt is only whether the rename survives a power cut, and that doubt is sticky: nothing further
-    is written until the game is started again.
+- **One storage rule: temp file, flush it, atomic rename — and the rename is last.** So every
+  failed write is a write that did not happen, and there is one case to handle rather than a
+  taxonomy of them. `Progress` keeps the old snapshot and the purchase is refused.
 
-  So the file, the running game and the player can never be told three different things.
+  This replaced a growing set of failure classifications — a post-rename exception type, an
+  injectable directory flusher, a sticky session state, and a guess about whether a platform
+  refusing to open a directory was a missing capability or a real error. Each was a correct answer
+  to a narrow question, and together they were a bespoke storage protocol nobody could reason
+  about. **If a new filesystem edge case turns up, do not add the next classifier here.** Either it
+  is covered by the one rule, or the requirement belongs behind a persistence library written to
+  provide it.
+- **What this does and does not promise.** The file's own contents are flushed before the rename, so
+  a reader never sees a half-written snapshot. The directory entry is not flushed, so on some
+  filesystems a power cut in the instant after the rename can lose the rename and leave the previous
+  snapshot in place — an older one, never a broken one. That is a documented limit, not an
+  oversight: losing the last purchase to a power cut costs a player one purchase, and a storage
+  protocol nobody can reason about costs them the lot.
 - **Fail closed at the file boundary.** Both halves of this matter:
   - `AtomicFile` does not fall back. A filesystem that will not promise an atomic rename gets an
     error rather than a quiet plain replace, because a caller told "written" would sell something on
-    the strength of a guarantee that was never made. The directory flush separates *the platform
-    will not open a directory* (a capability — said once, write stands) from *the flush we asked for
-    failed* (a real failure — reported).
+    the strength of a guarantee that was never made.
   - Reading invents nothing. No file is a new player and starts from nothing; a file that is there
     and cannot be read stops the game with the path named. Starting empty is the one mistake that
     cannot be undone, because the next purchase writes the empty profile over the real one.
