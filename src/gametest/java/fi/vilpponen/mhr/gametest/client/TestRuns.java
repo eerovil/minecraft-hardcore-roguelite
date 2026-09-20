@@ -430,6 +430,21 @@ final class TestRuns {
 	/** Both halves of the server's own run state will survive a restart. */
 	static final String PERSISTABLE = "trader persistable, sequences persistable";
 
+	/**
+	 * Clear the dirty flags, exactly as saving to disk does.
+	 *
+	 * <p>Without this the persistability check answers for the wrong reason. Drawing from a random
+	 * sequence marks it dirty by itself, so a run that used one leaves the flag set and a reset that
+	 * never marked anything would look fine. Starting from "everything is written" makes the next
+	 * answer about the reset and nothing else.
+	 */
+	static void pretendEverythingIsSaved(TestDedicatedServerContext server) {
+		server.runOnServer(minecraftServer -> {
+			minecraftServer.getDataStorage().get(WanderingTraderData.TYPE).setDirty(false);
+			minecraftServer.getRandomSequences().setDirty(false);
+		});
+	}
+
 	/** Wait for one full server tick, so a command issued just before it has certainly run. */
 	static void settle(TestDedicatedServerContext server) {
 		server.runOnServer(unused -> {

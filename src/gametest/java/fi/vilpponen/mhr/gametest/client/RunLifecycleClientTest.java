@@ -458,6 +458,9 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	/** Starting again builds a different world, and none of the old one survives into it. */
 	private void theNextRunIsANewWorld(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		// So that "this will be written to disk" afterwards is about the reset and not about run 1
+		// having happened to leave a flag set. See TestRuns.pretendEverythingIsSaved.
+		TestRuns.pretendEverythingIsSaved(server);
 		TestRuns.start(server);
 		connection.waitForChunksRender();
 
