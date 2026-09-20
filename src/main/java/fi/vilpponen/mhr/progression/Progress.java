@@ -45,6 +45,12 @@ import net.fabricmc.loader.api.FabricLoader;
  * <p>Stored in the Fabric config directory rather than in a world, because a run is disposable and
  * progression is not. See {@code docs/codebase/progression.md}.
  *
+ * <p><b>Reading fails closed.</b> No file at all is a new player and starts from nothing. A file
+ * that is there and cannot be read is something else entirely, and this refuses to load rather than
+ * carrying on as though the player had bought nothing — because a profile that starts empty is a
+ * profile the next purchase writes over, and the purchases that could not be read would be gone for
+ * good. The game stops at startup with the file named, the same way a broken balance file stops it.
+ *
  * <p>{@link fi.vilpponen.mhr.UnlockState} and {@link Wallet} are the two views feature code talks
  * to. Neither of them owns anything; this does.
  *
@@ -219,11 +225,15 @@ public final class Progress {
 		migrateFromTheOldFiles();
 	}
 
+	/**
+	 * @throws PersistenceException if the file is there and cannot be read. Starting empty would be
+	 *     a lie that the next purchase makes permanent.
+	 */
 	private synchronized void readSnapshot() {
 		try (Reader reader = Files.newBufferedReader(file)) {
 			JsonElement root = JsonParser.parseReader(reader);
 			if (root == null || !root.isJsonObject()) {
-				return;
+				throw new PersistenceException("Progression in " + file + " is not an object", null);
 			}
 			JsonObject json = root.getAsJsonObject();
 			JsonElement total = json.get(CURRENCY);
@@ -235,11 +245,24 @@ public final class Progress {
 					: new TreeMap<>();
 			levels = Collections.unmodifiableMap(read);
 		} catch (IOException | RuntimeException e) {
-			// Deliberately not fatal, and deliberately not a guess: progression we cannot read is a
-			// problem, but refusing to start the game over it helps nobody, and nothing is written
-			// back until something legitimately changes, so the file is still there to be looked at.
-			HardcoreRoguelite.LOGGER.error("Could not read {}, starting this session with nothing", file, e);
+			throw failedToRead(file, e);
 		}
+	}
+
+	/**
+	 * One message for every way progression can be unreadable, and one thing to do about it.
+	 *
+	 * <p>Deliberately fatal. The file still holds whatever it holds, so the player's purchases are
+	 * where they were and a fixed file brings them back; the one outcome that cannot be undone is
+	 * playing on from nothing and then buying something.
+	 */
+	private static PersistenceException failedToRead(Path file, Throwable cause) {
+		if (cause instanceof PersistenceException already) {
+			return already;
+		}
+		return new PersistenceException(
+				"Could not read " + file + ", so the game is stopping rather than starting as though"
+						+ " nothing had ever been bought. Fix or move the file and start again.", cause);
 	}
 
 	/**
@@ -254,25 +277,23 @@ public final class Progress {
 		Path oldUnlocks = directory.resolve(LEGACY_UNLOCKS);
 		Path oldCurrency = directory.resolve(LEGACY_CURRENCY);
 		if (!Files.isRegularFile(oldUnlocks) && !Files.isRegularFile(oldCurrency)) {
+			// A player who has never bought anything. Nothing to carry over, and nothing is written
+			// until they do.
 			return;
 		}
 
+		// Every source that is there has to be read whole before anything is written. A source that
+		// is present and unreadable used to count as empty, which turned a file that could have been
+		// repaired into a snapshot saying those purchases never happened.
 		Map<String, Integer> read = readLegacyUnlocks(oldUnlocks);
 		int total = readLegacyCurrency(oldCurrency);
+
 		HardcoreRoguelite.LOGGER.info("Moving progression into one file: {} unlock(s) and {} currency from {}",
 				read.size(), total, directory);
-
-		try {
-			commit(total, read);
-		} catch (PersistenceException e) {
-			// The old files are untouched, so the next start tries again and nothing is lost. What
-			// this session loses is the ability to write anything, which it would have lost anyway.
-			HardcoreRoguelite.LOGGER.error("Could not write {}; the old files are still there", file, e);
-			currency = total;
-			levels = Collections.unmodifiableMap(new TreeMap<>(read));
-		}
+		commit(total, read);
 	}
 
+	/** @throws PersistenceException if the file is there and cannot be read whole. */
 	private static Map<String, Integer> readLegacyUnlocks(Path oldUnlocks) {
 		Map<String, Integer> read = new TreeMap<>();
 		if (!Files.isRegularFile(oldUnlocks)) {
@@ -292,25 +313,25 @@ public final class Progress {
 			}
 			read.putAll(levelsIn(root.getAsJsonObject()));
 		} catch (IOException | RuntimeException e) {
-			HardcoreRoguelite.LOGGER.error("Could not read {}; carrying nothing over from it", oldUnlocks, e);
+			throw failedToRead(oldUnlocks, e);
 		}
 		return read;
 	}
 
+	/** @throws PersistenceException if the file is there and cannot be read whole. */
 	private static int readLegacyCurrency(Path oldCurrency) {
 		if (!Files.isRegularFile(oldCurrency)) {
 			return 0;
 		}
 		try (Reader reader = Files.newBufferedReader(oldCurrency)) {
 			JsonElement root = JsonParser.parseReader(reader);
-			if (root == null || !root.isJsonObject()) {
+			if (root == null || root.isJsonNull()) {
 				return 0;
 			}
 			JsonElement total = root.getAsJsonObject().get("balance");
 			return total == null ? 0 : Math.max(0, total.getAsInt());
 		} catch (IOException | RuntimeException e) {
-			HardcoreRoguelite.LOGGER.error("Could not read {}; carrying nothing over from it", oldCurrency, e);
-			return 0;
+			throw failedToRead(oldCurrency, e);
 		}
 	}
 

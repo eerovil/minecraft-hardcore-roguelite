@@ -250,6 +250,17 @@ Rules to keep:
   and own nothing. Do not add a second file for a new kind of permanent progression — add a key to
   the snapshot.
 - **Never change memory before the write.** That is the whole of the guarantee.
+- **Fail closed at the file boundary.** Both halves of this matter:
+  - `AtomicFile` does not fall back. A filesystem that will not promise an atomic rename gets an
+    error rather than a quiet plain replace, because a caller told "written" would sell something on
+    the strength of a guarantee that was never made. The directory flush separates *the platform
+    will not open a directory* (a capability — said once, write stands) from *the flush we asked for
+    failed* (a real failure — reported).
+  - Reading invents nothing. No file is a new player and starts from nothing; a file that is there
+    and cannot be read stops the game with the path named. Starting empty is the one mistake that
+    cannot be undone, because the next purchase writes the empty profile over the real one.
+  - A migration commits only once **every** legacy file that is present has been read whole. A
+    present-but-unreadable source is not an empty one.
 - `Progress.commit` throws `PersistenceException` rather than logging and returning. A failed write
   that reports success is how a purchase ends up claimed but not stored.
 - The two old files are read once, on a profile written by an older build, and left where they are.

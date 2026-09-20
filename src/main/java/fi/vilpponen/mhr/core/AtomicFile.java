@@ -1,5 +1,6 @@
 package fi.vilpponen.mhr.core;
 
+import fi.vilpponen.mhr.HardcoreRoguelite;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -23,10 +24,17 @@ import java.nio.file.StandardOpenOption;
  * <p>The directory is forced too. A rename is a change to the directory, and without that the
  * rename itself can still be in a cache when the power goes.
  *
- * <p>Nothing here retries or falls back quietly. A write that did not happen is reported, because
- * the caller is the only one that knows whether it can carry on without it.
+ * <p><b>Nothing here falls back.</b> Permanent progression is built on the promise this class
+ * makes, so a filesystem that cannot keep the promise has to say so rather than quietly do
+ * something weaker: a plain replace instead of an atomic one leaves a window where the file is
+ * neither the old contents nor the new, and a caller told "written" would have sold something on
+ * the strength of it. Every failure is reported, because the caller is the only one that knows
+ * whether it can carry on without the write.
  */
 public final class AtomicFile {
+	/** Whether this run has already said that directories cannot be flushed. */
+	private static volatile boolean directoriesCannotBeOpened;
+
 	private AtomicFile() {
 	}
 
@@ -84,35 +92,59 @@ public final class AtomicFile {
 		}
 	}
 
-	/** Remove a file, and make sure the removal itself has reached the disk. */
-	public static void delete(Path file) throws IOException {
-		if (!Files.deleteIfExists(file)) {
-			return;
-		}
-		forceDirectory(file.getParent());
+	/**
+	 * Put the finished file in place in one step.
+	 *
+	 * <p>There is deliberately no fallback to a plain replace. A filesystem that will not promise an
+	 * atomic rename cannot give the caller what this class says it gives, and quietly doing the
+	 * weaker thing while reporting success is how a purchase gets sold against a guarantee that was
+	 * never made. {@link AtomicMoveNotSupportedException} is an {@link IOException}, so it reaches
+	 * the caller as any other failed write does.
+	 */
+	private static void move(Path from, Path to) throws IOException {
+		Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
 	}
 
-	private static void move(Path from, Path to) throws IOException {
+	/**
+	 * Force the directory entry, so the rename itself cannot still be sitting in a cache.
+	 *
+	 * <p>Two different things used to be swallowed here, and only one of them is harmless.
+	 *
+	 * <p><b>Not being able to open the directory at all</b> is a property of the platform — Windows
+	 * refuses, and there is no portable way to ask in advance. The rename is already durable there,
+	 * so this is a capability and not a failure; it is said once, for the log, and the write stands.
+	 *
+	 * <p><b>Failing to flush a directory we did open</b> is a real I/O failure on the very step that
+	 * makes the rename survive a power cut. Treating that as "nothing to see here" is exactly the
+	 * fail-open this class is not allowed to have, so it is reported and the write is not.
+	 */
+	private static void forceDirectory(Path directory) throws IOException {
+		FileChannel channel;
 		try {
-			Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-		} catch (AtomicMoveNotSupportedException e) {
-			// Some filesystems will not promise it. A plain replace is still better than writing
-			// over the real file in place, and there is nothing further to try.
-			Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+			channel = FileChannel.open(directory, StandardOpenOption.READ);
+		} catch (IOException | UnsupportedOperationException e) {
+			warnAboutDirectories(directory, e);
+			return;
+		}
+		try (FileChannel open = channel) {
+			open.force(true);
 		}
 	}
 
 	/**
-	 * Force the directory entry, where the platform allows it.
+	 * Say once per run that directories cannot be flushed here.
 	 *
-	 * <p>Windows refuses to open a directory as a channel at all, and there is no portable way to
-	 * ask; the rename is already atomic there. So a refusal is not a failure of the write.
+	 * <p>Once, because it would otherwise be said on every purchase, and a line repeated that often
+	 * is a line nobody reads.
 	 */
-	private static void forceDirectory(Path directory) {
-		try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
-			channel.force(true);
-		} catch (IOException | UnsupportedOperationException ignored) {
-			// See above: not every platform lets a directory be opened, and the move has happened.
+	private static void warnAboutDirectories(Path directory, Exception reason) {
+		if (directoriesCannotBeOpened) {
+			return;
 		}
+		directoriesCannotBeOpened = true;
+		HardcoreRoguelite.LOGGER.info(
+				"This platform will not open {} as a channel, so directory entries are not flushed here."
+						+ " The rename itself is still atomic. ({})",
+				directory, reason.toString());
 	}
 }

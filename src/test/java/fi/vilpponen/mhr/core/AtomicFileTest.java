@@ -2,7 +2,6 @@ package fi.vilpponen.mhr.core;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -133,17 +132,6 @@ class AtomicFileTest {
 
 		assertEquals("{\"world.trees\": 1}", Files.readString(file, StandardCharsets.UTF_8),
 				"a write that did not happen must not have changed anything");
-	}
-
-	@Test
-	void deletingRemovesTheFileAndSayingSoTwiceIsFine(@TempDir Path directory) throws IOException {
-		Path file = directory.resolve("purchase.json");
-		AtomicFile.write(file, "{}");
-
-		AtomicFile.delete(file);
-		AtomicFile.delete(file);
-
-		assertFalse(Files.exists(file));
 	}
 
 	private static void assertDoesNotThrowIo(IoAction action) {

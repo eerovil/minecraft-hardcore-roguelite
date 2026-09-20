@@ -728,6 +728,16 @@ than asserting one field:
   believes neither half of it; the same purchase then goes through once the way is clear.
 - **a-refused-write-leaves-the-previous-progression-whole** — one purchase succeeds, the next cannot
   be written, and the snapshot still holds exactly what the successful one left.
+- **an-older-profile-is-carried-into-one-file** — the two files an older build wrote are read and
+  arrive in the snapshot whole, levels and currency both, and the old files are left where they are.
+- **the-oldest-save-shape-still-reads** — a bare list of ids, from before unlocks had levels.
+- **an-id-renamed-since-the-save-was-written-is-carried-over** — `trees` becomes `world.trees`.
+- **an-unreadable-snapshot-stops-rather-than-starting-empty** — a damaged snapshot refuses to load
+  and is left exactly as it was found, so it can still be repaired. Starting empty is the one
+  mistake that cannot be undone: the next purchase writes the empty profile over the real one.
+- **an-unreadable-legacy-unlock-file-stops-the-migration** — and writes no snapshot at all, because a
+  half-read migration committed *is* the loss.
+- **an-unreadable-legacy-currency-file-stops-it-too** — the same rule for the other source.
 
 `AtomicFileTest` covers the writer itself in plain JUnit, including a channel that takes one byte per
 call — a real file almost never writes short, which is why a missing loop there cannot be provoked

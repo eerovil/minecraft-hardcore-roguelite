@@ -3,6 +3,7 @@ package fi.vilpponen.mhr.gametest.server;
 import fi.vilpponen.mhr.Unlock;
 import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.core.BalanceManager;
+import fi.vilpponen.mhr.core.PersistenceException;
 import fi.vilpponen.mhr.progression.Catalogue;
 import fi.vilpponen.mhr.progression.Offer;
 import fi.vilpponen.mhr.progression.Purchase;
@@ -82,9 +83,22 @@ public class ShopPurchaseGameTest {
 					this::aPurchaseTheDiskWillNotTakeChangesNothingAtAll);
 			scenario(failures, "a-refused-write-leaves-the-previous-progression-whole",
 					this::aRefusedWriteLeavesThePreviousProgressionWhole);
+			scenario(failures, "an-older-profile-is-carried-into-one-file",
+					this::anOlderProfileIsCarriedIntoOneFile);
+			scenario(failures, "the-oldest-save-shape-still-reads",
+					this::theOldestSaveShapeStillReads);
+			scenario(failures, "an-id-renamed-since-the-save-was-written-is-carried-over",
+					this::anIdRenamedSinceTheSaveWasWrittenIsCarriedOver);
+			scenario(failures, "an-unreadable-snapshot-stops-rather-than-starting-empty",
+					this::anUnreadableSnapshotStopsRatherThanStartingEmpty);
+			scenario(failures, "an-unreadable-legacy-unlock-file-stops-the-migration",
+					this::anUnreadableLegacyUnlockFileStopsTheMigration);
+			scenario(failures, "an-unreadable-legacy-currency-file-stops-it-too",
+					this::anUnreadableLegacyCurrencyFileStopsItToo);
 		} finally {
 			removeOverride(helper);
 			unblock(Progress.file());
+			startFromNothing();
 			reset();
 		}
 
@@ -338,7 +352,158 @@ public class ShopPurchaseGameTest {
 						+ after);
 	}
 
+	// --- loading and migrating ----------------------------------------------------------------
+
+	/**
+	 * A profile written by the build before this one: two files, one for what was owned and one for
+	 * the currency. Both have to arrive in the snapshot, whole.
+	 */
+	private void anOlderProfileIsCarriedIntoOneFile() {
+		startFromNothing();
+		writeLegacy(LEGACY_UNLOCKS, "{\"" + TREES + "\": 1, \"" + ENCHANT + "\": 2}");
+		writeLegacy(LEGACY_CURRENCY, "{\"balance\": 42}");
+
+		Progress.reloadFromFile();
+
+		check(owns(TREES), TREES + " was owned in the old file and must be owned now");
+		check(level(ENCHANT) == 2,
+				"a repeatable unlock must keep its level, and it is " + level(ENCHANT) + " rather than 2");
+		check(balance() == 42, "the currency must come across too, and it is " + balance());
+		check(Files.isRegularFile(Progress.file()), "the snapshot should have been written");
+		check(Files.isRegularFile(legacy(LEGACY_UNLOCKS)) && Files.isRegularFile(legacy(LEGACY_CURRENCY)),
+				"the old files must be left alone: a purchase already paid for is not worth a tidy-up");
+
+		startFromNothing();
+	}
+
+	/** The shape from before unlocks had levels at all: a bare list of the ids owned. */
+	private void theOldestSaveShapeStillReads() {
+		startFromNothing();
+		writeLegacy(LEGACY_UNLOCKS, "[\"" + TREES + "\", \"" + VILLAGE + "\"]");
+
+		Progress.reloadFromFile();
+
+		check(level(TREES) == 1 && level(VILLAGE) == 1,
+				"a bare list means one level each, and they are " + level(TREES) + " and " + level(VILLAGE));
+
+		startFromNothing();
+	}
+
+	/** An id that has been renamed since the save was written still finds its unlock. */
+	private void anIdRenamedSinceTheSaveWasWrittenIsCarriedOver() {
+		startFromNothing();
+		// 'trees' is what world.trees was called before the ids were namespaced.
+		writeLegacy(LEGACY_UNLOCKS, "{\"trees\": 1}");
+
+		Progress.reloadFromFile();
+
+		check(owns(TREES), "an old name must be carried over as the current one, and " + TREES
+				+ " is not owned");
+
+		startFromNothing();
+	}
+
+	/**
+	 * The one that matters most: a snapshot that is there and cannot be read must stop the game
+	 * rather than carry on as though nothing had ever been bought — because a profile that starts
+	 * empty is a profile the next purchase writes over.
+	 */
+	private void anUnreadableSnapshotStopsRatherThanStartingEmpty() {
+		startFromNothing();
+		String damaged = "{\"currency\": 100, \"unlocks\": {\"" + TREES;
+		write(Progress.file(), damaged);
+
+		check(refusesToLoad(), "an unreadable snapshot must refuse to load, and it loaded");
+		check(damaged.equals(read(Progress.file())),
+				"and must leave the file exactly as it found it, so it can still be repaired");
+
+		startFromNothing();
+	}
+
+	/**
+	 * A legacy file that is present and unreadable used to count as empty. That turned something
+	 * repairable into a snapshot saying those purchases never happened.
+	 */
+	private void anUnreadableLegacyUnlockFileStopsTheMigration() {
+		startFromNothing();
+		writeLegacy(LEGACY_UNLOCKS, "{\"world.trees\": ");
+		writeLegacy(LEGACY_CURRENCY, "{\"balance\": 42}");
+
+		check(refusesToLoad(), "an unreadable old unlock file must refuse to migrate, and it migrated");
+		check(!Files.exists(Progress.file()),
+				"and must write no snapshot at all: a half-read migration committed is the loss itself");
+
+		startFromNothing();
+	}
+
+	/** The same rule for the other source: every file that is present has to be read whole. */
+	private void anUnreadableLegacyCurrencyFileStopsItToo() {
+		startFromNothing();
+		writeLegacy(LEGACY_UNLOCKS, "{\"" + TREES + "\": 1}");
+		writeLegacy(LEGACY_CURRENCY, "not json at all");
+
+		check(refusesToLoad(), "an unreadable old currency file must refuse to migrate, and it migrated");
+		check(!Files.exists(Progress.file()), "and must write no snapshot");
+
+		startFromNothing();
+	}
+
 	// --- plumbing --------------------------------------------------------------------------
+
+	private static final String LEGACY_UNLOCKS = "hardcore-roguelite-unlocks.json";
+	private static final String LEGACY_CURRENCY = "hardcore-roguelite-currency.json";
+
+	/** @return true if reading progression refused rather than inventing an empty profile. */
+	private static boolean refusesToLoad() {
+		try {
+			Progress.reloadFromFile();
+			return false;
+		} catch (PersistenceException expected) {
+			return true;
+		}
+	}
+
+	/** No snapshot, no old files, nothing loaded: the state a brand new player is in. */
+	private static void startFromNothing() {
+		// Raw file work, not through Progress: after a refused load there is nothing to ask.
+		delete(Progress.file());
+		delete(legacy(LEGACY_UNLOCKS));
+		delete(legacy(LEGACY_CURRENCY));
+		Progress.reloadFromFile();
+	}
+
+	private static Path legacy(String name) {
+		return Progress.file().resolveSibling(name);
+	}
+
+	private static void writeLegacy(String name, String contents) {
+		write(legacy(name), contents);
+	}
+
+	private static void write(Path file, String contents) {
+		try {
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, contents, StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			throw new UncheckedIOException("Could not write " + file, e);
+		}
+	}
+
+	private static String read(Path file) {
+		try {
+			return Files.readString(file, StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			throw new UncheckedIOException("Could not read " + file, e);
+		}
+	}
+
+	private static void delete(Path file) {
+		try {
+			Files.deleteIfExists(file);
+		} catch (IOException e) {
+			throw new UncheckedIOException("Could not remove " + file, e);
+		}
+	}
 
 	/**
 	 * Make a write to this path fail, by putting a directory in its way.
