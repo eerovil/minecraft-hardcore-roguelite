@@ -15,6 +15,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.food.FoodData;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.storage.LevelResource;
 
 /**
@@ -223,7 +224,12 @@ public final class RunLifecycle {
 	private ServerPlayer enterRun(
 			ServerPlayer player, ServerLevel overworld, BlockPos spawn, String message) {
 		ServerPlayer inTheRun = Lobby.leaveForRun(player, overworld, spawn);
-		resetForNewRun(inTheRun);
+		// Establishing the baseline a run starts from, not destroying the last one's leftovers:
+		// that happened on the way out. Kept all the same, because a player can reach a run start
+		// without ever having crossed the other boundary — a brand-new save, or one whose lobby
+		// crossing was interrupted — and "what a fresh run begins with" should not depend on how
+		// they got here.
+		stripRunState(inTheRun);
 		RunEvents.PLAYER_ENTERED_RUN.invoker().onPlayerEnteredRun(server, inTheRun, record);
 		RunAdmission.admit(inTheRun, record.runId());
 		inTheRun.sendSystemMessage(Component.literal(message));
@@ -255,7 +261,7 @@ public final class RunLifecycle {
 				continue;
 			}
 			try {
-				Lobby.returnFromRun(player);
+				leaveRunForLobby(player);
 			} catch (RuntimeException failed) {
 				HardcoreRoguelite.LOGGER.error("{} could not be got out of run {}",
 						player.getGameProfile().name(), record.runId(), failed);
@@ -358,9 +364,14 @@ public final class RunLifecycle {
 			return false;
 		}
 
+		// The reward has been committed above, so the run may now be taken off the players. Each
+		// crossing is the whole of the run-to-lobby boundary — see leaveRunForLobby — and a player
+		// already in the lobby is stripped too, because "in the lobby" is where an interrupted
+		// crossing leaves somebody.
 		for (ServerPlayer player : players()) {
-			ServerPlayer inTheLobby = isRunLevel(player.level()) ? Lobby.returnFromRun(player) : player;
-			revive(inTheLobby);
+			ServerPlayer inTheLobby = isRunLevel(player.level())
+					? leaveRunForLobby(player)
+					: strippedInTheLobby(player);
 			inTheLobby.sendSystemMessage(Component.literal(
 					"Run " + record.runId() + " is over. You are back in the lobby."));
 		}
@@ -568,6 +579,17 @@ public final class RunLifecycle {
 					return;
 				}
 				Lobby.send(player);
+				// Finishing a crossing somebody never made. They were in a run when they logged
+				// out, that run ended while they were away, and nothing has taken it off them —
+				// so they are arriving in the permanent lobby carrying a deleted world's
+				// inventory. Looked up again because Lobby.send may have replaced the object.
+				ServerPlayer arrived = connected(player.getUUID());
+				if (arrived != null && RunAdmission.isInARun(arrived)) {
+					HardcoreRoguelite.LOGGER.info("{} was still carrying run {} when they joined;"
+							+ " finishing the crossing they missed", arrived.getGameProfile().name(),
+							RunAdmission.of(arrived));
+					strippedInTheLobby(arrived);
+				}
 				player.sendSystemMessage(Component.literal(
 						"No run in progress. Start one with /mhr run start."));
 				return;
@@ -613,12 +635,12 @@ public final class RunLifecycle {
 	 * be put anywhere safe must not be left in the one place that is unsafe.
 	 */
 	private void takeBackOut(UUID id) {
-		ServerPlayer live = server.getPlayerList().getPlayer(id);
+		ServerPlayer live = connected(id);
 		if (live == null || !isRunLevel(live.level())) {
 			return;
 		}
 		try {
-			ServerPlayer inTheLobby = Lobby.returnFromRun(live);
+			ServerPlayer inTheLobby = leaveRunForLobby(live);
 			inTheLobby.sendSystemMessage(Component.literal(
 					"Something went wrong joining this run, so you have not joined it. See the"
 							+ " server log; rejoining will try again."));
@@ -664,6 +686,11 @@ public final class RunLifecycle {
 	/** What the loop is doing, or why it is not. */
 	public synchronized String describe() {
 		return quarantine == null ? record.describe() : "stopped: " + quarantine;
+	}
+
+	/** The player object the server currently has for this id, or null if they are not connected. */
+	private ServerPlayer connected(UUID id) {
+		return server.getPlayerList().getPlayer(id);
 	}
 
 	/** Is this the very object the server has connected, rather than one that merely matches it? */
@@ -750,25 +777,72 @@ public final class RunLifecycle {
 	// --- player state ----------------------------------------------------------------------
 
 	/**
-	 * Everything a run gives a player, taken back.
+	 * Everything a run can leave on a player, taken back. One list, one description of it.
 	 *
-	 * <p>This is the whole of the fresh-run boundary for a player, and the list is the interesting
-	 * part. Anything a run can give somebody that would still mean something in the next one
-	 * belongs here — the run's dimensions are deleted, but the player is not, so whatever is
-	 * written on them is what survives.
+	 * <p>The run's dimensions are deleted; the player is not. So whatever a run writes on a player
+	 * is the only thing that can outlive it, and this is that list — held in one place on purpose,
+	 * because keeping two copies of it is how the respawn point and the hunger internals each came
+	 * to be missing from one of them.
 	 *
-	 * <p>The respawn point is the one that does not look like an item. A bed slept in during run 4
-	 * is a position in a world that no longer exists, and because the next run reuses the same
-	 * dimension keys it does not read as stale: it points at whatever run 5 generated there. Left
-	 * alone it is a free teleport into the new run's terrain on the player's first death.
+	 * <p>Two entries do not look like loot and are the ones worth naming. The respawn point is a
+	 * position in a world that no longer exists, and because the next run reuses the same dimension
+	 * keys it does not read as stale — it points at whatever the next run generated there, which is
+	 * a free teleport into fresh terrain on the first death. And the cursor is a real place an item
+	 * can be: a player who ends a run mid-drag is holding something that is in no container at all.
 	 */
-	private static void resetForNewRun(ServerPlayer player) {
+	private static void stripRunState(ServerPlayer player) {
 		revive(player);
 		player.getInventory().clearContent();
 		player.getEnderChestInventory().clearContent();
+		player.containerMenu.setCarried(ItemStack.EMPTY);
+		player.inventoryMenu.setCarried(ItemStack.EMPTY);
 		player.setExperienceLevels(0);
 		player.setExperiencePoints(0);
 		player.setRespawnPosition(null, false);
+	}
+
+	/**
+	 * Bring a player out of a run and into the lobby — the boundary run-scoped state stops at.
+	 *
+	 * <p>This is the fix for the thing twelve rounds of review kept finding one field at a time.
+	 * The reset used to happen on the way <em>into</em> the next run, which cannot work however
+	 * complete its list is: by then the player has been standing in the permanent lobby for as long
+	 * as they liked, and anything they carried in has had that whole time to stop being player
+	 * state. A chest placed in the lobby is lobby state. An item dropped on its floor is lobby
+	 * state. Neither is reachable from a later pass over the player's inventory, and the lobby is
+	 * the one world that is never deleted.
+	 *
+	 * <p>So the boundary is here, on the crossing itself, and it is the only place that has to be
+	 * right. What may cross is the player's identity and their permanent progression; everything a
+	 * run gave them stops at the door.
+	 *
+	 * <p>Ordering: the reward is committed before anybody crosses — see {@link #finishEnding} —
+	 * because a run's payout may want to read the run before it is taken away. Stripping first
+	 * would hand the reward listeners an already-emptied player.
+	 *
+	 * <p>The admission is cleared last, and it is what makes this survivable for somebody who was
+	 * not connected when their run ended. Being marked as admitted to a run now means "has not
+	 * crossed back out yet", so the join path can finish the crossing for them. See
+	 * {@link RunAdmission} and {@link #placeOnJoin}.
+	 *
+	 * @return the player as they are now — a different object from the one passed in
+	 */
+	private static ServerPlayer strippedInTheLobby(ServerPlayer player) {
+		if (!RunAdmission.isInARun(player)) {
+			// Already crossed. Stripping again would be harmless today and wrong the day the lobby
+			// has anything of its own in it — a shop screen's state, a purchase being carried.
+			return player;
+		}
+		stripRunState(player);
+		RunAdmission.admit(player, RunAdmission.NO_RUN);
+		return player;
+	}
+
+	private static ServerPlayer leaveRunForLobby(ServerPlayer player) {
+		ServerPlayer inTheLobby = Lobby.returnFromRun(player);
+		stripRunState(inTheLobby);
+		RunAdmission.admit(inTheLobby, RunAdmission.NO_RUN);
+		return inTheLobby;
 	}
 
 	/**

@@ -40,6 +40,17 @@ public final class RunAdmission {
 	 * <p>Holding it behind the call rather than beside it also means getting the order wrong throws
 	 * here instead of quietly reading zero. Of the two failures, the loud one is much the better.
 	 */
+	/**
+	 * Not in any run: never admitted to one, or admitted and since crossed back out.
+	 *
+	 * <p>Zero is what an unmarked player reads as, and no run ever has that id. Written explicitly
+	 * on the way out of a run as well, because since the run-to-lobby boundary exists the mark
+	 * answers a second question: <em>is this player still carrying a run?</em> Somebody who was
+	 * offline when their run ended comes back still marked, and that is what tells the join path to
+	 * finish the crossing they never made.
+	 */
+	public static final int NO_RUN = 0;
+
 	private static AttachmentType<Integer> admittedRun;
 
 	private RunAdmission() {
@@ -67,9 +78,14 @@ public final class RunAdmission {
 		return admittedRun;
 	}
 
-	/** The run this player was let into, or zero if they have never been let into one. */
+	/** The run this player was let into, or {@link #NO_RUN} if they are not in one. */
 	public static int of(ServerPlayer player) {
-		return player.getAttachedOrElse(type(), 0);
+		return player.getAttachedOrElse(type(), NO_RUN);
+	}
+
+	/** Is this player still carrying a run they have not crossed back out of? */
+	public static boolean isInARun(ServerPlayer player) {
+		return of(player) != NO_RUN;
 	}
 
 	public static boolean isAdmittedTo(ServerPlayer player, int runId) {

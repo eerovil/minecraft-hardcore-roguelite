@@ -196,6 +196,10 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 					() -> theSameRunKeepsWhatYouHad(context, server));
 
 			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "a-run-does-not-get-out-through-the-lobby-door",
+					() -> theRunStopsAtTheLobbyDoor(context, server));
+
+			TestRuns.waitForNobodyConnected(context, server);
 			scenario(context, "a-late-join-that-fails-leaves-nobody-in-the-run",
 					() -> aFailedLateJoinLeavesNobodyInTheRun(context, server));
 
@@ -994,6 +998,79 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	}
 
 	/**
+	 * A run does not get out through the lobby door.
+	 *
+	 * <p>The lobby is the one world that is never deleted, and that makes it the way a run escapes.
+	 * Emptying the player at the <em>next</em> run start cannot help: by then they have stood in the
+	 * lobby as long as they liked, and a chest they placed there or an item they dropped is not
+	 * player state any more. No later pass over an inventory will ever find it again.
+	 *
+	 * <p>So the assertions come in that order. First that the player reaches the lobby with none of
+	 * the run on them — which is what makes the escape impossible rather than merely unlikely — and
+	 * then that the lobby itself is holding nothing of theirs, because a strip that dropped the
+	 * items instead of destroying them would satisfy the first and fail the point.
+	 *
+	 * <p>The run's reward is counted across it too. The strip happens after the payout deliberately:
+	 * a reward listener may want to read the run that is being taken away, and emptying the player
+	 * first would hand it somebody who has already lost whatever it was about to look at.
+	 */
+	private void theRunStopsAtTheLobbyDoor(
+			ClientGameTestContext context, TestDedicatedServerContext server) {
+		if (TestRuns.phase(server) == RunPhase.RUNNING) {
+			TestRuns.end(server);
+		}
+		TestRuns.start(server);
+		int runId = TestRuns.record(server).runId();
+		int rewardsBefore = RUNS_ENDED.get();
+
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			settle(context, connection);
+			check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
+					"this scenario needs the player inside the run, and they are in "
+							+ TestRuns.playerDimension(server, connection));
+
+			carryEverythingARunCanGive(server);
+			String carried = TestRuns.runLocalStateOf(server);
+			check(!carried.equals(TestRuns.NOTHING_CARRIED) && carried.contains("2 chest(s)"),
+					"setup: they should be leaving the run holding something placeable, and they have "
+							+ carried);
+			check(TestRuns.runLeftoversInTheLobby(server).equals(TestRuns.LOBBY_UNTOUCHED),
+					"setup: and the lobby should start with nothing of anybody's in it, and it has "
+							+ TestRuns.runLeftoversInTheLobby(server));
+
+			TestRuns.end(server);
+			waitForClientIn(context, connection, Lobby.LEVEL.identifier().toString());
+
+			check(TestRuns.playerDimension(server, connection).equals(
+							Lobby.LEVEL.identifier().toString()),
+					"ending the run must put them in the lobby, and they are in "
+							+ TestRuns.playerDimension(server, connection));
+
+			String afterwards = TestRuns.runLocalStateOf(server);
+			check(afterwards.equals(TestRuns.NOTHING_CARRIED),
+					"and the run must stop at the door: nothing it gave them may arrive in the world"
+							+ " that is never deleted, and they arrived with " + afterwards);
+
+			String lobby = TestRuns.runLeftoversInTheLobby(server);
+			check(lobby.equals(TestRuns.LOBBY_UNTOUCHED),
+					"nor may it have been dropped on the way in — emptying a player who leaves their"
+							+ " run on the lobby floor is not emptying anybody. The lobby holds "
+							+ lobby);
+
+			check(TestRuns.admittedRunOf(server) != runId,
+					"and they must no longer be marked as being in run " + runId
+							+ ", because that mark is what says a run has not been taken off them yet;"
+							+ " they are marked " + TestRuns.admittedRunOf(server));
+
+			// The strip is on the far side of the payout, so the run that just ended still paid.
+			check(RUNS_ENDED.get() == rewardsBefore + 1,
+					"the reward is committed before anything is taken away, and the end hook has fired "
+							+ (RUNS_ENDED.get() - rewardsBefore) + " time(s) for this run");
+		}
+		TestRuns.waitForNobodyConnected(context, server);
+	}
+
+	/**
 	 * A late join that fails leaves nobody in the run, and nobody who can end it.
 	 *
 	 * <p>Two claims, and the second is what makes the first safe. {@code enterRun} can fail after
@@ -1229,6 +1306,9 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	 */
 	private static void carryEverythingARunCanGive(TestDedicatedServerContext server) {
 		server.runCommand("give Player0 minecraft:diamond 5");
+		// A chest, because the dangerous kind of run state is the kind that stops being player
+		// state the moment it is put down. See theRunStopsAtTheLobbyDoor.
+		server.runCommand("give Player0 minecraft:chest 2");
 		server.runCommand("item replace entity Player0 enderchest.0 with minecraft:emerald 3");
 		server.runCommand("xp set Player0 7 levels");
 		server.runCommand("spawnpoint Player0 ~ ~ ~");

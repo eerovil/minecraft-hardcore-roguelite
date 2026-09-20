@@ -291,6 +291,39 @@ a moment when there is no gap for anything to notice. The finished run's levels 
 ticking while the player is between runs; with no player in them that is cheap, but it is a known
 simplification rather than an oversight.
 
+## The run stops at the lobby door
+
+**Run-scoped player state is taken off at the run → lobby crossing, not at the next run start.**
+`RunLifecycle.leaveRunForLobby` is that boundary and it is the only one that has to be right.
+
+This was the wrong way round for twelve rounds of review and each round fixed one more field —
+respawn point, hunger internals, admission. The list was never the problem. Clearing at the *next*
+run start cannot work however complete the list is, because between the two the player is standing
+in the lobby, and the lobby is the one world that is never deleted. A chest they place there is
+lobby state. An item they drop on its floor is lobby state. Neither is player state any more, and
+no later pass over an inventory will ever reach it.
+
+What may cross: the player's identity, and permanent progression. What may not: anything a run gave
+them. The list lives once, in `stripRunState`, and both boundaries call it.
+
+Three orderings inside it are load-bearing:
+
+- **The reward is committed before anybody crosses** (`finishEnding` pays, then evacuates). A
+  reward listener may want to read the run that is being taken away; strip first and it is handed
+  an already-emptied player.
+- **The admission is cleared last, and it doubles as the marker.** Being marked as admitted now
+  means "has not crossed back out yet". That is what covers the player who was offline when their
+  run ended: they log in still marked, the join path notices, and finishes the crossing they never
+  made. Without it they would walk into the lobby carrying a deleted world's inventory.
+- **Starting a run establishes defaults; it no longer destroys anything.** `enterRun` still calls
+  `stripRunState`, because a player can reach a run start without having crossed the other boundary
+  — a brand-new save, an interrupted crossing — and what a fresh run begins with should not depend
+  on how the player got there. It is a baseline now, not a cleanup.
+
+The test for this is `a-run-does-not-get-out-through-the-lobby-door`, and it asks both halves: the
+player arrives with nothing, **and** the lobby is holding nothing of theirs. A strip that dropped
+the items instead of destroying them would pass the first on its own.
+
 ## Moving a player in and out of the lobby
 
 Both of the lobby's doorways go through `Lobby.moveThroughRespawn`, and this is the single most
@@ -374,7 +407,7 @@ Before adding a field, decide which column it belongs in.
 | Starter item ownership | Across saves | same file |
 | Phase, run id, seed, run count, reward committed | The save, across runs | `<save>/hardcore-roguelite-run.json` |
 | Generated chunks/entities | One run | the run's dimensions, deleted between runs |
-| Player inventory, ender chest, XP, hunger, respawn point, effects | One run | `RunLifecycle.resetForNewRun`, as a player enters |
+| Player inventory, ender chest, cursor, XP, hunger, respawn point, effects | One run | `RunLifecycle.stripRunState`, as the player **leaves** the run |
 | Weather, world clocks, wandering-trader timer, named random sequences | One run | server-global; reset by `RunWorlds.recreate` |
 | Game rules, scoreboard, bossbars, stopwatches, scheduled events, command storage | The save, across runs | server-global; deliberately **not** reset — see the rule above |
 | Lobby contents | The save, across runs | the lobby dimension |

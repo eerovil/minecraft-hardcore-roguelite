@@ -21,10 +21,13 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.level.dimension.LevelStem;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.saveddata.WanderingTraderData;
 
@@ -208,7 +211,8 @@ final class TestRuns {
 			if (live == null) {
 				return "nobody connected";
 			}
-			return "inventory " + live.getInventory().countItem(Items.DIAMOND) + " diamond(s),"
+			return "inventory " + live.getInventory().countItem(Items.DIAMOND) + " diamond(s) and "
+					+ live.getInventory().countItem(Items.CHEST) + " chest(s),"
 					+ " ender chest " + live.getEnderChestInventory().countItem(Items.EMERALD)
 					+ " emerald(s), " + live.experienceLevel + " xp level(s), respawn point "
 					+ (live.getRespawnConfig() == null ? "unset" : "set")
@@ -218,8 +222,38 @@ final class TestRuns {
 	}
 
 	/** Nothing carried, nothing stored, no experience. */
-	static final String NOTHING_CARRIED = "inventory 0 diamond(s), ender chest 0 emerald(s),"
-			+ " 0 xp level(s), respawn point unset, hunger 20/5.0";
+	static final String NOTHING_CARRIED = "inventory 0 diamond(s) and 0 chest(s),"
+			+ " ender chest 0 emerald(s), 0 xp level(s), respawn point unset, hunger 20/5.0";
+
+	/**
+	 * How much of this player's run has ended up in the lobby itself.
+	 *
+	 * <p>The other half of the boundary. Emptying a player is only half of "the run did not get
+	 * out": an item dropped on the lobby floor, or a chest placed in it, is no longer player state
+	 * at all and no later pass over an inventory will ever find it. The lobby is the one world that
+	 * is never deleted, so anything of a run's that reaches it is there for good.
+	 */
+	static String runLeftoversInTheLobby(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer -> {
+			ServerLevel lobby = minecraftServer.getLevel(Lobby.LEVEL);
+			if (lobby == null) {
+				return "no lobby";
+			}
+			int items = lobby.getEntitiesOfClass(ItemEntity.class,
+					new AABB(Lobby.SPAWN).inflate(64.0)).size();
+			int chests = 0;
+			for (BlockPos pos : BlockPos.betweenClosed(
+					Lobby.SPAWN.offset(-8, -4, -8), Lobby.SPAWN.offset(8, 4, 8))) {
+				if (lobby.getBlockState(pos).is(Blocks.CHEST)) {
+					chests++;
+				}
+			}
+			return items + " dropped item(s), " + chests + " chest(s) placed";
+		});
+	}
+
+	/** The lobby holding nothing a run put there. */
+	static final String LOBBY_UNTOUCHED = "0 dropped item(s), 0 chest(s) placed";
 
 	/** Which status effects the player is carrying, named, so a failure says which are missing. */
 	static String effectsOn(TestDedicatedServerContext server) {
