@@ -235,7 +235,10 @@ run_locked() {
 	body="$(cat)"
 
 	work="$(printf '%s\n' "$body" | stage_in_pod "$pod" "$as" .sh)"
-	runner="$(lock_runner "$lock" "$name" "$owner" "$work" "$as" "$step" | stage_in_pod "$pod" "" .sh)"
+	# Staged as whoever the session runs as, because the supervisor re-runs this same file as that
+	# user: mktemp makes it readable by its owner alone, and the gametest pod's supervisor is root
+	# while its session is uid 1000.
+	runner="$(lock_runner "$lock" "$name" "$owner" "$work" "$as" "$step" | stage_in_pod "$pod" "$as" .sh)"
 
 	# The fifo is the line the pod watches. This shell has to be the only thing holding it open, so
 	# that it reaches EOF when this shell stops existing, whatever stops it. Both halves of the
