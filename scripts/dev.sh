@@ -54,79 +54,187 @@ EOF
 # separate, so a build and a gametest still run at the same time.
 #
 # One process owns the critical section. The shell in the pod that takes the flock is the shell
-# that runs the work: everything needing the pod exclusively is written as a script, streamed into
-# a single `kubectl exec` and run there. Nothing on this machine holds the lock, so there is no
-# lock lifetime here to keep in step with anything.
+# that runs the work: everything needing the pod exclusively is written as a script, staged into
+# the pod and run there. Nothing on this machine holds the lock.
 #
-# That is what makes it correct rather than merely tidy. The work runs as a child of the shell
-# holding the lock, so it inherits the lock's descriptor, and the kernel drops an flock only when
-# the last descriptor on it closes. The lock is therefore held for exactly as long as anything it
-# protects is alive — including a client JVM that outlives the run that started it. There is no
-# window between "the lock ended" and "the work ended" for a second worker to walk into, because
-# there is no order between them: they are one event.
+# The work runs as a child of the shell holding the lock, so it inherits the lock's file
+# descriptor, and the kernel drops an flock only when the last descriptor on it closes. The lock
+# therefore outlives the work by construction rather than by arrangement: there is no window
+# between the lock going and the work stopping for a second worker to walk into. (A JVM gradle
+# forks does not reliably keep that descriptor — measured — so this covers the run, not every
+# process a run can leave behind. What a run leaves behind is the stray-JVM check's business.)
 #
-# Killing this script is then simply not interesting. The pod work carries on, and carries on
-# holding the lock, until it finishes or somebody kills it — which is the truthful answer, and the
-# one that keeps the pod to itself while it is still using it.
-
-# Kept clear of anything gradle or the tests exit with, so "the pod was busy" can never be read as
-# "the tests failed".
+# What then has to be true is the other half: when this script dies, the work in the pod has to die
+# too, or the pod stays locked by a run nobody is watching. The pod can see us go. Killing the
+# local `kubectl`, losing the connection or killing this script all end the exec stream, and the
+# kubelet closes the remote end's stdin when that happens — so a `read` in the pod returns EOF.
+# (The two more obvious signals are no good: the shell in the pod is *not* killed when the
+# connection dies, and writes to its stdout keep succeeding afterwards. Both measured.)
+#
+# So the runner in the pod reads that stdin, and on EOF kills every process holding the lock —
+# which is the work, its children, and the runner itself. The lock is released by the last of them
+# dying, which is still the only way it is ever released.
 LOCK_BUSY_STATUS=75
 
-# run_locked <pod> <lock-name> [command-prefix]; the protected script arrives on stdin.
-#
-# Contention is reported by the pod, out of the attempt itself: a non-blocking flock that fails is
-# somebody else holding the lock, and that is the only honest definition of having had to wait.
-# Saying something once five seconds have gone by, as this used to, sits through a real queue in
-# silence whenever the queue clears in four.
-run_locked() {
-	local pod="$1" name="$2" as="${3:-}"
-	local lock="/pvc/.mhr-lock-$name"
-	local owner="${USER:-someone}@$(hostname -s 2>/dev/null || echo unknown), started $(date '+%H:%M:%S')"
-	local body status=0
-	body="$(cat)"
+# stage_in_pod <pod> <command-prefix> <suffix>: reads a file on stdin, puts it somewhere of its own
+# in the pod, prints the path. The name comes from mktemp in the pod rather than from our pid,
+# because /pvc is shared across machines and containers and a pid is unique in neither.
+stage_in_pod() {
+	local pod="$1" suffix="${3:-}"
+	local -a as=()
+	if [[ -n "${2:-}" ]]; then
+		read -r -a as <<<"$2"
+	fi
+	kubectl -n "$NS" exec -i "$pod" -- "${as[@]}" bash -c \
+		"f=\$(mktemp /pvc/.mhr-XXXXXXXX$suffix) && cat >\"\$f\" && echo \"\$f\""
+}
 
-	kubectl -n "$NS" exec -i "$pod" -- bash -s <<REMOTE || status=$?
+# The runner, as the pod sees it: take the lock, run the work under it, and watch for us going away.
+lock_runner() {
+	printf 'lock=%q\nname=%q\nowner=%q\nwork=%q\nas=%q\nhold=%q\nwait_secs=%q\nbusy=%q\n' \
+		"$1" "$2" "$3" "$4" "$5" "$6" "$MHR_LOCK_WAIT" "$LOCK_BUSY_STATUS"
+	cat <<'EOF'
 set -uo pipefail
 
-if ! exec 200>>'$lock'; then
+# Stopping the work, in the order that keeps the lock honest: everything the work started first,
+# and only then whatever still holds the lock — which ends with this runner, and with the lock.
+#
+# Both halves are needed. The tree is what the work actually is, but a JVM gradle forks does not
+# reliably inherit the lock descriptor, so holders alone would leave one running; and a process
+# reparented away from the tree would be missed by the tree walk alone.
+kill_tree() {
+	local kid
+	for kid in $(cat /proc/"$1"/task/*/children 2>/dev/null); do
+		kill_tree "$kid"
+	done
+	kill -9 "$1" 2>/dev/null || true
+}
+
+kill_lock_holders() {
+	for p in /proc/[0-9]*; do
+		for fd in "$p"/fd/*; do
+			if [ "$(readlink "$fd" 2>/dev/null)" = "$lock" ]; then
+				kill -9 "${p#/proc/}" 2>/dev/null || true
+				break
+			fi
+		done
+	done
+}
+
+stop_everything() {
+	kill_tree "$work_pid"
+	kill_lock_holders
+}
+
+if ! exec 200>>"$lock"; then
 	echo "Cannot open $lock in the pod, so this run cannot take the $name lock." >&2
 	exit 1
 fi
 
+# Contention is whatever this non-blocking attempt says it is. Asking after a fixed number of
+# seconds instead would say nothing at all about a queue that cleared in fewer.
 if ! flock -n 200; then
-	echo "Another run is using the $name pod (\$(cat '$lock.owner' 2>/dev/null || echo 'no name left'))."
-	echo "Waiting up to ${MHR_LOCK_WAIT}s..."
-	began=\$SECONDS
-	if ! flock -w $MHR_LOCK_WAIT 200; then
+	echo "Another run is using the $name pod ($(cat "$lock.owner" 2>/dev/null || echo 'no name left'))."
+	echo "Waiting up to ${wait_secs}s..."
+	began=$SECONDS
+	if ! flock -w "$wait_secs" 200; then
 		{
-			echo "Gave up waiting for the $name pod after ${MHR_LOCK_WAIT}s."
-			echo "  held by: \$(cat '$lock.owner' 2>/dev/null || echo 'someone who left no name')"
-			echo "  Raise MHR_LOCK_WAIT to wait longer. If that run is long over, what holds the"
-			echo "  lock now is what it left behind in the pod — see docs/dev-environment.md."
+			echo "Gave up waiting for the $name pod after ${wait_secs}s."
+			echo "  held by: $(cat "$lock.owner" 2>/dev/null || echo 'someone who left no name')"
+			echo "  Raise MHR_LOCK_WAIT to wait longer."
 		} >&2
-		exit $LOCK_BUSY_STATUS
+		exit "$busy"
 	fi
-	echo "Got the $name pod after \$((SECONDS - began))s."
+	echo "Got the $name pod after $((SECONDS - began))s."
 fi
-echo '$owner' >'$lock.owner'
+echo "$owner" >"$lock.owner"
 
-# The work, as a child of this shell and so holding this shell's lock descriptor.
-#
-# Written to a file and run from there, with its stdin closed off, rather than fed to a second
-# \`bash -s\`. This shell is itself reading its own script from stdin, a child inherits that, and
-# gradle reads stdin — so a piped work script gets eaten by the first gradle that runs, taking
-# whatever came after it with it. That is silent: gradle passes, and the steps the shell never got
-# to read simply never happen.
-mhr_work=/tmp/.mhr-locked-\$\$.sh
-cat >"\$mhr_work" <<'MHR_LOCKED_SECTION'
-$body
-MHR_LOCKED_SECTION
-$as bash "\$mhr_work" </dev/null
-mhr_status=\$?
-rm -f "\$mhr_work"
-exit \$mhr_status
-REMOTE
+go="$work.go"
+rm -f "$go"
+
+# A copy of our stdin for the watcher. Bash points an asynchronous command's stdin at /dev/null
+# when job control is off, which is always here — so a watcher reading plain stdin would see EOF
+# the instant it started and take the whole run down with it.
+exec 9<&0
+
+# The work. A child of this shell, so it holds this shell's lock descriptor; stdin closed, because
+# this shell's stdin is the line the other end talks to us on and gradle reads whatever stdin it
+# is given.
+$as bash "$work" </dev/null &
+work_pid=$!
+
+# The watcher, with no lock descriptor of its own so that it outlives the killing below. Reading
+# our stdin is how we notice the other end has gone: EOF there means the exec stream is over.
+(
+	exec 200>&-
+	while IFS= read -r line <&9; do
+		[ "$line" = MHR-GO ] && : >"$go"
+	done
+	stop_everything
+) &
+watcher=$!
+
+wait "$work_pid"
+status=$?
+
+# Some commands have a step on the other end that belongs inside this section — a deploy's server
+# rollout. Hold the lock while that runs; the watcher still has us covered if they die during it.
+if [ -n "$hold" ]; then
+	echo MHR-CONTROL-HOLD
+	while [ ! -e "$go" ]; do sleep 1; done
+fi
+
+kill "$watcher" 2>/dev/null || true
+rm -f "$work" "$go" "$0"
+exit "$status"
+EOF
+}
+
+# The other end of MHR-CONTROL-HOLD: run the local step, then let the pod finish. Only used by the
+# commands that have such a step, because every line of output goes through this loop.
+lock_control() {
+	local step="$1" fifo="$2" status_file="$3" line
+	while IFS= read -r line; do
+		if [[ "$line" == MHR-CONTROL-HOLD ]]; then
+			"$step" || printf '%s\n' "$?" >"$status_file"
+			printf 'MHR-GO\n' >"$fifo"
+		else
+			printf '%s\n' "$line"
+		fi
+	done
+}
+
+# run_locked <pod> <lock-name> [command-prefix] [local-step]; the protected script arrives on stdin.
+run_locked() {
+	local pod="$1" name="$2" as="${3:-}" step="${4:-}"
+	local lock="/pvc/.mhr-lock-$name"
+	local owner="${USER:-someone}@$(hostname -s 2>/dev/null || echo unknown), started $(date '+%H:%M:%S')"
+	local body work runner tmp fd status=0
+	body="$(cat)"
+
+	work="$(printf '%s\n' "$body" | stage_in_pod "$pod" "$as" .sh)"
+	runner="$(lock_runner "$lock" "$name" "$owner" "$work" "$as" "$step" | stage_in_pod "$pod" "" .sh)"
+
+	# The fifo is the line the pod watches. We hold the only writer, so it reaches EOF when we stop
+	# existing, whatever stops us; `{fd}>&-` keeps the kubectl child from holding a second writer
+	# and hiding our death.
+	tmp="$(mktemp -d)"
+	mkfifo "$tmp/hold"
+	exec {fd}<>"$tmp/hold"
+
+	if [[ -n "$step" ]]; then
+		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" 2>&1 {fd}>&- \
+			| lock_control "$step" "$tmp/hold" "$tmp/step-status"
+		status="${PIPESTATUS[0]}"
+		if [[ -s "$tmp/step-status" ]]; then
+			status="$(cat "$tmp/step-status")"
+		fi
+	else
+		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" {fd}>&- || status=$?
+	fi
+
+	exec {fd}>&-
+	rm -rf "$tmp"
 
 	if ((status == LOCK_BUSY_STATUS)); then
 		exit 1
@@ -218,9 +326,8 @@ stage_source() {
 		exit 1
 	fi
 	STAGED_FILE_COUNT="$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
-	STAGED_TARBALL="/pvc/.mhr-stage-$$.tar"
-	tar -C "$REPO_ROOT" -cf - --files-from=<(printf '%s\n' "$files") \
-		| kubectl -n "$NS" exec -i "$pod" -- "${as[@]}" bash -c "cat >'$STAGED_TARBALL'"
+	STAGED_TARBALL="$(tar -C "$REPO_ROOT" -cf - --files-from=<(printf '%s\n' "$files") \
+		| stage_in_pod "$pod" "${2:-}" .tar)"
 }
 
 # The fragments below are the protected work, as the pod sees it. Each one prints a script rather
@@ -292,12 +399,18 @@ cmd_build_pod() {
 		esac
 	done
 
-	run_locked "$pod" build <<<"set -euo pipefail"$'\n'"$body"
+	# The rollout is part of a deploy's critical section, not an afterthought to it. The jar and the
+	# server that loads it are one shared thing: two deploys overlapping there means one of them
+	# restarts the server onto the other one's jar and reports success. So the pod keeps the lock
+	# while `rollout_server` runs on this end.
+	local hold=""
+	((restart)) && hold=rollout_server
+	run_locked "$pod" build "" "$hold" <<<"set -euo pipefail"$'\n'"$body"
+}
 
-	if ((restart)); then
-		kubectl -n "$NS" rollout restart deploy/mhr-server
-		kubectl -n "$NS" rollout status deploy/mhr-server --timeout=10m
-	fi
+rollout_server() {
+	kubectl -n "$NS" rollout restart deploy/mhr-server
+	kubectl -n "$NS" rollout status deploy/mhr-server --timeout=10m
 }
 
 # --- automated gameplay tests -------------------------------------------------------------
@@ -500,7 +613,9 @@ cmd_gametest() {
 	local pod artifacts status=0
 	pod="$(require_gametest_pod)"
 	stage_source "$pod" "$GAMETEST_AS_USER"
-	artifacts="/pvc/gametest/.mhr-artifacts-$$.tar"
+	# Named by the pod, like everything else that lands on the shared volume: our pid means nothing
+	# to the other workers writing to it.
+	artifacts="$(</dev/null stage_in_pod "$pod" "$GAMETEST_AS_USER" .tar)"
 
 	run_locked "$pod" gametest "$GAMETEST_AS_USER" <<EOF || status=$?
 set -euo pipefail

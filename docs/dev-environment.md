@@ -91,18 +91,18 @@ anything shared.
 
 Nothing on your machine holds the lock, which is the point. The work runs as a child of the shell
 holding it, so it inherits the lock's file descriptor, and the kernel only drops an `flock` when
-the last descriptor on it closes. The lock is held for exactly as long as anything it protects is
-alive. There is no moment where the lock is free and the work is not finished, so nothing can slip
-into the pod during a handover — there is no handover.
+the last descriptor on it closes. The lock outlives the work rather than the other way round: there
+is no moment where the lock is free and the work is still going, so nothing can slip into the pod
+during a handover, because there is no handover.
 
-That also means killing `dev.sh` does not release the pod. Your terminal comes back, but gradle and
-the client JVM carry on in the pod and keep the lock until they are done, and the next run waits
-for them. That is the honest answer: they are still using it. If something is stuck there forever,
-kill it in the pod and the lock goes with it:
+Nothing needs unlocking by hand either. If your command exits, crashes, is killed — `kill -9`
+included — or loses its connection to the cluster, the exec stream ends, the pod sees its end of it
+close, and it stops the work and drops the lock within a second or so. A worker that dies mid-run
+cannot leave the pod locked, and cannot leave its half-finished gradle running there either.
 
-```sh
-kubectl -n mhr-dev exec deploy/mhr-gametest -- pkill -f KnotClient
-```
+A `deploy` holds the lock across the server rollout as well, not just the jar copy. The two belong
+together: a second deploy landing between them would leave the first one restarting the server onto
+somebody else's jar and calling it a success.
 
 `shell`, `gametest-shell`, `console`, `logs` and `rcon` deliberately take no lock — a shell left
 open would block everybody. Don't sync or build from inside one while someone else holds the lock.
