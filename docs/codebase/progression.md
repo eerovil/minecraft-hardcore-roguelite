@@ -12,27 +12,40 @@ shop-owned or feature-owned progression store beside it.
 
 ## Current model
 
-Permanent unlock ownership lives in `UnlockState`.
+Everything permanent lives in one file, owned by one class.
 
-`UnlockState` is deliberately stored in the Fabric config directory as
-`hardcore-roguelite-progress.json`, outside every Minecraft world. Deleting a run/world must not
-delete what the player has bought.
+`progression/Progress` holds it and is the only thing that writes it. It is deliberately in the
+Fabric config directory as `hardcore-roguelite-progress.json`, outside every Minecraft world:
+deleting a run/world must not delete what the player has bought.
 
-The persisted shape is:
+Currency and ownership are one file because they are one purchase. The persisted shape is:
 
 ```json
 {
-  "world.trees": 1,
-  "player.slot.helmet": 1,
-  "player.craft.enchant": 3,
-  "starter.bread": 1
+  "currency": 35,
+  "unlocks": {
+    "world.trees": 1,
+    "player.slot.helmet": 1,
+    "player.craft.enchant": 3,
+    "starter.bread": 1
+  }
 }
 ```
 
-The value is the purchased level. Missing means level 0 / not owned.
+An unlock's value is the purchased level. Missing means level 0 / not owned.
 
-Old list-shaped saves and renamed ids are migrated by `UnlockState`; changing a stable id after it
-has been used is therefore a save migration, not a cosmetic refactor.
+`UnlockState` and `Wallet` are **views** over that snapshot and own nothing. They are the names the
+rest of the mod asks by — `UnlockState` for what is owned, and the place the rules about unlock ids
+live; `Wallet` for the currency — and both read and write through `Progress`.
+
+`Progress` also owns migration. A profile written by an older build is read once from the two files
+it used to live in, with renamed ids carried over and known levels clamped, and written back as one
+snapshot; the old files are left where they are. Changing a stable id after it has been used is
+therefore a save migration, not a cosmetic refactor.
+
+How that one file is written, and what happens when it cannot be, is
+[One snapshot, one write](#one-snapshot-one-write) below. Read it before changing anything about
+persistence — several of the rules there exist because the alternative was tried.
 
 ## Stable ids are the join key
 

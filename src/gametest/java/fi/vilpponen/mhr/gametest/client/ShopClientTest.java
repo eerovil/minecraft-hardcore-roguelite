@@ -16,6 +16,7 @@ import fi.vilpponen.mhr.progression.Wallet;
 import fi.vilpponen.mhr.shop.ShopServer;
 import fi.vilpponen.mhr.shop.client.ShopScreen;
 import fi.vilpponen.mhr.shop.Reward;
+import fi.vilpponen.mhr.shop.client.ShopIcons;
 import fi.vilpponen.mhr.shop.client.SyncedShop;
 import fi.vilpponen.mhr.starter.StarterItems;
 import net.minecraft.world.item.ItemStack;
@@ -423,6 +424,9 @@ public class ShopClientTest implements FabricClientGameTest {
 							+ rewardCount(context, BREAD));
 			check(rewardIs(context, BREAD, "minecraft:cooked_beef"),
 					"and must show the item the chest will actually hold, not the one it used to");
+			check(drawnIs(context, BREAD, "minecraft:cooked_beef"),
+					"and the square must be drawn as that item: knowing the reward and drawing something"
+							+ " else is the same lie in a different place");
 		} finally {
 			removeOverride(player);
 		}
@@ -430,6 +434,8 @@ public class ShopClientTest implements FabricClientGameTest {
 		check(rewardCount(context, BREAD) == shipped,
 				"taking the override away must put the shipped reward back, and the screen shows "
 						+ rewardCount(context, BREAD));
+		check(drawnIs(context, BREAD, "minecraft:bread"),
+				"and the square must be drawn as bread again");
 	}
 
 	/**
@@ -646,6 +652,12 @@ public class ShopClientTest implements FabricClientGameTest {
 			return reward.isSomething()
 					&& reward.item().getItem().builtInRegistryHolder().key().identifier().toString().equals(itemId);
 		});
+	}
+
+	/** What the square is actually drawn as — the last step between the reward and the player. */
+	private boolean drawnIs(ClientGameTestContext context, String unlockId, String itemId) {
+		return context.computeOnClient(client -> ShopIcons.stackFor(unlockId).getItem()
+				.builtInRegistryHolder().key().identifier().toString().equals(itemId));
 	}
 
 	/** How many the chest will actually hold, from the server's own catalogue. */
