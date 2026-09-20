@@ -19,6 +19,8 @@ usage() {
 	cat <<'EOF'
 Usage: scripts/dev.sh <command>
 
+  image         Print the command that builds the gametest image and loads it into the
+                cluster node. It has to run on the Mac — see docs/dev-environment.md.
   up            Create the namespace, volume and both deployments, then wait for them
   sync          Copy the working tree into the build pod
   build         Run `gradle build` in the build pod (sync first)
@@ -189,11 +191,44 @@ require_build_pod() {
 	echo "$pod"
 }
 
+# The gametest image is built on the Mac, because the only cluster node is the Mac and it is
+# arm64 while this machine is x86_64. There is no registry anywhere: the built image is imported
+# straight into the node container's containerd, which is what `kind load docker-image` does and
+# what Docker Desktop's kind-based kubernetes leaves room for. containerd refuses plain-HTTP
+# registries even on localhost, so an in-cluster registry would need a certificate or a
+# node-level hosts.toml that Docker Desktop resets — this route needs neither.
+#
+# The command is generated rather than kept as a second file so that k8s/gametest.Dockerfile
+# stays the only copy of what goes into the image.
+cmd_image() {
+	local tag dockerfile
+	dockerfile="$REPO_ROOT/k8s/gametest.Dockerfile"
+	tag="$(grep -o 'mhr-gametest:[^ ]*' "$REPO_ROOT/k8s/dev.yaml" | head -1)"
+	if [[ -z "$tag" ]]; then
+		echo "No mhr-gametest tag in k8s/dev.yaml" >&2
+		exit 1
+	fi
+	cat <<EOF
+set -eu
+# Build $tag for the cluster node and import it into that node's containerd.
+docker inspect --format 'node container: {{.State.Status}}' desktop-control-plane
+ctx=\$(mktemp -d)
+cat > "\$ctx/Dockerfile" <<'MHR_DOCKERFILE'
+$(cat "$dockerfile")
+MHR_DOCKERFILE
+docker build --platform linux/arm64 -t $tag "\$ctx"
+rm -rf "\$ctx"
+docker save $tag | docker exec -i desktop-control-plane ctr -n k8s.io images import -
+# Prove it landed. grep fails the whole command if it did not.
+docker exec desktop-control-plane ctr -n k8s.io images ls | grep '$tag'
+EOF
+}
+
 cmd_up() {
 	kubectl apply -f "$REPO_ROOT/k8s/dev.yaml"
 	echo "Waiting for the build pod..."
 	kubectl -n "$NS" rollout status deploy/mhr-build --timeout=5m
-	echo "Waiting for the gametest pod (it apt-gets a virtual display on every start)..."
+	echo "Waiting for the gametest pod (needs the baked image: scripts/dev.sh image)..."
 	kubectl -n "$NS" rollout status deploy/mhr-gametest --timeout=10m
 	echo "Waiting for the server (first start downloads Minecraft, this takes a while)..."
 	kubectl -n "$NS" rollout status deploy/mhr-server --timeout=15m
@@ -514,6 +549,7 @@ cmd_nuke() {
 }
 
 case "${1:-}" in
+	image) cmd_image ;;
 	up) cmd_up ;;
 	sync) build_locked cmd_sync ;;
 	build) build_locked cmd_sync cmd_build ;;
