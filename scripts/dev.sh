@@ -96,34 +96,23 @@ lock_runner() {
 	cat <<'EOF'
 set -uo pipefail
 
-# Stopping the work, in the order that keeps the lock honest: everything the work started first,
-# and only then whatever still holds the lock — which ends with this runner, and with the lock.
+# Stopping this run, and only this run. The work gets a session of its own below, so it can be
+# named as a whole — everything it forked, whether or not that kept the lock descriptor — without
+# naming anything else. Identity comes from that session; the lock file is only a lock.
 #
-# Both halves are needed. The tree is what the work actually is, but a JVM gradle forks does not
-# reliably inherit the lock descriptor, so holders alone would leave one running; and a process
-# reparented away from the tree would be missed by the tree walk alone.
-kill_tree() {
-	local kid
-	for kid in $(cat /proc/"$1"/task/*/children 2>/dev/null); do
-		kill_tree "$kid"
-	done
-	kill -9 "$1" 2>/dev/null || true
-}
-
-kill_lock_holders() {
-	for p in /proc/[0-9]*; do
-		for fd in "$p"/fd/*; do
-			if [ "$(readlink "$fd" 2>/dev/null)" = "$lock" ]; then
-				kill -9 "${p#/proc/}" 2>/dev/null || true
-				break
-			fi
-		done
-	done
-}
+# It used to come from the lock file: kill whatever has it open. That is wrong, and not in a way a
+# special case would fix. A run queued behind this one has the same file open on fd 200 the whole
+# time it sits in flock, so "everything holding the lock" meant "everyone waiting their turn" too,
+# and one owner dying took the queue with it.
+#
+# Order still matters: the work first, then this runner, which is the last thing with the lock and
+# so the thing whose death releases it. The lock is never free while the work is still alive.
+me=$$
 
 stop_everything() {
-	kill_tree "$work_pid"
-	kill_lock_holders
+	pgid=$(cat "$pgid_file" 2>/dev/null || true)
+	[ -n "$pgid" ] && kill -9 -"$pgid" 2>/dev/null
+	kill -9 "$me" 2>/dev/null
 }
 
 if ! exec 200>>"$lock"; then
@@ -157,10 +146,16 @@ rm -f "$go"
 # the instant it started and take the whole run down with it.
 exec 9<&0
 
-# The work. A child of this shell, so it holds this shell's lock descriptor; stdin closed, because
-# this shell's stdin is the line the other end talks to us on and gradle reads whatever stdin it
-# is given.
-$as bash "$work" </dev/null &
+# The work. A child of this shell, so it holds this shell's lock descriptor; in a session of its
+# own, so it can be stopped as one thing; stdin closed, because this shell's stdin is the line the
+# other end talks to us on and gradle reads whatever stdin it is given.
+#
+# `setsid --wait` because we need the exit status back, and the session leader writes down its own
+# pid because setsid forks and so does not tell us what it made. Until that file exists there is
+# nothing to kill but also nothing worth killing.
+pgid_file="$work.pgid"
+rm -f "$pgid_file"
+$as setsid --wait bash -c 'echo $$ >"$0.pgid"; exec bash "$0"' "$work" </dev/null &
 work_pid=$!
 
 # The watcher, with no lock descriptor of its own so that it outlives the killing below. Reading
@@ -190,7 +185,7 @@ if [ -n "$hold" ] && [ "$status" -eq 0 ]; then
 fi
 
 kill "$watcher" 2>/dev/null || true
-rm -f "$work" "$go" "$0"
+rm -f "$work" "$go" "$pgid_file" "$0"
 exit "$status"
 EOF
 }
