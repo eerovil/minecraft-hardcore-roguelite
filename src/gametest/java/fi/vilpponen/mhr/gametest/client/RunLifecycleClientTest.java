@@ -453,6 +453,21 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		check(TestRuns.phase(server) == RunPhase.LOBBY,
 				"this scenario starts between runs, and the save says " + TestRuns.record(server).describe());
 
+		// Give them something to lose first. Whatever a player is holding between runs belongs to
+		// the run that has finished, and joining the next one must not bring it along.
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			settle(context, connection);
+			server.runCommand("give Player0 minecraft:diamond 5");
+			server.runCommand("item replace entity Player0 enderchest.0 with minecraft:emerald 3");
+			server.runCommand("xp set Player0 7 levels");
+			TestRuns.settle(server);
+
+			String carried = TestRuns.runLocalStateOf(server);
+			check(!carried.equals(TestRuns.NOTHING_CARRIED),
+					"this scenario has to start with something to lose, and the player has " + carried);
+		}
+		TestRuns.waitForNobodyConnected(context, server);
+
 		// Started while nobody is connected, which is exactly the situation: the player is away.
 		TestRuns.start(server);
 		check(TestRuns.describePlayers(server).equals("nobody"),
@@ -477,6 +492,13 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 			String stale = TestRuns.liveLobbyRegistrationOf(server, connection);
 			check(stale.isEmpty(), "joining the run out of the lobby must not leave the lobby holding"
 					+ " them, and it kept " + stale);
+
+			// The boundary they never crossed. They were away when the run started, so joining it
+			// has to take everything the last run gave them, exactly as starting one does.
+			String carried = TestRuns.runLocalStateOf(server);
+			check(carried.equals(TestRuns.NOTHING_CARRIED),
+					"a player who joins a run that started while they were away must arrive with"
+							+ " nothing from the run before, and they have " + carried);
 
 			// And the lobby still works for them, which is what that leak used to break.
 			TestRuns.end(server);

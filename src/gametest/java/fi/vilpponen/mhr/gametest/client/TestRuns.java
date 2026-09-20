@@ -14,6 +14,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -131,6 +132,28 @@ final class TestRuns {
 		}
 		return null;
 	}
+
+	/**
+	 * Everything a player is carrying that belongs to one run and must not outlive it.
+	 *
+	 * <p>Read back as one string so an assertion can say what was still there rather than which of
+	 * three separate checks tripped.
+	 */
+	static String runLocalStateOf(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer -> {
+			ServerPlayer live = livePlayer(minecraftServer);
+			if (live == null) {
+				return "nobody connected";
+			}
+			return "inventory " + live.getInventory().countItem(Items.DIAMOND) + " diamond(s),"
+					+ " ender chest " + live.getEnderChestInventory().countItem(Items.EMERALD)
+					+ " emerald(s), " + live.experienceLevel + " xp level(s)";
+		});
+	}
+
+	/** Nothing carried, nothing stored, no experience. */
+	static final String NOTHING_CARRIED =
+			"inventory 0 diamond(s), ender chest 0 emerald(s), 0 xp level(s)";
 
 	/** Everybody the server has and where they are, for a failure message worth reading. */
 	static String describePlayers(TestDedicatedServerContext server) {

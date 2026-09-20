@@ -332,7 +332,15 @@ public final class RunLifecycle {
 					player.getGameProfile().name());
 		}
 
-		Lobby.leaveForRun(player, server.overworld(), server.getRespawnData().pos());
+		// Reset, and only here. This player was away when the run started, so they have never
+		// crossed its start boundary and everything they are carrying belongs to the run before —
+		// which is a roguelite handing a fresh run last run's diamonds. Somebody reconnecting into
+		// a run they were already playing returns above, keeps their things, and must.
+		ServerPlayer inTheRun =
+				Lobby.leaveForRun(player, server.overworld(), server.getRespawnData().pos());
+		resetForNewRun(inTheRun);
+		inTheRun.sendSystemMessage(Component.literal(
+				"Run " + record.runId() + " started while you were away. You have joined it."));
 	}
 
 	/** Is this the very object the server has connected, rather than one that merely matches it? */

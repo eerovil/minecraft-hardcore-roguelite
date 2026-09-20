@@ -104,16 +104,15 @@ final class RunWorlds {
 	 */
 	static ServerLevel recreate(MinecraftServer server, long seed) {
 		useSeed(server, seed);
-		unload(server);
-		IOException leftovers = deleteFiles(server);
+		IOException leftovers = firstOf(unload(server), deleteFiles(server));
 
 		// Rebuilt whatever happened. The server has to have an overworld before anything else runs,
 		// including the code that is about to abandon this run.
 		ServerLevel overworld = build(server);
 
 		if (leftovers != null) {
-			throw new IllegalStateException("the last run's worlds could not be deleted, so what"
-					+ " has just been built is not a fresh run and must not be played as one",
+			throw new IllegalStateException("the last run's worlds could not be closed and deleted,"
+					+ " so what has just been built is not a fresh run and must not be played as one",
 					leftovers);
 		}
 		return overworld;
@@ -128,8 +127,19 @@ final class RunWorlds {
 		next.setDirty();
 	}
 
-	private static void unload(MinecraftServer server) {
+	/**
+	 * Take the three run levels off the server and close them.
+	 *
+	 * <p>A close that fails is reported rather than logged and stepped over, for the same reason a
+	 * failed delete is: it means the old run's files may still be held open, and deleting and
+	 * rebuilding underneath that is exactly the half-cleaned state the loop is supposed to refuse.
+	 *
+	 * @return the first failure, with any others suppressed under it, or null if everything closed
+	 */
+	private static IOException unload(MinecraftServer server) {
 		Map<ResourceKey<Level>, ServerLevel> levels = ((MinecraftServerAccessor) server).mhr$levels();
+		IOException failure = null;
+
 		for (ResourceKey<Level> key : RUN_LEVELS) {
 			ServerLevel level = levels.remove(key);
 			if (level == null) {
@@ -142,8 +152,10 @@ final class RunWorlds {
 				level.close();
 			} catch (IOException e) {
 				HardcoreRoguelite.LOGGER.error("Could not close {} while ending a run", key.identifier(), e);
+				failure = firstOf(failure, e);
 			}
 		}
+		return failure;
 	}
 
 	/**
