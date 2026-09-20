@@ -16,7 +16,7 @@ import net.minecraft.world.item.ItemStack;
  * The whole shop, as the server currently sees it, sent to one client.
  *
  * <p>Everything a purchase depends on travels: the catalogue, the prices out of the server's
- * balance file, the levels out of the server's unlock file, and the currency. The client is not
+ * balance file, and the levels and the currency out of the server's progression snapshot. The client is not
  * asked to work any of that out from its own config, because on a dedicated server its config is
  * not the one in force — and a screen drawing one price while the server charges another is the
  * kind of disagreement that looks like a bug in the shop.

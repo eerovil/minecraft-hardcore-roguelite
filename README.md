@@ -51,7 +51,7 @@ Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks im
 - **the shop** — one screen showing the whole catalogue: restoring vanilla first, going past it
   below. Every entry is an icon with its price under it, hovering explains what it does, and
   clicking buys it. Prices come from the balance data and what you own comes from the permanent
-  unlock file; the server decides every purchase. Open it with `/mhr shop`.
+  progression snapshot; the server decides every purchase. Open it with `/mhr shop`.
 
 **Currency is not earned yet.** The purse is real and permanent and the shop spends it, but nothing
 in gameplay pays into it, because how currency is earned is still an open design question — see

@@ -338,11 +338,11 @@ If **yes**, it is run state and should live with the world, normally through Min
 
 The starter chest is the worked example:
 
-- owning `starter.bread` is permanent -> `UnlockState`;
+- owning `starter.bread` is permanent -> the `Progress` snapshot, via `UnlockState`;
 - "this run already received its chest" is run state -> overworld `SavedData`.
 
-Do not put permanent purchases in world NBT, and do not put once-per-run flags in the permanent
-unlock file.
+Do not put permanent purchases in world NBT, and do not put once-per-run flags in the progression
+snapshot.
 
 ## Tests to require for progression changes
 

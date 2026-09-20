@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
  * half only a real client can answer — that a real click on a real square reaches this — is in
  * {@link fi.vilpponen.mhr.gametest.client.ShopClientTest}.
  *
- * <p>One test method on purpose, like the starter-chest and border ones: the unlock file, the purse
+ * <p>One test method on purpose, like the starter-chest and border ones: the progression snapshot
  * and the balance override are one each for the whole server, and GameTest runs a batch's tests
  * side by side in the same world. Inside the method the scenarios are strictly sequential and each
  * begins by putting progression back to nothing, so the order does not matter and nothing leaks
@@ -79,8 +79,8 @@ public class ShopPurchaseGameTest {
 					this::nothingSellsAnIdTheCatalogueDoesNotHave);
 			scenario(failures, "a-repeatable-unlock-climbs-to-its-ceiling-and-stops",
 					this::aRepeatableUnlockClimbsToItsCeilingAndStops);
-			scenario(failures, "a-purchase-is-still-there-after-the-files-are-read-again",
-					this::aPurchaseIsStillThereAfterTheFilesAreReadAgain);
+			scenario(failures, "a-purchase-is-still-there-after-the-snapshot-is-read-again",
+					this::aPurchaseIsStillThereAfterTheSnapshotIsReadAgain);
 			scenario(failures, "the-price-charged-is-the-one-in-the-balance-data",
 					() -> thePriceChargedIsTheOneInTheBalanceData(helper));
 			scenario(failures, "both-halves-of-a-purchase-reach-the-disk-together",
@@ -236,22 +236,25 @@ public class ShopPurchaseGameTest {
 	}
 
 	/**
-	 * Permanent means on disk. Both files are read again from scratch, which is the nearest thing
+	 * Permanent means on disk. The snapshot is read again from scratch, which is the nearest thing
 	 * to quitting the game that a test sharing the server's process can do.
+	 *
+	 * <p>One read, not two. Both halves of a purchase live in the one file, and {@code UnlockState}
+	 * and {@code Wallet} are views of it — so re-reading it once is what puts both of them back on
+	 * whatever the disk says.
 	 */
-	private void aPurchaseIsStillThereAfterTheFilesAreReadAgain() {
+	private void aPurchaseIsStillThereAfterTheSnapshotIsReadAgain() {
 		reset();
 		int price = priceOf(TREES);
 		Wallet.get().set(price + 5);
 		check(Purchase.buy(TREES).bought(), "setup: the purchase should succeed");
 
-		UnlockState.reloadFromFile();
-		Wallet.reloadFromFile();
+		Progress.reloadFromFile();
 
-		check(owns(TREES), TREES + " was bought and must still be owned after the files are read again");
+		check(owns(TREES), TREES + " was bought and must still be owned after the snapshot is read again");
 		check(balance() == 5,
-				"the currency spent must have reached the disk too, and after re-reading the purse holds "
-						+ balance());
+				"the currency spent must have reached the disk in the same file, and after re-reading the"
+						+ " purse holds " + balance());
 	}
 
 	/**

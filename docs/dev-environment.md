@@ -607,7 +607,7 @@ used" are the same number and a scenario about 28 slots is one line of JSON.
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/StarterChestClientTest.java` is the half only a
 real player arriving can answer. It builds three dedicated servers, because each one is a *run*: the
 harness deletes the world before it starts a server, while the purchases live outside the world in
-the unlock file, which is exactly the difference between rejoining and starting over.
+the progression snapshot, which is exactly the difference between rejoining and starting over.
 
 - **first-join-of-a-run-places-the-starter-chest** — the purchases are made while nobody is
   connected, the way a player buys them between runs, and then a real client connects. One chest,
@@ -721,8 +721,8 @@ than asserting one field:
   is not written into the save file.
 - **a-repeatable-unlock-climbs-to-its-ceiling-and-stops** — four levels of the crafted-tool enchant,
   then a refusal, and exactly four levels' worth charged.
-- **a-purchase-is-still-there-after-the-files-are-read-again** — both the unlock file and the purse
-  re-read from disk, which is the nearest a test sharing the server's process gets to quitting.
+- **a-purchase-is-still-there-after-the-snapshot-is-read-again** — progression re-read from disk,
+  which is the nearest a test sharing the server's process gets to quitting.
 - **the-price-charged-is-the-one-in-the-balance-data** — an override, `/mhr reload`, and the next
   purchase charges the new price.
 - **both-halves-of-a-purchase-reach-the-disk-together** — the snapshot is re-read from disk rather
@@ -847,7 +847,8 @@ terrain generated from scratch with and without the unlock. See
 [Automated gameplay tests](#automated-gameplay-tests). What follows is how to poke at it on the dev
 server when you want to *see* it rather than prove it.
 
-Trees are off until the unlock is bought. There is no shop yet, so use the dev command:
+Trees are off until the unlock is bought. Buy it in the shop with `/mhr shop`, or skip the currency
+and grant it outright with the dev command:
 
 ```sh
 scripts/dev.sh rcon "mhr list"
@@ -999,8 +1000,9 @@ scripts/dev.sh rcon "mhr border medium"     # tiny | medium | large | infinite
 scripts/dev.sh rcon "worldborder get"       # vanilla's own read-back, in blocks
 ```
 
-The tier is not stored anywhere yet, so a server restart goes back to `tiny`. Remembering it
-between runs belongs to the permanent unlock state, which does not exist yet.
+`/mhr border` overrides by hand for the world it is run in. Left alone, a run gets the largest tier
+it owns — bought in the shop, and remembered in the progression snapshot — so a restart comes back
+on that rather than on `tiny`.
 
 Each dimension gets its own center, so the server log is the quickest way to see what was applied:
 
@@ -1106,9 +1108,19 @@ scripts/dev.sh rcon "mhr unlock player.craft.enchant 4"   # straight to the top 
 scripts/dev.sh rcon "mhr lock player.craft.enchant"
 ```
 
-The levels are kept in the same file as everything else, `/server/config/hardcore-roguelite-progress.json`,
-which is now a map of unlock id to level rather than a list of ids. A file in the old format still
-reads, with everything in it counting as level one, and is rewritten in the new shape on the spot.
+The levels are kept in the same file as everything else,
+`/server/config/hardcore-roguelite-progress.json`, whose shape is the currency and a map of unlock
+id to level:
+
+```json
+{
+  "currency": 35,
+  "unlocks": { "player.craft.enchant": 4 }
+}
+```
+
+A profile written by an older build — two files, and before that a bare list of ids — is read once
+and written back in this shape, with the old files left where they are.
 
 How many levels there are and what each is worth are balance numbers, so a curve change needs no
 rebuild:

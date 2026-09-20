@@ -27,7 +27,12 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 
 /**
- * A developer command standing in for the shop, which does not exist yet.
+ * The developer way in to progression: grants and takes away without charging for anything.
+ *
+ * <p>Not a stand-in for the shop — the shop exists, at {@code /mhr shop}, and every purchase made
+ * there goes through {@link fi.vilpponen.mhr.progression.Purchase} and costs currency. This writes
+ * ownership directly, which is what makes it useful: a scenario, or a playtest, can put progression
+ * exactly where it wants it without first arranging the currency to buy it.
  *
  * <p>{@code /mhr list}, {@code /mhr unlock <id> [level]}, {@code /mhr lock <id>}, and
  * {@code /mhr starterchest [pos]} to place this run's chest again without making a new world.

@@ -216,7 +216,7 @@ An id is written into config files and saved state, so it has to survive constan
 renamed or removed. Adding an unlock later is adding a key to the balance file — no change to how
 state is persisted, how the shop is built, or how balance is loaded.
 
-Renaming one is a save migration, not a rename. `UnlockState.RENAMED_IDS` holds the old names that
+Renaming one is a save migration, not a rename. `Progress.RENAMED_IDS` holds the old names that
 still have to be understood: a save written before the rename is migrated on load and rewritten
 once, so a purchase is never orphaned. Adding an unlock never needs an entry there — only changing
 the name of one that already shipped.

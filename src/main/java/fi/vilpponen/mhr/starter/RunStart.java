@@ -22,7 +22,7 @@ import net.minecraft.world.level.saveddata.SavedDataType;
  * When the starter chest appears: once, at the start of a run.
  *
  * <p>A run is a world, so "once per run" is a flag in the world's own save rather than in the
- * cross-run unlock file. Delete the world and the next one gets its own chest; log out and back
+ * cross-run progression snapshot. Delete the world and the next one gets its own chest; log out and back
  * in, or bring a second player, and nothing happens twice.
  *
  * <p>It is placed when a player first joins rather than when the world is created, because the

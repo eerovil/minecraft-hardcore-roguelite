@@ -10,7 +10,12 @@ import fi.vilpponen.mhr.core.PersistenceException;
  * <p>{@code docs/codebase/progression.md} asks a purchase to make one authoritative decision and to
  * make it in one place: resolve the id, read the price and the level, check the currency, deduct it
  * exactly once, advance ownership exactly once, and persist both. That is this method, and the shop
- * screen and the dev command both go through it rather than writing either side themselves.
+ * screen's click is the only thing in the game that reaches it.
+ *
+ * <p>{@code /mhr unlock} deliberately does not come through here. It is a development adapter that
+ * grants ownership directly and charges nothing, so that a scenario can put progression where it
+ * needs it without first arranging the currency for it. Anything that is supposed to cost something
+ * goes through this method; if a second caller ever appears that does, it comes here too.
  *
  * <p>Currency and ownership are persisted together, as one snapshot, by {@link Progress}. That is
  * what makes this simple: a purchase works out what the whole of progression should look like

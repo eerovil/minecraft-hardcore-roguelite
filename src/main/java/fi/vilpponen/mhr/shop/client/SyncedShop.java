@@ -9,7 +9,7 @@ import java.util.Map;
  * What the server last told this client about the shop — a client-side cache, nothing more.
  *
  * <p>The same arrangement as {@code SyncedSlotUnlocks}, and for the same reason: a connected client
- * cannot read the server's unlock or currency files, but it still has to draw prices and grey out
+ * cannot read the server's progression snapshot, but it still has to draw prices and grey out
  * what is out of reach. It is written only by the client's payload handler and read only by the
  * screen.
  *
