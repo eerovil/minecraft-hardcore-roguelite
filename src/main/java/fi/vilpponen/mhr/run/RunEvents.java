@@ -4,6 +4,7 @@ import net.fabricmc.fabric.api.event.Event;
 import net.fabricmc.fabric.api.event.EventFactory;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 
 /**
  * The seam between the loop and everything a run is made of.
@@ -59,12 +60,47 @@ public final class RunEvents {
 				}
 			});
 
+	/**
+	 * One player has crossed into a run: moved, reset, and about to be marked as admitted.
+	 *
+	 * <p>This is the hook for anything that has to be applied <em>to a player</em> at run start —
+	 * the permanent status effects and other personal upgrades the design has planned. It is a
+	 * separate event from {@link #RUN_STARTED} for two reasons, and both are load-bearing:
+	 *
+	 * <ul>
+	 *   <li>It fires <em>after</em> the fresh-run reset, which clears effects, hunger and the rest.
+	 *       A listener on {@code RUN_STARTED} that gave somebody a status effect would have it
+	 *       wiped moments later.
+	 *   <li>It fires for every player who enters the run, including one who was offline when it
+	 *       started and joins later. {@code RUN_STARTED} happens once, when nobody is in the run
+	 *       yet, so a late joiner would never have seen it.
+	 * </ul>
+	 *
+	 * <p>World setup — borders, the starter chest, anything about the place rather than the person
+	 * — belongs on {@link #RUN_STARTED} instead.
+	 *
+	 * <p>The record handed over may still say {@link RunPhase#CREATING_RUN} when the run is being
+	 * started, and {@link RunPhase#RUNNING} when somebody joins one already going. Its run id is
+	 * the run being entered either way, which is the part a listener should care about.
+	 */
+	public static final Event<PlayerEnteredRun> PLAYER_ENTERED_RUN =
+			EventFactory.createArrayBacked(PlayerEnteredRun.class, listeners -> (server, player, run) -> {
+				for (PlayerEnteredRun listener : listeners) {
+					listener.onPlayerEnteredRun(server, player, run);
+				}
+			});
+
 	private RunEvents() {
 	}
 
 	@FunctionalInterface
 	public interface RunStarted {
 		void onRunStarted(MinecraftServer server, ServerLevel overworld, RunRecord run);
+	}
+
+	@FunctionalInterface
+	public interface PlayerEnteredRun {
+		void onPlayerEnteredRun(MinecraftServer server, ServerPlayer player, RunRecord run);
 	}
 
 	@FunctionalInterface

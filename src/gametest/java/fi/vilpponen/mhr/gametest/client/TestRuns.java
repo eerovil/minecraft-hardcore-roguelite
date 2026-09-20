@@ -18,6 +18,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -175,13 +176,29 @@ final class TestRuns {
 			return "inventory " + live.getInventory().countItem(Items.DIAMOND) + " diamond(s),"
 					+ " ender chest " + live.getEnderChestInventory().countItem(Items.EMERALD)
 					+ " emerald(s), " + live.experienceLevel + " xp level(s), respawn point "
-					+ (live.getRespawnConfig() == null ? "unset" : "set");
+					+ (live.getRespawnConfig() == null ? "unset" : "set")
+					+ ", hunger " + live.getFoodData().getFoodLevel()
+					+ "/" + live.getFoodData().getSaturationLevel();
 		});
 	}
 
 	/** Nothing carried, nothing stored, no experience. */
-	static final String NOTHING_CARRIED =
-			"inventory 0 diamond(s), ender chest 0 emerald(s), 0 xp level(s), respawn point unset";
+	static final String NOTHING_CARRIED = "inventory 0 diamond(s), ender chest 0 emerald(s),"
+			+ " 0 xp level(s), respawn point unset, hunger 20/5.0";
+
+	/** Which status effects the player is carrying, named, so a failure says which are missing. */
+	static String effectsOn(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer -> {
+			ServerPlayer live = livePlayer(minecraftServer);
+			if (live == null) {
+				return "nobody connected";
+			}
+			StringBuilder carried = new StringBuilder();
+			live.getActiveEffects().forEach(effect -> carried
+					.append(effect.getEffect().getRegisteredName()).append(' '));
+			return carried.isEmpty() ? "none" : carried.toString().trim();
+		});
+	}
 
 	/** Everybody the server has and where they are, for a failure message worth reading. */
 	static String describePlayers(TestDedicatedServerContext server) {
@@ -312,6 +329,26 @@ final class TestRuns {
 					((MinecraftServerAccessor) minecraftServer).mhr$levels().put(Lobby.LEVEL, lobby));
 		}
 	}
+
+	/**
+	 * The run state Minecraft keeps on the server rather than in the levels.
+	 *
+	 * <p>Read as one string for the same reason as the player's: an assertion should be able to say
+	 * which part of a fresh run was not fresh.
+	 */
+	static String serverRunStateOf(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer -> {
+			ServerLevel overworld = minecraftServer.overworld();
+			long ticks = minecraftServer.clockManager()
+					.getInstance(minecraftServer.registryAccess().getOrThrow(WorldClocks.OVERWORLD))
+					.totalTicks();
+			return "raining " + overworld.isRaining() + ", thundering " + overworld.isThundering()
+					+ ", day " + (ticks / 24000L);
+		});
+	}
+
+	/** Nothing has happened yet: clear skies, first morning. */
+	static final String FRESH_WORLD = "raining false, thundering false, day 0";
 
 	/** Wait for one full server tick, so a command issued just before it has certainly run. */
 	static void settle(TestDedicatedServerContext server) {

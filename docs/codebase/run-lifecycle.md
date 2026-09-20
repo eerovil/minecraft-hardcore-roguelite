@@ -141,21 +141,36 @@ fails. What the running process believes can never be ahead of what the save say
 delete is the same idea: `RunWorlds.recreate` rebuilds the levels so the server still has an
 overworld, then throws, and the run is abandoned rather than played on top of the last one's chunks.
 
-## The run-start hook
+## The run-start hooks
 
 Features must not watch unrelated events and infer that a run has begun. They listen:
 
 ```java
-RunEvents.RUN_STARTED.register((server, overworld, run) -> { ... });
+RunEvents.RUN_STARTED.register((server, overworld, run) -> { ... });        // the world
+RunEvents.PLAYER_ENTERED_RUN.register((server, player, run) -> { ... });    // one player
 RunEvents.RUN_ENDED.register((server, run) -> { ... });
 ```
+
+**Which of the first two you want depends on whether you are setting up a place or a person**, and
+getting it wrong fails quietly:
+
+| | `RUN_STARTED` | `PLAYER_ENTERED_RUN` |
+| --- | --- | --- |
+| Fires | once, before anybody is in the run | once per player, as they cross into it |
+| Good for | border, starter chest, anything about the world | permanent status effects, personal upgrades |
+| Relative to the fresh-run reset | before it | **after** it |
+| A player who joins the run later | never sees it | sees it |
+
+A permanent status-effect upgrade — the design's own example — belongs on `PLAYER_ENTERED_RUN` and
+only works there. On `RUN_STARTED` it would be cleared moments later by `resetForNewRun`, and a
+player who was offline when the run started would never have been given it at all.
 
 `RUN_STARTED` fires on the server thread after the three dimensions exist and before any player is
 in them, so a listener can change the world the player is about to arrive in. The overworld it is
 handed is **a different object from the previous run's** — a listener that cached the old one is
 holding a closed level.
 
-Two listeners exist today and are the model to copy:
+Two listeners exist today and are the model to copy, both on the world hook:
 
 - `border/WorldBorders` puts the selected tier on the run's three new dimensions;
 - `starter/RunStart` places the starter chest at the run's overworld spawn.
@@ -183,6 +198,20 @@ it will survive into the next run.
 Step 5 matters because vanilla only chooses a spawn for a world that has never been initialised. By
 run two the save has been initialised for a long time, so without this every run after the first
 would start at run one's coordinates in terrain that no longer exists.
+
+### A run is not only its chunks
+
+Since 26.1 several things that belong to one run do not live in a level at all: the weather, the
+world clocks and the wandering trader's timer are the **server's**. Replacing the three levels
+leaves them untouched, so run 2 would open in run 1's thunderstorm at run 1's time of day. `recreate`
+therefore resets them too — weather and spawn timers before the rebuild, because the new levels read
+those as they are constructed, and the clocks after it, because setting a clock tells the connected
+players and that reads the game rules off an overworld that does not exist in between.
+
+The dividing line is per run versus per save. Weather, time and spawn timers are things a run
+accumulates. Game rules, the scoreboard and permanent progression belong to the save and are left
+alone — this is not a wipe. Anything server-global added later needs putting on one side of that
+line deliberately.
 
 ### The old run's worlds are deleted at the *start* of the next run
 
@@ -257,7 +286,8 @@ Before adding a field, decide which column it belongs in.
 | Starter item ownership | Across saves | same file |
 | Phase, run id, seed, run count, reward committed | The save, across runs | `<save>/hardcore-roguelite-run.json` |
 | Generated chunks/entities | One run | the run's dimensions, deleted between runs |
-| Player inventory, ender chest, XP | One run | cleared by `RunLifecycle` at run start |
+| Player inventory, ender chest, XP, hunger, respawn point, effects | One run | `RunLifecycle.resetForNewRun`, as a player enters |
+| Weather, world clocks, wandering-trader timer | One run | server-global; reset by `RunWorlds.recreate` |
 | Lobby contents | The save, across runs | the lobby dimension |
 | Selected/active run setup derived from purchases | One run; recomputable at start | applied by a `RUN_STARTED` listener |
 | Shop UI screen state | transient | client/server session, not progression |

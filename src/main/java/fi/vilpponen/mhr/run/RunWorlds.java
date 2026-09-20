@@ -26,6 +26,9 @@ import net.minecraft.world.entity.raid.Raids;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.CustomSpawner;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.clock.ServerClockManager;
+import net.minecraft.world.clock.WorldClock;
+import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.level.TicketStorage;
 import net.minecraft.world.level.biome.BiomeManager;
 import net.minecraft.world.level.dimension.LevelStem;
@@ -34,6 +37,8 @@ import net.minecraft.world.level.levelgen.PhantomSpawner;
 import net.minecraft.world.level.levelgen.WorldGenSettings;
 import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.saveddata.SavedDataType;
+import net.minecraft.world.level.saveddata.WanderingTraderData;
+import net.minecraft.world.level.saveddata.WeatherData;
 import net.minecraft.world.level.storage.DerivedLevelData;
 import net.minecraft.world.level.storage.LevelData;
 import net.minecraft.world.level.storage.LevelStorageSource;
@@ -86,6 +91,15 @@ final class RunWorlds {
 	 */
 	private static final List<SavedDataType<?>> RUN_SAVED_DATA = List.of(Raids.TYPE, TicketStorage.TYPE);
 
+	/**
+	 * Every clock the game keeps, all of which measure one run.
+	 *
+	 * <p>Named rather than walked over the registry, because a clock a datapack adds is not
+	 * necessarily one this mod is entitled to reset.
+	 */
+	private static final List<ResourceKey<WorldClock>> RUN_CLOCKS =
+			List.of(WorldClocks.OVERWORLD, WorldClocks.THE_END);
+
 	private RunWorlds() {
 	}
 
@@ -106,9 +120,16 @@ final class RunWorlds {
 		useSeed(server, seed);
 		IOException leftovers = firstOf(unload(server), deleteFiles(server));
 
+		// Before the rebuild, because this is what the new levels read as they are constructed.
+		resetWeatherAndSpawnTimers(server);
+
 		// Rebuilt whatever happened. The server has to have an overworld before anything else runs,
 		// including the code that is about to abandon this run.
 		ServerLevel overworld = build(server);
+
+		// After the rebuild, because setting a clock tells the connected players, and telling them
+		// reads the game rules off the overworld — which does not exist between the two.
+		resetClocks(server);
 
 		if (leftovers != null) {
 			throw new IllegalStateException("the last run's worlds could not be closed and deleted,"
@@ -116,6 +137,48 @@ final class RunWorlds {
 					leftovers);
 		}
 		return overworld;
+	}
+
+	/**
+	 * Put back the run state Minecraft keeps on the server rather than in the levels.
+	 *
+	 * <p>Replacing the three {@link ServerLevel} objects is not the whole of a fresh run, because
+	 * since 26.1 several things that belong to one run do not live in a level at all. The weather,
+	 * the world clocks and the wandering trader's timer are the server's, and they would have
+	 * carried straight through: run 2 could open in run 1's thunderstorm, at run 1's time of day,
+	 * with a trader due in a hundred ticks. New chunks and a new seed, and the sky says otherwise.
+	 *
+	 * <p>The dividing line is per run versus per save. Weather, time and spawn timers are things a
+	 * run accumulates, so they start again with it. Game rules, the scoreboard and permanent
+	 * progression belong to the save and are deliberately left alone — this is not a wipe.
+	 *
+	 * <p>This half runs before the levels are rebuilt, because that is when they read it: a new
+	 * {@code ServerLevel} takes the weather in its constructor, and the overworld's wandering
+	 * trader spawner reads its own saved data as it is built. The clocks are the other way round —
+	 * see {@link #resetClocks} — which is why they are not in here.
+	 */
+	private static void resetWeatherAndSpawnTimers(MinecraftServer server) {
+		// Mutated rather than replaced: the server holds this object for its lifetime, so putting a
+		// fresh one in the data storage would leave it using the old one.
+		WeatherData weather = server.getWeatherData();
+		weather.setRaining(false);
+		weather.setRainTime(0);
+		weather.setThundering(false);
+		weather.setThunderTime(0);
+		weather.setClearWeatherTime(0);
+		weather.setDirty();
+
+		// Read fresh by the spawner that build() is about to construct, so replacing it is enough.
+		server.getDataStorage().set(WanderingTraderData.TYPE, new WanderingTraderData());
+
+	}
+
+	/** Back to the first morning, for every clock the game has. */
+	private static void resetClocks(MinecraftServer server) {
+		ServerClockManager clocks = server.clockManager();
+		for (ResourceKey<WorldClock> clock : RUN_CLOCKS) {
+			clocks.setTotalTicks(server.registryAccess().getOrThrow(clock), 0L);
+		}
 	}
 
 	private static void useSeed(MinecraftServer server, long seed) {

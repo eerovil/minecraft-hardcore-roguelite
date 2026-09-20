@@ -18,6 +18,8 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerCon
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
 import net.minecraft.client.multiplayer.chat.GuiMessage;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -79,6 +81,9 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 
 	/** How many times a run has been reported as ended, counted on the server. */
 	private static final AtomicInteger RUNS_ENDED = new AtomicInteger();
+
+	/** How many times a player has been reported as entering a run. */
+	private static final AtomicInteger PLAYERS_ENTERED = new AtomicInteger();
 
 	/**
 	 * Make the next run start, or the next reward, fail on purpose.
@@ -259,6 +264,22 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		check(stale.isEmpty(), "after a player leaves the lobby for a run, the lobby must not still"
 				+ " hold a live registration for them, and it kept " + stale);
 
+		// The player-entry hook, on the path where somebody was already connected. Applied after
+		// the reset that clears effects, which is the ordering that used to make this impossible.
+		check(TestRuns.effectsOn(server).contains("speed"),
+				"a run-start upgrade must survive the fresh-run reset, and the player carries "
+						+ TestRuns.effectsOn(server));
+
+		// Left behind on purpose, for the next run to not inherit. These live on the server rather
+		// than in the levels run 2 replaces, which is exactly why they are worth checking.
+		server.runCommand("weather thunder");
+		server.runCommand("time set midnight");
+		server.runCommand("time add 96000");
+		TestRuns.settle(server);
+		check(!TestRuns.serverRunStateOf(server).equals(TestRuns.FRESH_WORLD),
+				"this run has to leave something behind for the next one to not inherit, and the"
+						+ " world is " + TestRuns.serverRunStateOf(server));
+
 		firstSeed = record.seed();
 		firstSpawn = TestRuns.runSpawn(server);
 		LOGGER.info("Run 1: seed {}, spawn {}", firstSeed, firstSpawn);
@@ -414,6 +435,14 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 					"run 1's block is still standing in " + key.identifier()
 							+ ", so run 2 is playing run 1's chunks");
 		}
+
+		// The half of a fresh run that is not chunks. Weather, the clock and the spawn timers live
+		// on the server now, not in the levels that were just replaced, so they would have carried
+		// through untouched: new terrain under run 1's thunderstorm, at run 1's time of night.
+		String world = TestRuns.serverRunStateOf(server);
+		check(world.equals(TestRuns.FRESH_WORLD),
+				"run 2 must open on a fresh world, not the weather and time run 1 left behind: "
+						+ world);
 
 		check(!TestRuns.playerIsInTheLobby(server, connection),
 				"starting the next run must take the player into it");
@@ -707,6 +736,12 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 							+ carried);
 			check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
 					"and they still belong in the run");
+
+			// The other half of the hook: somebody who was away when the run started never saw the
+			// world-level event, and would have got none of what the run owes a player.
+			check(TestRuns.effectsOn(server).contains("speed"),
+					"a player who joins a run late must still get its run-start upgrades, and they"
+							+ " carry " + TestRuns.effectsOn(server));
 		}
 	}
 
@@ -927,6 +962,14 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 				}
 			});
 			RunEvents.RUN_ENDED.register((minecraftServer, run) -> RUNS_ENDED.incrementAndGet());
+
+			// The hook a permanent player upgrade would hang off. Giving an effect here is the
+			// design's own example, and it is the thing that used to be impossible: applied on the
+			// world hook it was wiped by the reset, and a late joiner never saw that hook at all.
+			RunEvents.PLAYER_ENTERED_RUN.register((minecraftServer, player, run) -> {
+				PLAYERS_ENTERED.incrementAndGet();
+				player.addEffect(new MobEffectInstance(MobEffects.SPEED, MobEffectInstance.INFINITE_DURATION));
+			});
 		});
 	}
 

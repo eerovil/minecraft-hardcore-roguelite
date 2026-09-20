@@ -1,6 +1,7 @@
 package fi.vilpponen.mhr.run;
 
 import fi.vilpponen.mhr.HardcoreRoguelite;
+import fi.vilpponen.mhr.mixin.FoodDataAccessor;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.Set;
@@ -12,6 +13,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.food.FoodData;
 import net.minecraft.world.level.storage.LevelResource;
 
 /**
@@ -169,17 +171,49 @@ public final class RunLifecycle {
 					"run " + record.runId() + " could not be built: " + failed, failed);
 		}
 
-		set(record.created());
-
-		BlockPos spawn = server.getRespawnData().pos();
-		for (ServerPlayer player : players()) {
-			// Leaving the lobby is a respawn, not a teleport, and the object that comes back is a
-			// different one — everything after this has to use it. See Lobby.leaveForRun.
-			ServerPlayer inTheRun = Lobby.leaveForRun(player, overworld, spawn);
-			resetForNewRun(inTheRun);
-			RunAdmission.admit(inTheRun, record.runId());
-			inTheRun.sendSystemMessage(Component.literal("Run " + record.runId() + " begins."));
+		// Still CREATING_RUN. Putting the players in is part of starting a run, not something that
+		// happens to a run already started: if one of them cannot be given what this run owes them,
+		// the run has not started.
+		try {
+			BlockPos spawn = server.getRespawnData().pos();
+			for (ServerPlayer player : players()) {
+				enterRun(player, overworld, spawn, "Run " + record.runId() + " begins.");
+			}
+		} catch (RuntimeException failed) {
+			abandonCreation(failed);
+			throw new IllegalStateException(
+					"run " + record.runId() + " could not be entered: " + failed, failed);
 		}
+
+		set(record.created());
+	}
+
+	/**
+	 * One player crossing into a run — the only way anybody does.
+	 *
+	 * <p>Both ways in come through here: the loop that starts a run with people connected, and the
+	 * join of somebody who was away when it started. They used to be two copies of the same four
+	 * steps, and the last several rounds of review found the same bug in each of them separately.
+	 *
+	 * <p>The order is the interesting part. The move first, because everything after it is about a
+	 * player who is in the run. Then the reset, which takes back whatever the last run gave them.
+	 * Only then the upgrades, because the reset clears status effects and would wipe anything
+	 * applied before it. Admission last, so a failure anywhere above leaves them un-admitted and
+	 * the next join does all of this again rather than assuming it happened.
+	 *
+	 * <p>Leaving the lobby is a respawn rather than a teleport, so the object that comes back is a
+	 * different one and everything after it has to use that. See {@code Lobby.leaveForRun}.
+	 *
+	 * @return the player as they are now
+	 */
+	private ServerPlayer enterRun(
+			ServerPlayer player, ServerLevel overworld, BlockPos spawn, String message) {
+		ServerPlayer inTheRun = Lobby.leaveForRun(player, overworld, spawn);
+		resetForNewRun(inTheRun);
+		RunEvents.PLAYER_ENTERED_RUN.invoker().onPlayerEnteredRun(server, inTheRun, record);
+		RunAdmission.admit(inTheRun, record.runId());
+		inTheRun.sendSystemMessage(Component.literal(message));
+		return inTheRun;
 	}
 
 	/**
@@ -397,6 +431,10 @@ public final class RunLifecycle {
 		server.execute(() -> placeOnJoin(player, 0));
 	}
 
+	/** What a brand-new Minecraft player's hunger is, and so what a fresh run's is. */
+	private static final int VANILLA_FOOD_LEVEL = 20;
+	private static final float VANILLA_SATURATION = 5.0F;
+
 	/** How many ticks to wait for a login to finish before moving the player anyway. */
 	private static final int JOIN_SETTLE_TICKS = 100;
 
@@ -476,12 +514,19 @@ public final class RunLifecycle {
 					player.getGameProfile().name());
 		}
 
-		ServerPlayer inTheRun =
-				Lobby.leaveForRun(player, server.overworld(), server.getRespawnData().pos());
-		resetForNewRun(inTheRun);
-		RunAdmission.admit(inTheRun, record.runId());
-		inTheRun.sendSystemMessage(Component.literal(
-				"Run " + record.runId() + " started while you were away. You have joined it."));
+		try {
+			enterRun(player, server.overworld(), server.getRespawnData().pos(),
+					"Run " + record.runId() + " started while you were away. You have joined it.");
+		} catch (RuntimeException failed) {
+			// Unlike a run start, this run is already going and shared. One player's entry failing
+			// is not a reason to end everybody's run, so it is reported rather than propagated —
+			// and they stay un-admitted, so joining again tries the whole thing over.
+			HardcoreRoguelite.LOGGER.error("{} could not be put into run {}",
+					player.getGameProfile().name(), record.runId(), failed);
+			player.sendSystemMessage(Component.literal(
+					"Something went wrong joining this run. See the server log; rejoining will try"
+							+ " again."));
+		}
 	}
 
 	/**
@@ -583,10 +628,28 @@ public final class RunLifecycle {
 		player.setRespawnPosition(null, false);
 	}
 
+	/**
+	 * Hunger as a brand-new player has it, which is not the same as a full one.
+	 *
+	 * <p>This used to be {@code eat(20, 1.0F)}, which is the ordinary "I have eaten something"
+	 * operation and drives saturation up to the food level — twenty, where a new player starts with
+	 * five. High saturation is a real advantage, it is what the design has pencilled in as a
+	 * Vanilla+ convenience upgrade, and starting every run with it gives away something nobody has
+	 * bought. Exhaustion and the tick timer go back to zero too: a run that ended with the hunger
+	 * bar about to drop should not hand the next one that head start.
+	 */
+	private static void resetHunger(ServerPlayer player) {
+		FoodData hunger = player.getFoodData();
+		hunger.setFoodLevel(VANILLA_FOOD_LEVEL);
+		hunger.setSaturation(VANILLA_SATURATION);
+		((FoodDataAccessor) hunger).mhr$setExhaustionLevel(0.0F);
+		((FoodDataAccessor) hunger).mhr$setTickTimer(0);
+	}
+
 	private static void revive(ServerPlayer player) {
 		player.setHealth(player.getMaxHealth());
 		player.removeAllEffects();
-		player.getFoodData().eat(20, 1.0F);
+		resetHunger(player);
 		player.clearFire();
 		player.resetFallDistance();
 		player.setAirSupply(player.getMaxAirSupply());
