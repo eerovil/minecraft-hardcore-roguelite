@@ -10,9 +10,11 @@ import fi.vilpponen.mhr.UnlockEffects;
 import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.animal.AnimalSpecies;
 import fi.vilpponen.mhr.equipment.EquipmentLocks;
+import fi.vilpponen.mhr.equipment.EquipmentSlots;
 import fi.vilpponen.mhr.progression.Catalogue;
 import fi.vilpponen.mhr.progression.Offer;
 import fi.vilpponen.mhr.progression.Wallet;
+import fi.vilpponen.mhr.run.RunLifecycle;
 import fi.vilpponen.mhr.starter.RunStart;
 import fi.vilpponen.mhr.starter.StarterChest;
 import fi.vilpponen.mhr.starter.StarterItems;
@@ -109,8 +111,11 @@ public final class UnlockCommand {
 					.append(offer.id());
 		}
 		lines.append("\nCurrency: ").append(Wallet.get().balance());
-		lines.append("\nThis run's starter chest: ")
-				.append(RunStart.alreadyGranted(context.getSource().getLevel()) ? "already given" : "not given yet");
+		// Where the starter-chest line used to be. That reported a per-world "already given" flag,
+		// and this branch retires the flag: a run now has an explicit beginning, so the chest is
+		// placed once by construction rather than once per world. The run state says the same thing
+		// and more.
+		lines.append("\nRun lifecycle: ").append(RunLifecycle.get().describe());
 		String message = lines.toString();
 		context.getSource().sendSuccess(() -> Component.literal(message), false);
 		return Unlock.values().length + catalogueOnly.size();

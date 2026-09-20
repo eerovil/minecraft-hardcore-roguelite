@@ -1,7 +1,7 @@
 package fi.vilpponen.mhr.gametest.client;
 
 import fi.vilpponen.mhr.UnlockState;
-import fi.vilpponen.mhr.starter.RunStart;
+import fi.vilpponen.mhr.run.Lobby;
 import fi.vilpponen.mhr.starter.StarterItems;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -14,11 +14,13 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerCon
 import net.minecraft.client.gui.screens.inventory.ContainerScreen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.item.enchantment.ItemEnchantments;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
@@ -28,27 +30,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The half of the starter chest that only a real client can answer: joining a fresh run is what
- * puts the chest there, once, and joining again does not do it twice.
+ * The half of the starter chest that only a real client can answer: a run beginning is what puts
+ * the chest there, once, and nothing else does.
  *
  * <p>{@link fi.vilpponen.mhr.gametest.server.StarterChestGameTest} covers what goes in the chest
  * and how many chests that takes, by calling the delivery itself. It cannot cover this half,
- * because the trigger is a player arriving in the world and Fabric's server GameTests have no
- * player to arrive. So this one builds a real dedicated server, buys the starter items before
- * anybody is connected — which is when a player would have bought them, between runs — and then
- * connects a real client and looks at what is standing next to them.
+ * because the trigger is a run starting around a real player and Fabric's server GameTests have
+ * neither.
  *
- * <p>Three servers are built rather than one, because each one is a *run*: the harness deletes the
- * world before it starts a server, and the flag that says "this run has had its chest" lives in the
- * world's own save while the purchases live outside it. That is exactly the difference between
- * rejoining and starting over, and no shortcut can imitate it.
+ * <p>Three runs inside one dedicated server, because a run is no longer a world the harness has to
+ * build: it is the loop starting again, and the worlds under it are replaced while the server keeps
+ * going. That is exactly the boundary the "once per run" rule is about, and the run before each one
+ * is deliberately left behind rather than reset by hand.
  *
- * <p>Which is also why the purchases are made once, before the first run, and never again. The
- * second run buys nothing: it drops the loaded unlock state so the file has to answer for it,
- * asserts the three are still owned, and only then expects its chest. So a change that reset the
- * unlocks along with the world, or that stopped writing them to disk at all, fails here rather
- * than quietly re-buying them. The third run is the only one that touches the catalogue again, to
- * clear it for the nothing-bought control.
+ * <p>The purchases are made once, before the first run, and never again. The second run buys
+ * nothing: it drops the loaded unlock state so the file has to answer for it, asserts the three are
+ * still owned, and only then expects its chest. So a change that lost the unlocks along with the
+ * world, or that stopped writing them to disk at all, fails here rather than quietly re-buying
+ * them. The third run is the only one that touches the catalogue again, to clear it for the
+ * nothing-bought control.
  *
  * <p>See {@code docs/dev-environment.md} for how to run this.
  */
@@ -75,38 +75,36 @@ public class StarterChestClientTest implements FabricClientGameTest {
 
 	@Override
 	public void runTest(ClientGameTestContext context) {
-		// Run one: the purchases are made while nobody is connected, and then somebody arrives.
 		try (TestDedicatedServerContext server = context.worldBuilder().createServer()) {
 			own(server, PURCHASES);
-			boolean grantedBeforeAnyoneJoined = alreadyGranted(server);
 
 			try (TestDedicatedServerConnection connection = server.connect()) {
 				connection.waitForChunksRender();
 
-				scenario(context, "first-join-of-a-run-places-the-starter-chest",
-						() -> firstJoinPlacesTheChest(context, server, connection,
-								grantedBeforeAnyoneJoined));
+				scenario(context, "the-lobby-has-no-starter-chest-before-a-run",
+						() -> theLobbyHasNoChest(server, connection));
+
+				TestRuns.start(server);
+				connection.waitForChunksRender();
+
+				scenario(context, "starting-a-run-places-the-starter-chest",
+						() -> runStartPlacesTheChest(context, server, connection));
 				scenario(context, "the-chest-opens-and-shows-what-was-bought",
 						() -> theChestOpens(context, server, connection));
 			}
 
 			scenario(context, "a-reconnect-does-not-place-a-second-chest",
 					() -> reconnectGivesNoSecondChest(context, server));
-		}
 
-		// Run two: a world that has never been played, and deliberately nothing bought here. The
-		// purchases have to be the ones run one was given, and they have to come back off the disk
-		// rather than out of the process, or the scenario proves nothing.
-		try (TestDedicatedServerContext server = context.worldBuilder().createServer()) {
+			// Run two. Nothing is bought here on purpose: these are run one's purchases, and they
+			// have to come back off the disk rather than out of the process.
 			forgetWhatIsInMemory(server);
-			scenario(context, "a-genuinely-new-run-gets-its-starter-chest-again",
-					() -> aNewRunGrantsAgain(context, server));
-		}
+			scenario(context, "a-second-run-gets-its-starter-chest-again",
+					() -> aSecondRunGrantsAgain(context, server));
 
-		// Run three: the control. Nothing bought, so there must be nothing to find.
-		try (TestDedicatedServerContext server = context.worldBuilder().createServer()) {
+			// Run three: the control. Nothing bought, so there must be nothing to find.
 			own(server, List.of());
-			scenario(context, "nothing-bought-means-no-chest-on-join",
+			scenario(context, "nothing-bought-means-no-chest-when-a-run-starts",
 					() -> nothingBoughtMeansNoChest(context, server));
 		}
 
@@ -120,35 +118,47 @@ public class StarterChestClientTest implements FabricClientGameTest {
 	// --- the scenarios ---------------------------------------------------------------------
 
 	/**
-	 * Joining a fresh run puts the chest next to the player, holding what they bought.
+	 * Between runs there is no chest, because between runs there is no run to have started.
 	 *
-	 * <p>Nothing in this scenario asks the mod to place anything. The player connects the way a
-	 * player connects, and the assertions are about blocks that are either standing there
-	 * afterwards or are not.
+	 * <p>This is what stops the scenario after it from passing for the wrong reason: a mod that
+	 * handed a chest to anybody who logged in would look identical one scenario later.
 	 */
-	private void firstJoinPlacesTheChest(ClientGameTestContext context,
-			TestDedicatedServerContext server, TestDedicatedServerConnection connection,
-			boolean grantedBeforeAnyoneJoined) {
-		check(!grantedBeforeAnyoneJoined,
-				"a world nobody has joined yet must not already be marked as having had its chest");
+	private void theLobbyHasNoChest(
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		check(TestRuns.playerIsInTheLobby(server, connection),
+				"with no run in progress the player belongs in the lobby, and they are in "
+						+ TestRuns.playerDimension(server, connection));
 
 		BlockPos player = playerPosition(server, connection);
-		List<BlockPos> chests = chestsNear(server, player);
-		LOGGER.info("Player at {}, chests near: {}", player, chests);
+		List<BlockPos> chests = chestsNear(server, Lobby.LEVEL, player);
+		check(chests.isEmpty(), "joining between runs must not put a chest anywhere, and there are "
+				+ chests.size() + " at " + chests);
+	}
 
-		check(chests.size() == 1, "joining a fresh run with three starter items bought must leave"
-				+ " exactly one chest next to the player, and there are " + chests.size()
+	/**
+	 * Starting a run puts the chest at the run's spawn, holding what was bought.
+	 *
+	 * <p>Nothing in this scenario asks the mod to place anything. A run is started the way the
+	 * lobby will start one, and the assertions are about blocks that are either standing there
+	 * afterwards or are not.
+	 */
+	private void runStartPlacesTheChest(ClientGameTestContext context,
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		BlockPos spawn = TestRuns.runSpawn(server);
+		List<BlockPos> chests = chestsNear(server, Level.OVERWORLD, spawn);
+		LOGGER.info("Run spawn {}, chests near: {}", spawn, chests);
+
+		check(chests.size() == 1, "starting a run with three starter items bought must leave"
+				+ " exactly one chest at the run's spawn, and there are " + chests.size()
 				+ " at " + chests);
 		chest = chests.getFirst();
-		check(chest.closerThan(player, 6.0), "the chest must be next to the player at " + player
+		check(chest.closerThan(spawn, 6.0), "the chest must be at the run spawn " + spawn
 				+ ", and it is at " + chest);
-		check(alreadyGranted(server),
-				"after the chest is given the run must be marked as having had it, and it is not");
 
 		checkContents(server, chest, EXPECTED);
 		check(efficiencyOf(server, chest) == 3,
-				"the enchanted pickaxe must arrive through the join with its enchantment, and the"
-						+ " one in the chest has Efficiency " + efficiencyOf(server, chest));
+				"the enchanted pickaxe must arrive through the run start with its enchantment, and"
+						+ " the one in the chest has Efficiency " + efficiencyOf(server, chest));
 
 		look(context, server, connection, chest);
 		context.takeScreenshot("starter-chest-at-the-run-start");
@@ -196,53 +206,54 @@ public class StarterChestClientTest implements FabricClientGameTest {
 	 * Logging out and back in is not a new run, so it does not come with a second chest.
 	 *
 	 * <p>Counted as blocks in the world rather than as a flag, because a second grant would be a
-	 * second chest whether or not the flag says so.
+	 * second chest whether or not any flag says so.
 	 */
 	private void reconnectGivesNoSecondChest(
 			ClientGameTestContext context, TestDedicatedServerContext server) {
-		check(chest != null, "no chest was found on the first join, so there is nothing to compare"
+		check(chest != null, "no chest was found at the run start, so there is nothing to compare"
 				+ " a reconnect against");
 
 		try (TestDedicatedServerConnection connection = server.connect()) {
 			connection.waitForChunksDownload();
-			BlockPos player = playerPosition(server, connection);
-			List<BlockPos> chests = chestsNear(server, player);
-			LOGGER.info("After reconnect: player at {}, chests near: {}", player, chests);
+			BlockPos spawn = TestRuns.runSpawn(server);
+			List<BlockPos> chests = chestsNear(server, Level.OVERWORLD, spawn);
+			LOGGER.info("After reconnect: spawn {}, chests near: {}", spawn, chests);
 
 			check(chests.size() == 1, "coming back to the same run must not hand out another chest,"
 					+ " and there are now " + chests.size() + " at " + chests);
 			check(chests.getFirst().equals(chest),
-					"the chest after a reconnect should be the one from the first join at " + chest
+					"the chest after a reconnect should be the one from the run start at " + chest
 							+ ", and it is at " + chests.getFirst());
 			checkContents(server, chest, EXPECTED);
 		}
 	}
 
 	/**
-	 * A new world is a new run, and the purchases are permanent, so the chest comes back.
+	 * A new run is a new world, and the purchases are permanent, so the chest comes back.
 	 *
 	 * <p>Nothing is bought in this run on purpose. The purchases are the ones run one was given,
-	 * still owned across a world that was deleted, a server that was replaced and a trip through
-	 * the unlock file, which is the whole point of keeping unlocks out of the save — and re-buying
-	 * them here would make the scenario pass just as happily if they had been lost.
+	 * still owned across a world that was deleted and a trip through the unlock file, which is the
+	 * whole point of keeping unlocks out of the save — and re-buying them here would make the
+	 * scenario pass just as happily if they had been lost.
 	 */
-	private void aNewRunGrantsAgain(
+	private void aSecondRunGrantsAgain(
 			ClientGameTestContext context, TestDedicatedServerContext server) {
-		check(!alreadyGranted(server),
-				"a world the harness has just made must not be carrying the last run's flag");
 		for (String id : PURCHASES) {
 			check(owns(server, id), "the purchases are permanent and must outlive the run that used"
-					+ " them, and " + id + " is not owned any more in the new run");
+					+ " them, and " + id + " is not owned any more");
 		}
+
+		TestRuns.end(server);
+		TestRuns.start(server);
 
 		try (TestDedicatedServerConnection connection = server.connect()) {
 			connection.waitForChunksRender();
-			BlockPos player = playerPosition(server, connection);
-			List<BlockPos> chests = chestsNear(server, player);
-			LOGGER.info("New run: player at {}, chests near: {}", player, chests);
+			BlockPos spawn = TestRuns.runSpawn(server);
+			List<BlockPos> chests = chestsNear(server, Level.OVERWORLD, spawn);
+			LOGGER.info("New run: spawn {}, chests near: {}", spawn, chests);
 
 			check(chests.size() == 1, "a new run must get its starter chest again, and there are "
-					+ chests.size() + " chests near the player at " + player);
+					+ chests.size() + " chests at the run spawn " + spawn);
 			checkContents(server, chests.getFirst(), EXPECTED);
 			check(efficiencyOf(server, chests.getFirst()) == 3,
 					"the enchanted pickaxe must come back enchanted in a new run too");
@@ -251,19 +262,22 @@ public class StarterChestClientTest implements FabricClientGameTest {
 
 	/**
 	 * The control. With nothing bought there is no chest at all, which is what stops every
-	 * scenario above from passing for the wrong reason — a mod that put a chest down on every join
-	 * would look identical until this one is asked.
+	 * scenario above from passing for the wrong reason — a mod that put a chest down at every run
+	 * start would look identical until this one is asked.
 	 */
 	private void nothingBoughtMeansNoChest(
 			ClientGameTestContext context, TestDedicatedServerContext server) {
+		TestRuns.end(server);
+		TestRuns.start(server);
+
 		try (TestDedicatedServerConnection connection = server.connect()) {
 			connection.waitForChunksRender();
-			BlockPos player = playerPosition(server, connection);
-			List<BlockPos> chests = chestsNear(server, player);
-			LOGGER.info("Nothing bought: player at {}, chests near: {}", player, chests);
+			BlockPos spawn = TestRuns.runSpawn(server);
+			List<BlockPos> chests = chestsNear(server, Level.OVERWORLD, spawn);
+			LOGGER.info("Nothing bought: spawn {}, chests near: {}", spawn, chests);
 
-			check(chests.isEmpty(), "with nothing bought, joining must leave no chest at all, and"
-					+ " there are " + chests.size() + " at " + chests);
+			check(chests.isEmpty(), "with nothing bought, starting a run must leave no chest at all,"
+					+ " and there are " + chests.size() + " at " + chests);
 			context.takeScreenshot("starter-chest-nothing-bought");
 		}
 	}
@@ -295,15 +309,11 @@ public class StarterChestClientTest implements FabricClientGameTest {
 		return server.computeOnServer(unused -> connection.getServerPlayer().blockPosition());
 	}
 
-	private static boolean alreadyGranted(TestDedicatedServerContext server) {
-		return server.computeOnServer(minecraftServer ->
-				RunStart.alreadyGranted(minecraftServer.overworld()));
-	}
-
 	/** Every chest block standing near a point, both halves of a double one counted separately. */
-	private static List<BlockPos> chestsNear(TestDedicatedServerContext server, BlockPos middle) {
+	private static List<BlockPos> chestsNear(TestDedicatedServerContext server,
+			ResourceKey<Level> dimension, BlockPos middle) {
 		return server.computeOnServer(minecraftServer -> {
-			ServerLevel level = minecraftServer.overworld();
+			ServerLevel level = minecraftServer.getLevel(dimension);
 			List<BlockPos> found = new ArrayList<>();
 			for (BlockPos pos : BlockPos.betweenClosed(
 					middle.offset(-SEARCH_RADIUS, -SEARCH_RADIUS, -SEARCH_RADIUS),

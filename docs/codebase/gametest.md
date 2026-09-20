@@ -211,6 +211,23 @@ Examples:
 
 A screenshot alone is not an assertion that a server rule worked.
 
+### A command aimed at a player can miss
+
+`/kill Player0` and friends resolve the name through the player list, and moving a player between
+dimensions builds a **new** `ServerPlayer`. A scenario that teleports and then kills can therefore
+hit an object the server has already replaced: nothing happens, and the command still reports
+"Killed Player0". The same is true of `/tp`, `/setblock` at a player's coordinates and anything
+else that resolves a player or a position — a server command also runs in the **overworld** unless
+an `execute in <dimension>` says otherwise, which matters constantly now that the lobby exists.
+
+Two habits fall out of it, and both are already in the helpers:
+
+- read player state through `TestRuns.livePlayer`, never through a `ServerPlayer` the test has
+  been holding across a dimension change;
+- make the effect visible rather than assuming it. Wounding a player before killing them turns
+  "they were revived" into a real assertion; without it, a kill that silently never happened
+  leaves a healthy player and looks exactly like one that was correctly taken over.
+
 ## Conservation assertions
 
 Whenever gameplay moves/rejects/grants a resource, assert conservation.

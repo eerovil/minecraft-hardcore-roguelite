@@ -6,6 +6,8 @@ import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceException;
 import fi.vilpponen.mhr.core.BalanceManager;
+import fi.vilpponen.mhr.run.RunEvents;
+import fi.vilpponen.mhr.run.RunLifecycle;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -68,6 +70,11 @@ public final class WorldBorders {
 			apply(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> runningServer = null);
+
+		// A new run is three new dimensions, each with a border of its own that has never been set.
+		// Listening here rather than being called by the lifecycle is what keeps world management
+		// from having to know that borders exist.
+		RunEvents.RUN_STARTED.register((server, overworld, run) -> apply(server));
 
 		// A border tier bought in the shop is the size of the world from that moment on, the same
 		// way the dev command's has always been.
@@ -194,7 +201,11 @@ public final class WorldBorders {
 		BlockPos spawn = server.getWorldData().overworldData().getRespawnData().pos();
 
 		for (ServerLevel level : server.getAllLevels()) {
-			apply(level, balance, diameter, spawn);
+			// The lobby is not part of a run and is not somewhere a border means anything: it is
+			// one small platform, and a border around it would only be something to walk into.
+			if (RunLifecycle.isRunLevel(level)) {
+				apply(level, balance, diameter, spawn);
+			}
 		}
 
 		String size = tierBalance.isUnbounded() ? "no practical limit" : (long) diameter + " blocks across";

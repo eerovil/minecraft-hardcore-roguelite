@@ -1,32 +1,32 @@
 package fi.vilpponen.mhr.starter;
 
-import com.mojang.serialization.Codec;
-import com.mojang.serialization.codecs.RecordCodecBuilder;
 import fi.vilpponen.mhr.HardcoreRoguelite;
+import fi.vilpponen.mhr.run.RunEvents;
 import java.util.List;
 import java.util.function.Consumer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.datafix.DataFixTypes;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.saveddata.SavedData;
-import net.minecraft.world.level.saveddata.SavedDataType;
 
 /**
  * When the starter chest appears: once, at the start of a run.
  *
- * <p>A run is a world, so "once per run" is a flag in the world's own save rather than in the
- * cross-run progression snapshot. Delete the world and the next one gets its own chest; log out and back
- * in, or bring a second player, and nothing happens twice.
+ * <p>"Once per run" needs no flag of its own any more. A run now has an explicit beginning —
+ * {@link RunEvents#RUN_STARTED}, fired by the lifecycle after the run's worlds are built and before
+ * anybody is standing in them — and that beginning happens exactly once by construction. Logging
+ * out and back in is not a run start, a second player arriving is not a run start, and neither is
+ * loading the save again; so none of them produces a second chest, and none of them needs to be
+ * reasoned about here.
  *
- * <p>It is placed when a player first joins rather than when the world is created, because the
- * chest is supposed to be next to the player and there is no player until then.
+ * <p>The chest goes at the run's overworld spawn rather than next to a player, because at run start
+ * there is no player in the world yet — they arrive immediately afterwards, at that same spot.
+ *
+ * @see fi.vilpponen.mhr.run.RunLifecycle
  */
 public final class RunStart {
 	private RunStart() {
@@ -41,46 +41,26 @@ public final class RunStart {
 		ServerLifecycleEvents.SERVER_STARTED.register(StarterItems::useRegistriesOf);
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> StarterItems.forgetRegistries());
 
-		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> onJoin(handler.player));
+		RunEvents.RUN_STARTED.register((server, overworld, run) -> onRunStarted(server, overworld));
 	}
 
-	/** @return true if this run has already had its starter chest. */
-	public static boolean alreadyGranted(ServerLevel anyLevel) {
-		return granted(anyLevel).starterChest;
-	}
-
-	/**
-	 * The flag, always read from the overworld.
-	 *
-	 * <p>Saved data is per dimension, and "once per run" has to mean once per world — otherwise a
-	 * player who first appears in the Nether would be owed a second chest.
-	 */
-	private static Granted granted(ServerLevel anyLevel) {
-		return anyLevel.getServer().overworld().getDataStorage().computeIfAbsent(Granted.TYPE);
-	}
-
-	private static void onJoin(ServerPlayer player) {
-		ServerLevel level = player.level();
-		Granted granted = granted(level);
-		if (granted.starterChest) {
+	private static void onRunStarted(MinecraftServer server, ServerLevel overworld) {
+		BlockPos spawn = server.getRespawnData().pos();
+		StarterChest.Placement placement = grant(overworld, spawn, Direction.NORTH);
+		if (placement == null) {
 			return;
 		}
 
-		// Claim it before placing: a failure to place must not turn into a chest every login.
-		granted.starterChest = true;
-		granted.setDirty();
-
-		StarterChest.Placement placement =
-				grant(level, player.blockPosition(), player.getDirection().getOpposite());
-		if (placement != null) {
-			player.sendSystemMessage(Component.literal("This run's starter chest is " + describe(placement) + "."));
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			player.sendSystemMessage(
+					Component.literal("This run's starter chest is " + describe(placement) + "."));
 			warnAboutOverflow(placement, player::sendSystemMessage);
 		}
 	}
 
 	/**
-	 * Place the chest holding everything the player has bought. Used by the join hook, and by the
-	 * dev command so the chest can be looked at without making a new world.
+	 * Place the chest holding everything the player has bought. Used by the run-start hook, and by
+	 * the dev command so the chest can be looked at without starting a run.
 	 *
 	 * @return null when no starter items are owned, so nothing was placed and no block was touched.
 	 */
@@ -112,27 +92,5 @@ public final class RunStart {
 				"Too many starter items for one double chest — these were left out: "
 						+ StarterChest.describe(placement.omitted())
 						+ ". That is too much in the balance catalogue, not a lost purchase; see the server log."));
-	}
-
-	/** The one bit of per-world state this feature has: whether this run already got its chest. */
-	public static final class Granted extends SavedData {
-		static final Codec<Granted> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-						Codec.BOOL.fieldOf("starter_chest").forGetter(data -> data.starterChest))
-				.apply(instance, Granted::new));
-
-		static final SavedDataType<Granted> TYPE = new SavedDataType<>(
-				Identifier.fromNamespaceAndPath(HardcoreRoguelite.MOD_ID, "run_start"),
-				Granted::new,
-				CODEC,
-				DataFixTypes.LEVEL);
-
-		private boolean starterChest;
-
-		private Granted() {
-		}
-
-		private Granted(boolean starterChest) {
-			this.starterChest = starterChest;
-		}
 	}
 }

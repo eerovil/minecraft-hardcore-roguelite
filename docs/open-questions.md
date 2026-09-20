@@ -56,3 +56,11 @@ Settled since:
 - How removed content (trees, ores, animals, villages) is actually suppressed in worldgen
   and spawning, per unlock.
 - Whether unlock state is meant to be shareable or resettable by the player.
+
+Settled since:
+
+- A run is no longer a whole Minecraft save. One save holds a persistent lobby dimension plus three
+  disposable run dimensions that are deleted and regenerated between runs, so starting the next run
+  never means restarting the game. The between-runs state the shop opens into is
+  `RunPhase.LOBBY`. Implemented in `fi.vilpponen.mhr.run`; see
+  [run lifecycle](codebase/run-lifecycle.md).

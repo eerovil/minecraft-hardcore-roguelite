@@ -9,6 +9,9 @@ import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
 import fi.vilpponen.mhr.progression.Wallet;
+import fi.vilpponen.mhr.run.RunAdmission;
+import fi.vilpponen.mhr.run.RunCommand;
+import fi.vilpponen.mhr.run.RunLifecycle;
 import fi.vilpponen.mhr.shop.ShopServer;
 import fi.vilpponen.mhr.starter.RunStart;
 import net.fabricmc.api.ModInitializer;
@@ -32,7 +35,13 @@ public class HardcoreRoguelite implements ModInitializer {
 						+ " Balance: {} unlocks priced, mob damage x{}",
 				state.describe(), Wallet.get().balance(), balance.unlocks().size(), balance.mobDamageMultiplier());
 
+		// First, and before anything can read a player's save data: a persistent attachment that is
+		// not registered by the time an entity is loaded is dropped with a log line and no other
+		// trace. See RunAdmission.
+		RunAdmission.register();
+
 		EquipmentSlots.register();
+		RunLifecycle.register();
 		WorldBorders.init();
 		RunStart.register();
 		ShopServer.register();
@@ -42,6 +51,7 @@ public class HardcoreRoguelite implements ModInitializer {
 			BalanceCommand.register(dispatcher);
 			BorderCommand.register(dispatcher);
 			ShopCommand.register(dispatcher);
+			RunCommand.register(dispatcher);
 		});
 	}
 }

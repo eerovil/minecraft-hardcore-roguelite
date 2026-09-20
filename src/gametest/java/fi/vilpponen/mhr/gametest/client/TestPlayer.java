@@ -337,13 +337,21 @@ final class TestPlayer {
 			ServerPlayer player = connection.getServerPlayer();
 			return player.level().getBlockState(player.blockPosition().below()).is(Blocks.CRAFTING_TABLE);
 		});
+		// Named explicitly, because a server command runs in the overworld unless it is told
+		// otherwise and the player is normally standing in the lobby. Without this the table is
+		// built at the player's coordinates in a dimension they are not in — which reads as "that
+		// position is not loaded" when the overworld has nobody near those coordinates, and as a
+		// table nobody can reach when it does happen to be loaded.
+		String here = "execute in " + server.computeOnServer(unused ->
+				connection.getServerPlayer().level().dimension().identifier().toString()) + " run ";
 		if (!alreadyThere) {
-			server.runCommand("fill " + x + " " + y + " " + z + " " + x + " " + (y + 1) + " " + z
+			server.runCommand(here + "fill " + x + " " + y + " " + z + " " + x + " " + (y + 1) + " " + z
 					+ " minecraft:air");
-			server.runCommand("setblock " + x + " " + (y - 1) + " " + z + " minecraft:crafting_table");
+			server.runCommand(here + "setblock " + x + " " + (y - 1) + " " + z
+					+ " minecraft:crafting_table");
 		}
 		// Yaw 0, pitch 90: straight down at the block being stood on.
-		server.runCommand("tp Player0 " + (x + 0.5) + " " + y + " " + (z + 0.5) + " 0 90");
+		server.runCommand(here + "tp Player0 " + (x + 0.5) + " " + y + " " + (z + 0.5) + " 0 90");
 		settle();
 
 		// MOUSE_BUTTON_RIGHT is the use key while no screen is open. SDL numbers the buttons from
