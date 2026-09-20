@@ -88,18 +88,6 @@ public final class Lobby {
 	/**
 	 * Bring a player out of a finished run and into the lobby.
 	 *
-	 * <p>Respawned rather than teleported, and that is not a detail. An ordinary cross-dimension
-	 * teleport hands the same player entity to the destination, which works for a dimension they
-	 * have never been in — every run's overworld is a brand-new level object, so arriving there is
-	 * always fine. The lobby is the same level object for the whole session and still knows this
-	 * player's id from their last visit; handing it the same entity again leaves them without chunk
-	 * tracking, so the server sends no terrain and the client sits on "Loading terrain" until it
-	 * gives up. Respawning builds a fresh player entity and goes in through
-	 * {@code addRespawnedPlayer}, which is the path vanilla itself uses to put a player into a world
-	 * they have been in before.
-	 *
-	 * <p>Their bed is forgotten first: it was in a world that is about to stop existing.
-	 *
 	 * @return the player as they are now — a different object from the one passed in.
 	 */
 	public static ServerPlayer returnFromRun(ServerPlayer player) {
@@ -108,10 +96,60 @@ public final class Lobby {
 			send(player);
 			return player;
 		}
+		return moveThroughRespawn(player, LEVEL, SPAWN);
+	}
 
+	/**
+	 * Take a player out of the lobby and into the run that is about to start.
+	 *
+	 * @return the player as they are now — a different object from the one passed in.
+	 */
+	public static ServerPlayer leaveForRun(ServerPlayer player, ServerLevel overworld, BlockPos spawn) {
+		if (!isLobby(player.level())) {
+			player.teleportTo(overworld, spawn.getX() + 0.5, spawn.getY(), spawn.getZ() + 0.5,
+					Set.of(), 0.0F, 0.0F, true);
+			return player;
+		}
+		return moveThroughRespawn(player, overworld.dimension(), spawn);
+	}
+
+	/**
+	 * Move a player across a dimension the way Minecraft's own end-credits return does.
+	 *
+	 * <p>Both of the lobby's doorways go through here, and it is the whole of why they work.
+	 *
+	 * <p>An ordinary cross-dimension teleport hands the *same* player entity to the destination.
+	 * That is fine for a dimension the entity has never been in — every run's overworld is a brand
+	 * new level object, so arriving in a run always works however it is done. The lobby is the same
+	 * level object for the entire session, and a player who leaves it by teleport stays registered
+	 * there; the next arrival collides with that stale registration, is only half added, and is
+	 * never sent a single chunk. The player then stands in a lobby their client draws as empty
+	 * void. Leaving through a respawn is what stops that from ever being written down: the entity
+	 * that was in the lobby is destroyed rather than moved, and a fresh one is built for the
+	 * destination.
+	 *
+	 * <p>The three lines after {@code respawn} are not garnish. Vanilla's own caller — the
+	 * end-credits branch of {@code ServerGamePacketListenerImpl.handleClientCommand} — does exactly
+	 * this: a respawn creates a new {@link ServerPlayer} and moves the network connection onto it,
+	 * but the connection's own idea of which player it belongs to is a separate field, and a
+	 * connection still pointing at the destroyed player is a player the server no longer sends
+	 * anything to. Taking the returned object and stopping there is half a respawn.
+	 *
+	 * <p>The player's bed is forgotten first, because respawning is how they travel and a bed in
+	 * the run they are leaving would otherwise decide where they land.
+	 *
+	 * @return the player as they are now — a different object from the one passed in.
+	 */
+	private static ServerPlayer moveThroughRespawn(
+			ServerPlayer player, ResourceKey<Level> destination, BlockPos pos) {
+		MinecraftServer server = player.level().getServer();
 		player.setRespawnPosition(null, false);
-		server.setRespawnData(LevelData.RespawnData.of(LEVEL, SPAWN, 0.0F, 0.0F));
-		ServerPlayer arrived = server.getPlayerList().respawn(player, true, Entity.RemovalReason.CHANGED_DIMENSION);
+		server.setRespawnData(LevelData.RespawnData.of(destination, pos, 0.0F, 0.0F));
+
+		ServerPlayer arrived =
+				server.getPlayerList().respawn(player, true, Entity.RemovalReason.CHANGED_DIMENSION);
+		arrived.connection.player = arrived;
+		arrived.connection.resetPosition();
 		arrived.setHealth(arrived.getMaxHealth());
 		return arrived;
 	}

@@ -7,9 +7,12 @@ import fi.vilpponen.mhr.run.RunRecord;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -26,6 +29,9 @@ import net.minecraft.world.level.block.state.BlockState;
  * never asserts against a half-applied transition.
  */
 final class TestRuns {
+	private static final org.slf4j.Logger LOGGER =
+			org.slf4j.LoggerFactory.getLogger("mhr-gametest");
+
 	private TestRuns() {
 	}
 
@@ -108,6 +114,47 @@ final class TestRuns {
 			context.waitTicks(2);
 		}
 		throw new AssertionError("The save never reached " + wanted + "; it is in " + phase(server));
+	}
+
+	/**
+	 * Does the lobby still hold a <em>live</em> registration for a player who has left it?
+	 *
+	 * <p>The lobby is the one level that outlives every run, so it is the one that can accumulate
+	 * registrations for players who are no longer in it, and an arrival that collides with a live
+	 * one is only half added and never sent any chunks — the player stands in a lobby their client
+	 * draws as empty void.
+	 *
+	 * <p>"Live" is the operative word. Leaving through a respawn destroys the entity that was in
+	 * the lobby and builds a fresh one for the destination, and Minecraft leaves the destroyed
+	 * one's entry in the level's lookup until that lookup is next disturbed. A dead entry is inert:
+	 * the next arrival is a different object, and {@code ServerLevel.addPlayer} discards the dead
+	 * one before adding it. A live entry is the real fault, and is what this asks about.
+	 *
+	 * @return an empty string when nothing live is left behind
+	 */
+	static String liveLobbyRegistrationOf(
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		return server.computeOnServer(minecraftServer -> {
+			ServerLevel lobby = minecraftServer.getLevel(Lobby.LEVEL);
+			if (lobby == null) {
+				return "there is no lobby at all";
+			}
+			ServerPlayer current = connection.getServerPlayer();
+			UUID id = current.getUUID();
+
+			Entity held = lobby.getEntity(id);
+			boolean heldAlive = held != null && !held.isRemoved();
+			boolean listedAlive = lobby.players().stream()
+					.anyMatch(p -> p.getUUID().equals(id) && !p.isRemoved());
+			if (held != null || listedAlive) {
+				LOGGER.info("Lobby still has an entry for {}: entity {}, alive {}, listed alive {}",
+						id, held, heldAlive, listedAlive);
+			}
+			if (!heldAlive && !listedAlive) {
+				return "";
+			}
+			return "entity lookup holds a live " + held + ", player list holds one: " + listedAlive;
+		});
 	}
 
 	/** Wait for one full server tick, so a command issued just before it has certainly run. */

@@ -121,10 +121,11 @@ public final class RunLifecycle {
 
 		BlockPos spawn = server.getRespawnData().pos();
 		for (ServerPlayer player : players()) {
-			resetForNewRun(player);
-			player.teleportTo(overworld, spawn.getX() + 0.5, spawn.getY(), spawn.getZ() + 0.5,
-					Set.of(), 0.0F, 0.0F, true);
-			player.sendSystemMessage(Component.literal("Run " + record.runId() + " begins."));
+			// Leaving the lobby is a respawn, not a teleport, and the object that comes back is a
+			// different one — everything after this has to use it. See Lobby.leaveForRun.
+			ServerPlayer inTheRun = Lobby.leaveForRun(player, overworld, spawn);
+			resetForNewRun(inTheRun);
+			inTheRun.sendSystemMessage(Component.literal("Run " + record.runId() + " begins."));
 		}
 	}
 

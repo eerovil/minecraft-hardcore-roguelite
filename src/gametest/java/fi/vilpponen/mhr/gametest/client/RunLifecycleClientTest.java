@@ -196,6 +196,14 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 			TestRuns.mark(server, key, MARK, MARKER);
 		}
 
+		// The lobby outlives every run, so it is the one level that can be left holding a player
+		// who has gone. Asked here, on the way out, rather than at the arrival that would suffer
+		// for it — by then the damage is done and the symptom is two transitions away from the
+		// cause.
+		String stale = TestRuns.liveLobbyRegistrationOf(server, connection);
+		check(stale.isEmpty(), "after a player leaves the lobby for a run, the lobby must not still"
+				+ " hold a live registration for them, and it kept " + stale);
+
 		firstSeed = record.seed();
 		firstSpawn = TestRuns.runSpawn(server);
 		LOGGER.info("Run 1: seed {}, spawn {}", firstSeed, firstSpawn);

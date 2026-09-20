@@ -154,6 +154,41 @@ a moment when there is no gap for anything to notice. The finished run's levels 
 ticking while the player is between runs; with no player in them that is cheap, but it is a known
 simplification rather than an oversight.
 
+## Moving a player in and out of the lobby
+
+Both of the lobby's doorways go through `Lobby.moveThroughRespawn`, and this is the single most
+expensive thing to rediscover in this feature.
+
+**A player must leave and enter the lobby by respawn, not by teleport.** An ordinary
+cross-dimension teleport hands the *same* player entity to the destination. That is fine for a
+dimension the entity has never been in — every run's overworld is a brand-new `ServerLevel`, so
+arriving in a run always works however it is done. The lobby is the same `ServerLevel` for the whole
+session, and a player who leaves it by teleport stays registered there. The next arrival collides
+with that registration, is only half added, and is never sent a single chunk: the server thinks
+they are in the lobby, the client agrees it is in the lobby, and the player stands in what their
+client draws as empty void. Every server-side assertion you can write passes while this is
+happening, which is why the client GameTest asserts that the lobby's blocks actually arrived.
+
+**A respawn is not finished until the connection knows about it.** `PlayerList.respawn` builds a new
+`ServerPlayer` and moves the network connection onto it, but the connection's own `player` field is
+separate and still points at the destroyed one. Vanilla's caller — the end-credits branch of
+`ServerGamePacketListenerImpl.handleClientCommand` — does:
+
+```java
+this.player = this.server.getPlayerList().respawn(this.player, true, RemovalReason.CHANGED_DIMENSION);
+this.resetPosition();
+```
+
+Take the returned object and stop there and the server holds a connection pointing at a dead
+player; in this repository's tests that shows up as `Timeout loading world` on the next reconnect,
+not as anything that mentions the lobby.
+
+One residue is left and is deliberately tolerated: the lobby's entity lookup keeps the *destroyed*
+entity's entry until the lookup is next disturbed. It is inert — the next arrival is a different
+object and `ServerLevel.addPlayer` discards the dead one before adding it — and the client test
+asserts the weaker, true property, that no **live** registration is left behind. Do not reach into
+entity managers to tidy the dead one.
+
 ## Death
 
 `ServerLivingEntityEvents.ALLOW_DEATH` is the hook. Returning false cancels the death outright, so
