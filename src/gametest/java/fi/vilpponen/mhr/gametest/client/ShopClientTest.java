@@ -97,6 +97,12 @@ public class ShopClientTest implements FabricClientGameTest {
 		check(currencyOnScreen(context) == 0,
 				"a fresh profile has nothing to spend, and the screen says " + currencyOnScreen(context));
 
+		// Vanilla's join toasts sit over the title for a few seconds. Letting them expire once here
+		// keeps them out of every evidence shot, including the later scenarios'.
+		context.waitTicks(140);
+		context.getInput().setCursorPos(2, 2);
+		context.waitTicks(2);
+
 		// Taken before anything scrolls, because this is the evidence shot of a fresh profile.
 		context.takeScreenshot("shop-fresh-progression");
 
@@ -204,9 +210,15 @@ public class ShopClientTest implements FabricClientGameTest {
 		check(currencyOnScreen(context) < priceOf(player, DIAMOND),
 				"setup: diamond ore should now be out of reach, so the screen has something to grey out");
 
-		// Hovering is where the wordier explanation lives, so the evidence shot shows one open.
-		hover(context, ENCHANT);
+		// Two evidence shots. The first is the top of the shop with purchases made and something
+		// visibly out of reach; the second is the Vanilla+ row with the repeatable part-upgraded.
+		// Hovering is where the wordier explanation lives, so both have a tooltip open.
+		scrollToTheTop(context);
+		hover(context, DIAMOND);
 		context.takeScreenshot("shop-some-unlocks-owned");
+
+		hover(context, ENCHANT);
+		context.takeScreenshot("shop-vanilla-plus-upgraded");
 	}
 
 	/**
@@ -286,6 +298,7 @@ public class ShopClientTest implements FabricClientGameTest {
 	}
 
 	private void hover(ClientGameTestContext context, String unlockId) {
+		bringIntoView(context, unlockId);
 		double[] square = squareOf(context, unlockId);
 		check(square != null, "cannot hover " + unlockId + ": it is not on screen");
 		context.getInput().setCursorPos(square[0], square[1]);
@@ -302,11 +315,40 @@ public class ShopClientTest implements FabricClientGameTest {
 		player.settle();
 	}
 
-	private void scrollToTheBottom(ClientGameTestContext context) {
+	/**
+	 * Scroll until a square is on screen, the way a player looking for it would.
+	 *
+	 * <p>The whole catalogue is one page, but one screen is not the whole page, so anything in the
+	 * Vanilla+ section is below the fold on a 1280x720 client. A test that could click it anyway
+	 * would be clicking something the player cannot.
+	 */
+	private void bringIntoView(ClientGameTestContext context, String unlockId) {
+		if (squareOf(context, unlockId) != null) {
+			return;
+		}
+		scroll(context, 1, 40);
 		for (int i = 0; i < 40; i++) {
+			if (squareOf(context, unlockId) != null) {
+				return;
+			}
+			scroll(context, -1, 1);
+		}
+	}
+
+	private void scrollToTheBottom(ClientGameTestContext context) {
+		scroll(context, -1, 40);
+	}
+
+	private void scrollToTheTop(ClientGameTestContext context) {
+		scroll(context, 1, 40);
+	}
+
+	/** Turns the wheel, which is the screen's own handler and the only way it scrolls. */
+	private void scroll(ClientGameTestContext context, int direction, int notches) {
+		for (int i = 0; i < notches; i++) {
 			context.runOnClient(client -> {
 				if (client.gui.screen() instanceof ShopScreen shop) {
-					shop.mouseScrolled(0, 0, 0, -1);
+					shop.mouseScrolled(0, 0, 0, direction);
 				}
 			});
 		}

@@ -17,7 +17,6 @@ import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.sounds.SoundEvents;
-import net.minecraft.world.item.ItemStack;
 
 /**
  * The shop: everything permanent the player can buy, on one screen.
@@ -44,7 +43,7 @@ public final class ShopScreen extends Screen {
 	private static final int CELL_HEIGHT = ICON_BOX + 10;
 
 	/** Room for the row heading to the left of the icons, so a row costs one line and not two. */
-	private static final int ROW_LABEL_WIDTH = 64;
+	private static final int ROW_LABEL_WIDTH = 78;
 
 	private static final int PANEL_MAX_WIDTH = 360;
 	private static final int HEADER_HEIGHT = 30;
@@ -58,6 +57,7 @@ public final class ShopScreen extends Screen {
 	private static final int AFFORDABLE_BACKGROUND = 0xFF3A3A3A;
 	private static final int UNAFFORDABLE_BACKGROUND = 0xFF2A2020;
 	private static final int CELL_OUTLINE = 0xFF000000;
+	private static final int OWNED_OUTLINE = 0xFF4C8C4A;
 	private static final int HOVER_OUTLINE = 0xFFFFFFFF;
 	private static final int SCROLLBAR = 0xFF808080;
 
@@ -212,6 +212,8 @@ public final class ShopScreen extends Screen {
 
 		int offset = contentTop - scroll;
 		Cell hovered = cellAt(mouseX, mouseY);
+
+		extractor.enableScissor(panelLeft, contentTop, panelLeft + panelWidth, contentBottom);
 		for (Heading heading : headings) {
 			int y = heading.y() + offset;
 			if (y + 10 < contentTop || y > contentBottom) {
@@ -224,16 +226,19 @@ public final class ShopScreen extends Screen {
 		}
 		for (Cell cell : cells) {
 			int y = cell.y() + offset;
-			if (y + CELL_HEIGHT < contentTop || y > contentBottom) {
+			// A row half-way off the panel is left out rather than clipped. The scissor above holds
+			// for everything drawn here except the item models, which are deferred to after the whole
+			// screen — so a clipped icon would reappear on top of the title bar.
+			if (y < contentTop || y + ICON_BOX > contentBottom) {
 				continue;
 			}
 			drawCell(extractor, cell, panelLeft + cell.x(), y, cell == hovered);
 		}
 		drawScrollbar(extractor);
+		extractor.disableScissor();
 
-		// Everything above this line is content that may have bled past the panel while scrolling.
-		// Everything below it is drawn on top, so the bands hide the bleed rather than the content
-		// having to be clipped — which would also clip the item models, since those are deferred.
+		// The bands are drawn above the content, so the panel has a solid edge whatever is scrolled
+		// against it.
 		extractor.nextStratum();
 
 		extractor.fill(0, 0, width, contentTop, BAND_BACKGROUND);
@@ -248,6 +253,7 @@ public final class ShopScreen extends Screen {
 		super.extractRenderState(extractor, mouseX, mouseY, partialTick);
 
 		if (hovered != null) {
+			extractor.nextStratum();
 			extractor.setComponentTooltipForNextFrame(font, tooltipFor(hovered.offer()), mouseX, mouseY);
 		}
 	}
@@ -260,10 +266,13 @@ public final class ShopScreen extends Screen {
 				? OWNED_BACKGROUND
 				: (affordable ? AFFORDABLE_BACKGROUND : UNAFFORDABLE_BACKGROUND);
 		extractor.fill(x, y, x + ICON_BOX, y + ICON_BOX, background);
-		extractor.outline(x, y, ICON_BOX, ICON_BOX, hovered ? HOVER_OUTLINE : CELL_OUTLINE);
+		int outline = hovered ? HOVER_OUTLINE : (offer.isMaxed() ? OWNED_OUTLINE : CELL_OUTLINE);
+		extractor.outline(x, y, ICON_BOX, ICON_BOX, outline);
 
-		ItemStack icon = ShopIcons.stackFor(offer.id());
-		extractor.item(icon, x + 2, y + 2);
+		// fakeItem rather than item: these are pictures of things, not things. It also keeps them in
+		// this stratum instead of the deferred pass, which is what stops an icon being drawn on top
+		// of the tooltip explaining it.
+		extractor.fakeItem(ShopIcons.stackFor(offer.id()), x + 2, y + 2);
 
 		// A repeatable unlock's level sits where an item's stack count would, because that is the
 		// corner a Minecraft player already reads a number out of.
