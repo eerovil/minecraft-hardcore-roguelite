@@ -187,14 +187,23 @@ mixin   -> shop
 shop    -> private internals of every mixin
 ```
 
-## Currency and purchasing: future contract
+## Currency and purchasing
 
-Currency and the actual shop purchase transaction are not implemented yet.
+Both exist now, in `fi.vilpponen.mhr.progression`, sitting above the catalogue and `UnlockState`
+rather than replacing either:
 
-When they are added, they should sit above the existing catalogue + `UnlockState`, not replace
-them.
+- `Wallet` — the permanent purse, in `config/hardcore-roguelite-currency.json`, outside every world
+  for the same reason `UnlockState` is.
+- `Catalogue` — what is for sale and at what price, read from balance data every time. The `unlocks`
+  section plus the `worldBorder` tiers under their `world.border.*` ids.
+- `Purchase.buy(id)` — the one operation that turns currency into ownership. The shop screen's click
+  and `/mhr unlock` both end up here or in `UnlockState` directly; nothing else moves currency.
 
-A purchase operation will need to make one authoritative decision:
+**Currency is still not earned.** Nothing in gameplay pays into the wallet, because how it is earned
+is the blocking open question in `docs/open-questions.md`. `/mhr currency give` is a development
+stand-in. Do not add an earning rule as a side effect of another change.
+
+`Purchase.buy` makes one authoritative decision:
 
 1. resolve an id from the catalogue;
 2. read price/current level/max level;
@@ -204,8 +213,18 @@ A purchase operation will need to make one authoritative decision:
 6. persist both sides safely;
 7. notify/apply runtime effects where necessary.
 
-That operation should be the single path used by the shop. The current `/mhr unlock` command is a
-development adapter, not the model for charging currency.
+The order matters and is deliberate: currency comes out first, because `Wallet.spend` is the one
+call that checks and deducts under the same lock — a separate "can I afford it?" followed by a
+deduction is the shape that lets two clicks pay once. Ownership goes up second, and if it somehow
+does not, the currency goes straight back. The whole thing holds `Purchase`'s monitor.
+
+That operation is the single path used by the shop. `/mhr unlock` remains a development adapter that
+grants without charging, and is not the model for charging currency.
+
+Features are told to look again through `fi.vilpponen.mhr.UnlockEffects`. A feature whose rule is
+about state that already exists — an equipment slot that just closed, the size of the world —
+registers a listener at init, and whoever changed the state fires it once. Do not call a feature
+directly from the shop or from a command; that is how one of the two callers ends up forgetting.
 
 Until currency semantics are specified by the relevant issue/design decision, do not invent:
 
@@ -219,16 +238,19 @@ Until currency semantics are specified by the relevant issue/design decision, do
 The design currently says everything is visible/buyable from the start if affordable and prices are
 fixed.
 
-## World border is not wired to permanent progression yet
+## World border reads permanent progression
 
-`WorldBorders` currently keeps the selected tier in memory and starts at the default tier on every
-process start.
+`WorldBorders.selectOwnedTier()` takes the tier from the `world.border.*` unlocks the player owns —
+the furthest one along `BorderTier`, since the tiers are steps rather than choices — and is called
+when a server starts and again whenever the owned unlocks change.
 
-The class explicitly expects permanent progression to choose the tier later.
+There is no border-specific save file, and there must not be one. The tier is derived state.
 
-Do not mistake the current dev-command selection for the final persistence model. When border
-progression is wired into the shop, connect it to the same permanent progression state rather than
-adding a border-specific save file.
+`/mhr border <tier>` still overrides it by hand, and once it has, purchases stop deciding the size
+of *that* world; the flag is cleared when the next server starts. Tests depend on this, because they
+generate ordinary terrain thousands of blocks from spawn and the roguelite border would otherwise
+stop the chunks being populated. Removing the override would make several worldgen tests fail in a
+way that looks like a worldgen bug.
 
 ## Persistence ownership: where state belongs
 

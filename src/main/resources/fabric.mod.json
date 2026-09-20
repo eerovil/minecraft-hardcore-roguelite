@@ -13,7 +13,10 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": ["fi.vilpponen.mhr.HardcoreRoguelite"],
-		"client": ["fi.vilpponen.mhr.equipment.client.EquipmentLockClient"]
+		"client": [
+			"fi.vilpponen.mhr.equipment.client.EquipmentLockClient",
+			"fi.vilpponen.mhr.shop.client.ShopClient"
+		]
 	},
 	"mixins": ["hardcore_roguelite.mixins.json"],
 	"depends": {

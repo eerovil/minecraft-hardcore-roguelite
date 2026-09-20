@@ -1,6 +1,8 @@
 package fi.vilpponen.mhr.border;
 
 import fi.vilpponen.mhr.HardcoreRoguelite;
+import fi.vilpponen.mhr.UnlockEffects;
+import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -17,9 +19,10 @@ import net.minecraft.world.level.border.WorldBorder;
  * {@link #select(BorderTier)}, read it back with {@link #selectedTier()}. The border is then set up
  * when a server starts, and again immediately whenever the tier changes.
  *
- * <p>The tier lives in memory and starts at {@link BorderTier#DEFAULT} every time the game starts.
- * Remembering it between runs is the job of the permanent unlock state, which this feature
- * deliberately does not touch — when that arrives it only has to call {@link #select(BorderTier)}.
+ * <p>The tier is not remembered in memory between sessions, and does not need to be: it is decided
+ * by what the player has permanently bought. {@link #selectOwnedTier()} reads that, and is called
+ * when a server starts and again whenever the owned unlocks change. {@link #select(BorderTier)}
+ * stays for the dev command, which is allowed to ignore the shop.
  *
  * <p>Nothing about world generation is involved. The border is placed on the finished world, so
  * changing the tier never means changing worldgen code.
@@ -41,6 +44,17 @@ public final class WorldBorders {
 	private static volatile BorderTier selectedTier = BorderTier.DEFAULT;
 	private static volatile MinecraftServer runningServer;
 
+	/**
+	 * True once {@code /mhr border} has picked a tier by hand for this world.
+	 *
+	 * <p>The dev command is allowed to ignore what has been bought — that is what it is for, and
+	 * tests lean on it heavily to generate ordinary terrain a long way from spawn. Without this
+	 * flag, buying anything at all afterwards would quietly put the bought-for border back, because
+	 * every purchase asks the border to look at the unlocks again. Cleared when a server starts, so
+	 * a hand-picked tier never outlives the world it was picked for.
+	 */
+	private static volatile boolean pickedByHand;
+
 	private WorldBorders() {
 	}
 
@@ -48,9 +62,37 @@ public final class WorldBorders {
 	public static void init() {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			runningServer = server;
+			pickedByHand = false;
+			selectOwnedTier();
 			apply(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> runningServer = null);
+
+		// A border tier bought in the shop is the size of the world from that moment on, the same
+		// way the dev command's has always been.
+		UnlockEffects.onChange(server -> selectOwnedTier());
+	}
+
+	/**
+	 * Take the tier from what the player has permanently bought: the largest one owned, or
+	 * {@link BorderTier#DEFAULT} while none is.
+	 *
+	 * <p>This is what wires the border to progression. The tiers are steps rather than choices —
+	 * owning Large means the world is Large, whether or not Medium was ever bought — so the answer
+	 * is the furthest one along the enum, not the most recent purchase.
+	 */
+	public static void selectOwnedTier() {
+		if (pickedByHand) {
+			return;
+		}
+		UnlockState state = UnlockState.get();
+		BorderTier owned = BorderTier.DEFAULT;
+		for (BorderTier tier : BorderTier.values()) {
+			if (state.isOwned(tier.unlockId())) {
+				owned = tier;
+			}
+		}
+		set(owned);
 	}
 
 	public static BorderTier selectedTier() {
@@ -58,10 +100,19 @@ public final class WorldBorders {
 	}
 
 	/**
-	 * Choose the tier future runs start with. Takes effect on the running world straight away too,
-	 * so the same call works from a shop, from a dev command, or before a run begins.
+	 * Pick a tier by hand, ignoring what has been bought until this world is over.
+	 *
+	 * <p>{@code /mhr border} and nothing else. It takes effect on the running world straight away,
+	 * and from then on a purchase no longer decides the size of this world — see
+	 * {@link #pickedByHand}.
 	 */
 	public static void select(BorderTier tier) {
+		pickedByHand = true;
+		set(tier);
+	}
+
+	/** Put a tier in place, whoever chose it. */
+	private static void set(BorderTier tier) {
 		selectedTier = tier;
 		MinecraftServer server = runningServer;
 		if (server != null) {

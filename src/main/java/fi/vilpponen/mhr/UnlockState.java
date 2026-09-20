@@ -295,7 +295,9 @@ public final class UnlockState {
 
 	/** Is this an id anything in this build can act on — a constant, or something the shop sells? */
 	private static boolean isKnown(String id) {
-		return Unlock.byId(id) != null || BalanceManager.get().unlock(id).isPresent();
+		return Unlock.byId(id) != null
+				|| BalanceManager.get().unlock(id).isPresent()
+				|| BalanceManager.get().borderByUnlockId(id).isPresent();
 	}
 
 	private synchronized void save() {

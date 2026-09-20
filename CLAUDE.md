@@ -31,6 +31,8 @@ the issue first.
 | Mod entry point and registration | `src/main/java/fi/vilpponen/mhr/HardcoreRoguelite.java` |
 | Balance/config loading | `src/main/java/fi/vilpponen/mhr/core/`, `src/main/resources/default-balance.json` |
 | Permanent progression / unlock ownership | `src/main/java/fi/vilpponen/mhr/Unlock.java`, `UnlockState.java` |
+| Currency and the one purchase operation | `src/main/java/fi/vilpponen/mhr/progression/` |
+| Shop screen, its networking and its layout data | `src/main/java/fi/vilpponen/mhr/shop/`, `src/main/resources/shop-layout.json` |
 | Development commands | `src/main/java/fi/vilpponen/mhr/command/` |
 | Equipment-slot locks and client sync | `src/main/java/fi/vilpponen/mhr/equipment/` |
 | Crafted-item Vanilla+ enchant | `src/main/java/fi/vilpponen/mhr/enchant/` |

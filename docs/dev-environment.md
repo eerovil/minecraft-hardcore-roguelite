@@ -702,6 +702,52 @@ No client is involved in any of it. What a border is and where it goes are facts
 own world, and the two journeys ask the same question a player would by sending something through a
 real portal — so there is nothing here a real client is needed to answer.
 
+#### The shop
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/server/ShopPurchaseGameTest.java` covers everything
+about buying that needs no client, and every scenario accounts for the currency on both sides rather
+than asserting one field:
+
+- **with-nothing-to-spend-nothing-can-be-bought** — an empty purse is a refusal, not a free unlock.
+- **a-purchase-takes-the-price-once-and-grants-one-level** — the conservation check. It starts with
+  more than the price on purpose, so "the purse was emptied" cannot pass for "the price was taken".
+- **a-penny-short-buys-nothing-and-costs-nothing**.
+- **buying-something-already-owned-is-refused-and-free**.
+- **nothing-sells-an-id-the-catalogue-does-not-have** — refused before any money moves, and the id
+  is not written into the save file.
+- **a-repeatable-unlock-climbs-to-its-ceiling-and-stops** — four levels of the crafted-tool enchant,
+  then a refusal, and exactly four levels' worth charged.
+- **a-purchase-is-still-there-after-the-files-are-read-again** — both the unlock file and the purse
+  re-read from disk, which is the nearest a test sharing the server's process gets to quitting.
+- **the-price-charged-is-the-one-in-the-balance-data** — an override, `/mhr reload`, and the next
+  purchase charges the new price.
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/ShopClientTest.java` is the half that needs a
+real screen and a real mouse. Nothing in it calls a purchase helper: the cursor lands on the square
+the player would see and the left button goes down.
+
+- **the-shop-opens-with-the-whole-catalogue-on-it** — the screen is told exactly what the server
+  sells, and every offer is reachable on the one scrolling page.
+- **vanilla-restoration-is-drawn-above-vanilla-plus** — measured on the screen, not in the layout
+  code: a world unlock is visible without scrolling and a starter item is below it.
+- **clicking-an-affordable-square-buys-it** — the server grants it, charges once, and the screen
+  shows both at once.
+- **clicking-an-unaffordable-square-changes-nothing**.
+- **owned-and-part-upgraded-states-reach-the-screen** — owned, part-upgraded, affordable and out of
+  reach all established for real and read back off the screen's own copy.
+- **buying-a-border-tier-resizes-the-world** — the only place a border tier is bought, because this
+  test has a dedicated server to itself.
+
+The screenshots it takes are evidence rather than debris, and they are taken on the passing path:
+`shop-fresh-progression`, `shop-vanilla-plus-below`, `shop-after-buying-trees` and
+`shop-some-unlocks-owned`.
+
+**A trap worth knowing.** Buying anything asks the world border to look at the unlocks again, so
+without `/mhr border`'s hand-picked override a purchase would put the bought-for border back under a
+test that had deliberately gone unbounded to generate far-away terrain. That override is cleared
+when a server starts, so it never outlives the world it was picked for. If a worldgen test suddenly
+finds empty chunks thousands of blocks out, look at the border before you look at worldgen.
+
 ### What is still manual
 
 - The padlock **artwork**. The tests screenshot the inventory with the helmet slot locked and again
@@ -712,6 +758,9 @@ real portal — so there is nothing here a real client is needed to answer.
 - The **full-inventory fallback**, where a refused item falls at the player's feet.
 - Nothing about trees, animals or villages, beyond looking at a world by eye if you want to.
 - Nothing about the crafted enchant either, beyond the recipe-book button noted above.
+- **How the shop looks**, as opposed to what it says. The scenarios assert the arrangement, the
+  states and the purchases, and the screenshots are there to be looked at, but nothing compares
+  pixels and nothing can tell you the layout is pleasant.
 - **Where the starter chest lands on awkward ground** — a cave, a one-block tunnel, the Nether roof.
   The tests run on the harness's flat world, where the search finds a spot on its first try, so the
   slope and ceiling cases are still a `mhr starterchest` by hand.

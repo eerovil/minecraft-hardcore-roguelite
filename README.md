@@ -46,8 +46,24 @@ Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks im
   Buying it again raises how high that enchantment can roll; at the top level an item can come out
   at the enchantment's own maximum. Which items count, which enchantments can turn up and how the
   levels scale are all data.
+- **the world border** — Tiny, Medium, Large and Unbounded are four separate purchases, and the
+  world every run starts in is as big as the largest tier you own.
+- **the shop** — one screen showing the whole catalogue: restoring vanilla first, going past it
+  below. Every entry is an icon with its price under it, hovering explains what it does, and
+  clicking buys it. Prices come from the balance data and what you own comes from the permanent
+  unlock file; the server decides every purchase. Open it with `/mhr shop`.
 
-There is no shop and no currency yet, so unlocks are toggled with a dev command:
+**Currency is not earned yet.** The purse is real and permanent and the shop spends it, but nothing
+in gameplay pays into it, because how currency is earned is still an open design question — see
+[`docs/open-questions.md`](docs/open-questions.md). Until that is settled, put currency in by hand:
+
+```
+/mhr currency             # what you have
+/mhr currency give 300
+/mhr shop                 # then spend it
+```
+
+Unlocks can also still be toggled directly with the dev command:
 
 ```
 /mhr list
@@ -59,6 +75,7 @@ There is no shop and no currency yet, so unlocks are toggled with a dev command:
 /mhr unlock player.craft.enchant      # buys the next level
 /mhr unlock player.craft.enchant 4    # or jump straight to one
 /mhr unlock starter.bread
+/mhr unlock world.border.medium
 /mhr starterchest                     # place this run's chest again, for testing
 ```
 

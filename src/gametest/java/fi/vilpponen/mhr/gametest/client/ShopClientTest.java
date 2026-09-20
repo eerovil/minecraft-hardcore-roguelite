@@ -1,0 +1,389 @@
+package fi.vilpponen.mhr.gametest.client;
+
+import com.mojang.blaze3d.platform.InputConstants;
+import fi.vilpponen.mhr.UnlockEffects;
+import fi.vilpponen.mhr.UnlockState;
+import fi.vilpponen.mhr.border.BorderTier;
+import fi.vilpponen.mhr.core.BalanceManager;
+import fi.vilpponen.mhr.progression.Catalogue;
+import fi.vilpponen.mhr.progression.Offer;
+import fi.vilpponen.mhr.progression.Wallet;
+import fi.vilpponen.mhr.shop.ShopServer;
+import fi.vilpponen.mhr.shop.client.ShopScreen;
+import fi.vilpponen.mhr.shop.client.SyncedShop;
+import java.util.ArrayList;
+import java.util.List;
+import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
+import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
+import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
+import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * The shop as a player meets it: a real screen, a real mouse, a real dedicated server.
+ *
+ * <p>What these scenarios prove that the server test cannot is that the screen and the server agree
+ * — that the squares are where the player sees them, that clicking one is what charges the purse,
+ * and that the screen shows the purchase the moment the server allows it. Nothing here calls a
+ * purchase helper: every buy is the cursor landing on a square and the left button going down.
+ *
+ * <p>The screenshots are deliberate evidence rather than debris. They are the states the issue asks
+ * to see — near-fresh progression, part-way through, and the vanilla-restoration heading sitting
+ * above the Vanilla+ one — and they are taken on the passing path, not only on failure.
+ *
+ * <p>The world border is bought here too, because owning a tier resizes the world and this is the
+ * only place with a dedicated server of its own to resize.
+ *
+ * <p>See {@code docs/dev-environment.md} for how to run this.
+ */
+public class ShopClientTest implements FabricClientGameTest {
+	private static final Logger LOGGER = LoggerFactory.getLogger("mhr-gametest");
+
+	private static final String TREES = "world.trees";
+	private static final String DIAMOND = "world.ore.diamond";
+	private static final String ENCHANT = "player.craft.enchant";
+	private static final String BREAD = "starter.bread";
+	private static final String MEDIUM_BORDER = "world.border.medium";
+
+	private final List<String> failures = new ArrayList<>();
+
+	@Override
+	public void runTest(ClientGameTestContext context) {
+		try (TestDedicatedServerContext server = context.worldBuilder().createServer()) {
+			try (TestDedicatedServerConnection connection = server.connect()) {
+				connection.waitForChunksRender();
+				TestPlayer player = new TestPlayer(context, server, connection);
+
+				scenario(context, "the-shop-opens-with-the-whole-catalogue-on-it",
+						() -> theShopOpensWithTheWholeCatalogueOnIt(context, player));
+				scenario(context, "vanilla-restoration-is-drawn-above-vanilla-plus",
+						() -> vanillaRestorationIsDrawnAboveVanillaPlus(context, player));
+				scenario(context, "clicking-an-affordable-square-buys-it",
+						() -> clickingAnAffordableSquareBuysIt(context, player));
+				scenario(context, "clicking-an-unaffordable-square-changes-nothing",
+						() -> clickingAnUnaffordableSquareChangesNothing(context, player));
+				scenario(context, "owned-and-part-upgraded-states-reach-the-screen",
+						() -> ownedAndPartUpgradedStatesReachTheScreen(context, player));
+				scenario(context, "buying-a-border-tier-resizes-the-world",
+						() -> buyingABorderTierResizesTheWorld(context, player));
+			}
+		}
+
+		if (!failures.isEmpty()) {
+			throw new AssertionError(failures.size() + " shop client scenario(s) failed:\n  "
+					+ String.join("\n  ", failures));
+		}
+		LOGGER.info("All shop client scenarios passed.");
+	}
+
+	// --- the scenarios ---------------------------------------------------------------------
+
+	/**
+	 * Everything the catalogue sells is on the one screen, with nothing to click through to find
+	 * it, and the prices on it are the server's.
+	 */
+	private void theShopOpensWithTheWholeCatalogueOnIt(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		openShop(context, player);
+
+		List<Offer> served = serverOffers(player);
+		List<Offer> shown = context.computeOnClient(client -> List.copyOf(SyncedShop.offers()));
+
+		check(!served.isEmpty(), "setup: the catalogue should sell something");
+		check(shown.equals(served),
+				"the screen must have been told exactly what the server sells, and it was told " + shown.size()
+						+ " offer(s) against the server's " + served.size());
+		check(currencyOnScreen(context) == 0,
+				"a fresh profile has nothing to spend, and the screen says " + currencyOnScreen(context));
+
+		// Taken before anything scrolls, because this is the evidence shot of a fresh profile.
+		context.takeScreenshot("shop-fresh-progression");
+
+		// Everything is reachable by scrolling one page, with nothing to click through to find it.
+		// Two looks are enough to prove that: what is on screen at the top, and what is on screen at
+		// the bottom, have to cover the catalogue between them.
+		List<String> reachable = new ArrayList<>(visibleIds(context, served));
+		scrollToTheBottom(context);
+		for (String id : visibleIds(context, served)) {
+			if (!reachable.contains(id)) {
+				reachable.add(id);
+			}
+		}
+		for (Offer offer : served) {
+			check(reachable.contains(offer.id()),
+					"every offer must be on the one scrolling page, and " + offer.id()
+							+ " never appears. Reachable: " + reachable);
+		}
+
+	}
+
+	/**
+	 * The hierarchy the design asks for, measured on the screen rather than in the layout code:
+	 * restoring vanilla is what you see first, and Vanilla+ is below it.
+	 */
+	private void vanillaRestorationIsDrawnAboveVanillaPlus(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		openShop(context, player);
+
+		double[] trees = squareOf(context, TREES);
+		check(trees != null, "a world unlock must be visible without scrolling, and " + TREES + " is not");
+
+		double[] bread = squareOf(context, BREAD);
+		check(bread == null || bread[1] > trees[1],
+				"Vanilla+ must not be drawn above vanilla restoration: " + TREES + " is at y=" + trees[1]
+						+ " and " + BREAD + " is at y=" + (bread == null ? "off screen" : bread[1]));
+
+		scrollToTheBottom(context);
+		double[] breadBelow = squareOf(context, BREAD);
+		check(breadBelow != null, "scrolling down must reach the Vanilla+ purchases, and " + BREAD
+				+ " is still not on screen");
+		context.takeScreenshot("shop-vanilla-plus-below");
+	}
+
+	/** A real click on a real square: the server grants it, charges once, and the screen updates. */
+	private void clickingAnAffordableSquareBuysIt(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		int price = priceOf(player, TREES);
+		player.command("mhr currency set " + (price + 5));
+		openShop(context, player);
+
+		check(!ownedOnServer(player, TREES), "setup: " + TREES + " should start unowned");
+		clickSquare(context, player, TREES);
+
+		check(ownedOnServer(player, TREES),
+				"clicking an affordable square must buy it, and the server still does not own " + TREES);
+		check(balanceOnServer(player) == 5,
+				"the click must have charged exactly " + price + ": the purse went from " + (price + 5)
+						+ " to " + balanceOnServer(player));
+		check(levelOnScreen(context, TREES) == 1,
+				"the screen must show the purchase at once, and it still shows level "
+						+ levelOnScreen(context, TREES));
+		check(currencyOnScreen(context) == 5,
+				"the screen must show the new total at once, and it shows " + currencyOnScreen(context));
+
+		context.takeScreenshot("shop-after-buying-trees");
+	}
+
+	/** Out of reach means out of reach: the click is refused and nothing moves either way. */
+	private void clickingAnUnaffordableSquareChangesNothing(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		int price = priceOf(player, DIAMOND);
+		player.command("mhr currency set " + (price - 1));
+		openShop(context, player);
+
+		clickSquare(context, player, DIAMOND);
+
+		check(!ownedOnServer(player, DIAMOND),
+				"a square the player cannot afford must not be granted, and the server now owns " + DIAMOND);
+		check(balanceOnServer(player) == price - 1,
+				"a refused click must cost nothing, and the purse went from " + (price - 1) + " to "
+						+ balanceOnServer(player));
+	}
+
+	/**
+	 * The four states the issue asks to be distinguishable, established for real and then read back
+	 * off the screen's own copy: owned, part-upgraded, affordable and out of reach.
+	 */
+	private void ownedAndPartUpgradedStatesReachTheScreen(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		int enchantPrice = priceOf(player, ENCHANT);
+		player.command("mhr currency set " + (enchantPrice * 2 + priceOf(player, TREES) + 30));
+		openShop(context, player);
+
+		clickSquare(context, player, TREES);
+		clickSquare(context, player, ENCHANT);
+		clickSquare(context, player, ENCHANT);
+
+		check(levelOnScreen(context, TREES) == 1, "an owned unlock must show as owned on the screen");
+		check(levelOnScreen(context, ENCHANT) == 2,
+				"a repeatable unlock bought twice must show level 2, and the screen shows "
+						+ levelOnScreen(context, ENCHANT));
+		check(maxLevelOnScreen(context, ENCHANT) > 2,
+				"setup: the crafted-tool enchant should still have levels left to buy");
+		check(currencyOnScreen(context) < priceOf(player, DIAMOND),
+				"setup: diamond ore should now be out of reach, so the screen has something to grey out");
+
+		// Hovering is where the wordier explanation lives, so the evidence shot shows one open.
+		hover(context, ENCHANT);
+		context.takeScreenshot("shop-some-unlocks-owned");
+	}
+
+	/**
+	 * A border tier is a purchase like any other, and the world it buys is the world the player is
+	 * standing in from that moment on.
+	 */
+	private void buyingABorderTierResizesTheWorld(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		double tiny = borderSize(player);
+		double wanted = context.computeOnClient(client -> BalanceManager.get()
+				.border(BorderTier.MEDIUM.id()).orElseThrow().size().getAsDouble());
+		check(Math.abs(tiny - wanted) > 1.0,
+				"setup: a fresh profile should start on the tiny border, and the world is already " + tiny
+						+ " across");
+
+		player.command("mhr currency set " + priceOf(player, MEDIUM_BORDER));
+		openShop(context, player);
+		clickSquare(context, player, MEDIUM_BORDER);
+
+		check(ownedOnServer(player, MEDIUM_BORDER), "the border tier should have been bought");
+		double now = borderSize(player);
+		check(Math.abs(now - wanted) < 1.0,
+				"buying the medium tier must resize the world to " + wanted + ", and it is " + now + " across");
+
+		// Put the world back, so nothing after this is fenced in by a purchase it did not make.
+		reset(player);
+	}
+
+	// --- talking to the shop ------------------------------------------------------------------
+
+	/** Nothing owned, nothing to spend, no screen open — on the server, where it counts. */
+	private void reset(TestPlayer player) {
+		player.onServer(server -> {
+			for (Offer offer : Catalogue.offers()) {
+				UnlockState.get().setLevel(offer.id(), 0);
+			}
+			Wallet.get().set(0);
+			UnlockEffects.applyAll(server);
+			ShopServer.sendToAll(server);
+		});
+	}
+
+	private void openShop(ClientGameTestContext context, TestPlayer player) {
+		// As the player, not as the console: the shop opens for whoever asked for it, and the
+		// console is nobody.
+		player.command("execute as Player0 run mhr shop");
+		context.waitForScreen(ShopScreen.class);
+		context.waitTicks(3);
+		player.settle();
+	}
+
+	/** Where a square is in window pixels, or null when it is scrolled out of view. */
+	private double[] squareOf(ClientGameTestContext context, String unlockId) {
+		return context.computeOnClient(client -> {
+			if (!(client.gui.screen() instanceof ShopScreen shop)) {
+				throw new AssertionError("The shop screen should be open, and the screen is "
+						+ client.gui.screen());
+			}
+			double[] centre = shop.centreOf(unlockId);
+			if (centre == null) {
+				return null;
+			}
+			double scale = client.getWindow().getGuiScale();
+			return new double[] {centre[0] * scale, centre[1] * scale};
+		});
+	}
+
+	/** The ids whose squares are on screen right now. */
+	private List<String> visibleIds(ClientGameTestContext context, List<Offer> candidates) {
+		List<String> visible = new ArrayList<>();
+		for (Offer offer : candidates) {
+			if (squareOf(context, offer.id()) != null) {
+				visible.add(offer.id());
+			}
+		}
+		return visible;
+	}
+
+	private void hover(ClientGameTestContext context, String unlockId) {
+		double[] square = squareOf(context, unlockId);
+		check(square != null, "cannot hover " + unlockId + ": it is not on screen");
+		context.getInput().setCursorPos(square[0], square[1]);
+		context.waitTicks(3);
+	}
+
+	/** Puts the real cursor on a square and presses the real left button. */
+	private void clickSquare(ClientGameTestContext context, TestPlayer player, String unlockId) {
+		hover(context, unlockId);
+		// MOUSE_BUTTON_LEFT rather than 0: 26.3 takes its input from SDL, which numbers from one.
+		context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
+		player.settle();
+		context.waitTicks(3);
+		player.settle();
+	}
+
+	private void scrollToTheBottom(ClientGameTestContext context) {
+		for (int i = 0; i < 40; i++) {
+			context.runOnClient(client -> {
+				if (client.gui.screen() instanceof ShopScreen shop) {
+					shop.mouseScrolled(0, 0, 0, -1);
+				}
+			});
+		}
+		context.waitTicks(2);
+	}
+
+	// --- asking the two sides -----------------------------------------------------------------
+
+	private int levelOnScreen(ClientGameTestContext context, String unlockId) {
+		return context.computeOnClient(client -> {
+			for (Offer offer : SyncedShop.offers()) {
+				if (offer.id().equals(unlockId)) {
+					return offer.level();
+				}
+			}
+			return -1;
+		});
+	}
+
+	private int maxLevelOnScreen(ClientGameTestContext context, String unlockId) {
+		return context.computeOnClient(client -> {
+			for (Offer offer : SyncedShop.offers()) {
+				if (offer.id().equals(unlockId)) {
+					return offer.maxLevel();
+				}
+			}
+			return -1;
+		});
+	}
+
+	private int currencyOnScreen(ClientGameTestContext context) {
+		return context.computeOnClient(client -> SyncedShop.currency());
+	}
+
+	private List<Offer> serverOffers(TestPlayer player) {
+		return player.onServerComputing(server -> List.copyOf(Catalogue.offers()));
+	}
+
+	private boolean ownedOnServer(TestPlayer player, String unlockId) {
+		return player.onServerComputing(server -> UnlockState.get().isOwned(unlockId));
+	}
+
+	private int balanceOnServer(TestPlayer player) {
+		return player.onServerComputing(server -> Wallet.get().balance());
+	}
+
+	private int priceOf(TestPlayer player, String unlockId) {
+		return player.onServerComputing(server -> Catalogue.offer(unlockId)
+				.orElseThrow(() -> new AssertionError("The catalogue does not sell " + unlockId))
+				.price());
+	}
+
+	private double borderSize(TestPlayer player) {
+		return player.onServerComputing(server -> server.overworld().getWorldBorder().getSize());
+	}
+
+	// --- plumbing --------------------------------------------------------------------------
+
+	private void scenario(ClientGameTestContext context, String name, Runnable body) {
+		LOGGER.info("=== scenario {} ===", name);
+		try {
+			body.run();
+			LOGGER.info("=== scenario {}: PASS ===", name);
+		} catch (Throwable failure) {
+			failures.add(name + ": " + failure.getMessage());
+			LOGGER.error("=== scenario {}: FAIL === {}", name, failure.getMessage(), failure);
+			try {
+				context.takeScreenshot("failed-" + name);
+			} catch (Throwable ignored) {
+				LOGGER.warn("Could not screenshot the failure of {}", name);
+			}
+		}
+	}
+
+	private static void check(boolean condition, String message) {
+		if (!condition) {
+			throw new AssertionError(message);
+		}
+	}
+}

@@ -254,7 +254,7 @@ What takes effect immediately, and what does not:
 
 | Value | After `/mhr reload` |
 | --- | --- |
-| Unlock prices, advancement rewards | Immediately — the shop reads the price when it sells |
+| Unlock prices, advancement rewards | Immediately — the shop reads the price when it sells, and an open shop screen is re-sent |
 | Mob damage multiplier | Immediately, for damage dealt after the reload |
 | World border sizes | **Next run.** A world already running keeps the border it was given; resizing it under a player mid-run is not something a balance edit should do |
 
@@ -319,10 +319,19 @@ answer for what fits an item is asked as well.
 
 ```
 core/        shared state and config loading — Balance, BalanceManager
-progression/ currency and rewards (not built yet; reads currency.advancements)
-shop/        the shop (not built yet; reads unlocks and worldBorder)
+progression/ the purse and the one purchase operation — Wallet, Catalogue, Purchase
+shop/        the shop screen, its networking and its arrangement
 features/    gameplay mechanics only — no balance numbers of their own
 ```
+
+`progression/Catalogue` is what turns the balance file into a product list: the `unlocks` section in
+file order, plus the `worldBorder` tiers under their `world.border.*` ids. Nothing else enumerates
+what is for sale.
+
+Note what is *not* in the balance file: which row of the shop an unlock is drawn in, what icon it
+has and what it is called. Those are presentation, not tuning, and they live in
+`src/main/resources/shop-layout.json` and the language file. A balance edit changes what something
+costs; it never changes where it appears.
 
 Features depend on `core`, never on each other, and never on `shop` or `progression`. The existing
 feature code still sits directly under `fi.vilpponen.mhr`; it moves under `features/` as each
