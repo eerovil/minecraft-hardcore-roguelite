@@ -99,6 +99,22 @@ final class TestRuns {
 		});
 	}
 
+	/** Hurt the live player down to this much health, so a later revive is visible. */
+	static void woundLivePlayer(TestDedicatedServerContext server, float health) {
+		server.runOnServer(minecraftServer -> livePlayer(minecraftServer).setHealth(health));
+	}
+
+	/**
+	 * Take away the mark that says this player joined the run in progress.
+	 *
+	 * <p>What an entry that failed part-way leaves behind, without having to make one fail: the
+	 * same player, in the same world, with the one difference that decides whether their death is
+	 * the run ending or their own business. Zero is the value an unmarked player reads as.
+	 */
+	static void forgetAdmission(TestDedicatedServerContext server) {
+		server.runOnServer(minecraftServer -> RunAdmission.admit(livePlayer(minecraftServer), 0));
+	}
+
 	/** Where this run's overworld puts an arriving player. */
 	static BlockPos runSpawn(TestDedicatedServerContext server) {
 		return server.computeOnServer(minecraftServer -> minecraftServer.getRespawnData().pos());

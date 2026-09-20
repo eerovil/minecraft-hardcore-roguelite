@@ -955,7 +955,6 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 				"this scenario needs a run in progress to join late, and the save says "
 						+ TestRuns.record(server).describe());
 		int runId = TestRuns.record(server).runId();
-		BlockPos spawn = TestRuns.runSpawn(server);
 
 		FAIL_PLAYER_ENTRY.set(true);
 		try (TestDedicatedServerConnection connection = server.connect()) {
@@ -976,28 +975,6 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 					"they never finished joining run " + runId + ", so they must not be marked as"
 							+ " admitted to it, and they are marked " + TestRuns.admittedRunOf(server));
 
-			// Now the rule itself, asked directly: in the run's overworld without having joined it.
-			server.runCommand("execute in minecraft:overworld run tp Player0 "
-					+ spawn.getX() + " " + spawn.getY() + " " + spawn.getZ());
-			TestRuns.settle(server);
-			check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
-					"setup: this half needs them standing in the run's overworld, and they are in "
-							+ TestRuns.playerDimension(server, connection));
-			check(TestRuns.admittedRunOf(server) != runId,
-					"setup: and still not admitted to it");
-
-			server.runCommand("kill Player0");
-			TestRuns.settle(server);
-			context.waitTicks(10);
-
-			check(TestRuns.phase(server) == RunPhase.RUNNING,
-					"a death by somebody who never joined this run must not end it, and the save says "
-							+ TestRuns.record(server).describe());
-			check(TestRuns.record(server).runId() == runId,
-					"and it must still be the same run");
-			check(TestRuns.playerHealth(server, connection) > 0.0F,
-					"and they must be alive rather than on a hardcore game-over screen, and they have "
-							+ TestRuns.playerHealth(server, connection) + " health");
 		}
 		TestRuns.waitForNobodyConnected(context, server);
 
@@ -1010,8 +987,46 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 			check(TestRuns.admittedRunOf(server) == runId,
 					"and admit them to run " + runId + " this time, and they are marked "
 							+ TestRuns.admittedRunOf(server));
+
+			// Now the rule itself. Same player, same world, one difference: the mark. Asked here
+			// rather than by teleporting somebody in, because a player who arrived through the
+			// boundary is the only one this harness can reliably kill — a command's selector can
+			// resolve to a ServerPlayer the server replaced on the way, and killing that does
+			// nothing while still reporting success.
+			TestRuns.forgetAdmission(server);
+			check(TestRuns.admittedRunOf(server) != runId,
+					"setup: they should now look like somebody who never crossed this run's start"
+							+ " boundary, and they are marked " + TestRuns.admittedRunOf(server));
+
+			// Wounded first, so "they were revived" is visible. Without it a death that silently
+			// never happened would leave a healthy player and look exactly like one taken over.
+			TestRuns.woundLivePlayer(server, 1.0F);
+			TestRuns.settle(server);
+			check(TestRuns.playerHealth(server, connection) == 1.0F,
+					"setup: they should be on their last heart, and they have "
+							+ TestRuns.playerHealth(server, connection));
+
+			server.runCommand("kill Player0");
+			TestRuns.settle(server);
+			context.waitTicks(10);
+
+			check(TestRuns.phase(server) == RunPhase.RUNNING,
+					"a death by somebody not admitted to this run must not end it, and the save says "
+							+ TestRuns.record(server).describe());
+			check(TestRuns.record(server).runId() == runId,
+					"and it must still be run " + runId);
+			check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
+					"and they must be left where they fell rather than sent to the lobby, and they"
+							+ " are in " + TestRuns.playerDimension(server, connection));
+			check(TestRuns.playerHealth(server, connection) == 20.0F,
+					"and the death must still have been taken over and the player revived, which"
+							+ " leaves them on full health rather than the one heart they had, and they"
+							+ " have " + TestRuns.playerHealth(server, connection));
 		}
 		TestRuns.waitForNobodyConnected(context, server);
+
+		// Left admitted to nothing, so the next scenario is not handed a half-marked player.
+		TestRuns.end(server);
 	}
 
 	/**
