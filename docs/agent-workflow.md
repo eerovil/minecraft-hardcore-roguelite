@@ -130,15 +130,18 @@ Transient failure evidence belongs in `build/gametest/`.
 The Kubernetes environment is shared.
 
 - Do not assume the persistent dev server contains your branch or your world.
-- The GameTest pod has isolated runtime state, but its default source workspace and client port can
-  still collide with another concurrent run.
-- Use a private GameTest workspace when another worker may be active:
+- Runs are serialized: `sync`, `build`, `deploy` and `go` take the build pod's lock and `gametest`
+  takes the gametest pod's, for the whole command. If another worker is active your run **waits**
+  and says so. That wait is normal, not a failure — do not work around it by starting a second run
+  or by execing into the pod by hand. See `docs/dev-environment.md#the-run-lock`.
+- A run that dies on `Address already in use` for port 25565, or on a SIGTERM from another worker's
+  cleanup, is harness residue and not evidence about your change. It should not happen now; if it
+  does, report it against the harness rather than editing product code to suit it.
+- A private GameTest workspace is still available when you want one, for instance to keep an
+  experiment around between runs:
   ```sh
   MHR_GAMETEST_WORKSPACE=/pvc/gametest/workspace-<unique-name> scripts/dev.sh gametest
   ```
-- If a red client run leaves a stale `KnotClient` holding port 25565, diagnose that as harness
-  residue rather than changing product code; the cleanup command is documented in
-  `docs/dev-environment.md`.
 - Never infer a product regression from a run that failed before a named scenario started.
 
 ## Reviewing and fixing a PR
