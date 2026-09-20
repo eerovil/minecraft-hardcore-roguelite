@@ -877,22 +877,23 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 					"a save that cannot build all three run dimensions must refuse to start one, and"
 							+ " /mhr run start returned " + refused);
 
-			RunRecord after = TestRuns.record(server);
-			check(after.phase() == RunPhase.LOBBY,
-					"and it must refuse without moving the loop on, and the save says "
-							+ after.describe());
-			check(after.runId() == before.runId(),
-					"a run refused before it began must not spend an id: it was " + before.runId()
-							+ " and is now " + after.runId());
-
-			// The part that makes the refusal worth anything.
+			// Asked before anything else, because it is the claim that makes refusing safe. A
+			// refusal that has already deleted the last run's worlds is not a refusal.
 			check(TestRuns.isMarked(server, Level.OVERWORLD, MARK, MARKER),
-					"and it must refuse before it destroys anything, and the last run's overworld has"
+					"it must refuse before it destroys anything, and the last run's overworld has"
 							+ " already been deleted out from under it");
 			long seedNow = server.computeOnServer(minecraftServer -> minecraftServer.overworld().getSeed());
 			check(seedNow == seedBefore,
 					"nor may it have replaced the seed on the way: it was " + seedBefore
 							+ " and is now " + seedNow);
+
+			RunRecord after = TestRuns.record(server);
+			check(after.phase() == RunPhase.LOBBY,
+					"and it must refuse without moving the loop on, and the save says "
+							+ after.describe());
+			check(after.runId() == before.runId(),
+					"and a run refused before it began must not even spend an id: it was "
+							+ before.runId() + " and is now " + after.runId());
 		});
 
 		// And with the dimension back, the loop works again — so the refusal was the missing stem
