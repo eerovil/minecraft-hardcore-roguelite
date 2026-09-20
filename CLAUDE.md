@@ -92,9 +92,14 @@ These have already cost implementation/debugging time.
   and shift-click behaviour are documented in `docs/dev-environment.md`; reuse `TestPlayer`
   helpers instead of re-discovering them.
 - **A failed Client GameTest can leave a JVM holding port 25565.** If a run fails before any named
-  scenario starts, diagnose the harness/port state before changing product code.
-- **The cluster is shared.** Concurrent GameTest runs can collide in the default test workspace and
-  on the client-test server port. Use a unique `MHR_GAMETEST_WORKSPACE` when needed.
+  scenario starts, diagnose the harness/port state before changing product code. `gametest` finds
+  such a JVM once it holds the lock, but it waits and then stops rather than killing it — branches
+  older than the lock still run without it, and their runs look exactly like debris from here.
+  Rerun with `MHR_KILL_STRAYS=1` once you know it is debris. See
+  `docs/dev-environment.md#the-run-lock`.
+- **The cluster is shared, so runs queue.** `scripts/dev.sh` takes a lock on the pod it uses and
+  waits when another worker holds it. Waiting is the expected behaviour; do not route around it.
+  See `docs/dev-environment.md#the-run-lock`.
 - **Balance values are not Java constants.** If a number is a tuning decision, first look for its
   home in `default-balance.json` / `Balance`.
 - **Server rules are authoritative.** Client-synchronized unlock state is for presentation and
