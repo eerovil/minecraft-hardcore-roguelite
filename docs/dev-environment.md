@@ -1036,9 +1036,17 @@ removes both pods but keeps the volume, so bringing it back is fast.
 - A run that ends red sometimes leaves its client JVM alive in the pod. The dedicated server lives
   inside that JVM, so the port stays taken and the *next* run would die early with `FAILED TO BIND
   TO PORT` and a `TimeoutException` out of `createServer` — which looks like a broken test and is
-  not. The giveaway is that it fails before any scenario is named. `gametest` now kills leftover
-  JVMs itself once it holds the lock, so this should not reach you; if you see it anyway, the
-  harness is at fault rather than the product code. By hand:
+  not. The giveaway is that it fails before any scenario is named. `gametest` looks for a leftover
+  JVM once it holds the lock, so what you should normally see instead is the command waiting out
+  `MHR_STRAY_GRACE` and then stopping to tell you what it found — it does not kill anything unless
+  you say so, because from outside it cannot tell debris from somebody running without the lock.
+  See [The run lock](#the-run-lock). Once you are sure it is debris, either rerun as
+
+  ```sh
+  MHR_KILL_STRAYS=1 scripts/dev.sh gametest
+  ```
+
+  or clear it by hand:
 
   ```sh
   kubectl -n mhr-dev exec deploy/mhr-gametest -- pkill -f KnotClient

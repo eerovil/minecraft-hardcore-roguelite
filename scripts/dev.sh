@@ -53,16 +53,30 @@ EOF
 #
 # The lock is an flock held by a `kubectl exec` sitting on a pipe this script keeps open. That is
 # the whole reason it cannot go stale: if this script exits, crashes, is killed or loses its
-# connection, the pipe closes, the shell in the pod exits and the kernel drops the lock. There is
-# nothing to clean up after a dead worker and no unlock command to remember.
+# connection, the connection to the pod drops, the shell in the pod dies with it and the kernel
+# drops the lock. There is nothing to clean up after a dead worker and no unlock command.
+#
+# Two things end the run in the pod, because one of them is not enough:
+#
+#   - we close the pipe, the `cat` in the pod sees EOF and exits by itself. This is the tidy exit
+#     and the one a normal `release_lock` takes;
+#   - the watchdog below drops the kubectl connection. This is the backstop for a `kill -9` of this
+#     script, which runs no traps and closes nothing in the children we already started.
 LOCK_TMP=""
 LOCK_PID=""
 LOCK_FD=""
+LOCK_WATCHDOG_PID=""
 
 release_lock() {
 	[[ -n "$LOCK_PID" ]] || return 0
+	if [[ -n "$LOCK_WATCHDOG_PID" ]]; then
+		kill "$LOCK_WATCHDOG_PID" 2>/dev/null || true
+		wait "$LOCK_WATCHDOG_PID" 2>/dev/null || true
+		LOCK_WATCHDOG_PID=""
+	fi
 	# Close our end first: the holder's `cat` sees EOF and releases the lock on its own, which is
-	# tidier than killing the connection and letting the kubelet reap the process.
+	# tidier than killing the connection and letting the kubelet reap the process. It only works
+	# when no child of ours is still holding the pipe open, hence the short wait and the kill.
 	[[ -n "$LOCK_FD" ]] && exec {LOCK_FD}>&- && LOCK_FD=""
 	local spun=0
 	while kill -0 "$LOCK_PID" 2>/dev/null && ((spun < 25)); do
@@ -85,9 +99,15 @@ take_lock() {
 	LOCK_TMP="$(mktemp -d)"
 	mkfifo "$LOCK_TMP/hold"
 	# Opened read-write so the pipe has a writer for as long as this script lives and the holder
-	# never sees a premature EOF.
+	# never sees a premature EOF. (Read-write rather than write-only because opening a fifo for
+	# writing blocks until somebody opens the read end, and nothing has yet.)
 	exec {LOCK_FD}<>"$LOCK_TMP/hold"
 
+	# `{LOCK_FD}>&-` closes our writer inside the kubectl child, and it is what makes the lock
+	# survive a `kill -9` of this script. A background command inherits every descriptor the shell
+	# has open, so without it the child would be holding a writer on the fifo too: this script could
+	# die outright, the orphaned child would keep the pipe from ever reaching EOF, and the `cat` in
+	# the pod would sit on the flock forever with nobody left to release it.
 	kubectl -n "$NS" exec -i "$pod" -- bash -c "
 		exec 200>>'$lock'
 		if ! flock -w '$MHR_LOCK_WAIT' 200; then
@@ -97,8 +117,22 @@ take_lock() {
 		echo '$owner' >'$lock.owner'
 		echo HELD
 		cat >/dev/null
-	" <"$LOCK_TMP/hold" >"$LOCK_TMP/out" 2>&1 &
+	" <"$LOCK_TMP/hold" >"$LOCK_TMP/out" 2>&1 {LOCK_FD}>&- &
 	LOCK_PID=$!
+
+	# Bash has no way to mark a descriptor close-on-exec, so every command this script runs while it
+	# holds the lock — gradle, tar, even sleep — inherits our end of the pipe. Harmless while we are
+	# alive; fatal after a `kill -9`, because those children carry on holding the pipe open, the
+	# `cat` in the pod never sees EOF and the lock outlives the worker that took it. So the watchdog
+	# waits for this script's pid to go away and then drops the connection itself. It is a child too,
+	# so it survives our death — that is exactly what makes it able to clean up after it.
+	local me=$$ holder=$LOCK_PID
+	(
+		while kill -0 "$me" 2>/dev/null; do sleep 1; done
+		kill "$holder" 2>/dev/null || true
+	) &
+	LOCK_WATCHDOG_PID=$!
+
 	trap release_lock EXIT
 	# Bash does not run an EXIT trap when the shell dies of an untrapped signal, and a Ctrl-C that
 	# reached us but not the holder would otherwise leave it orphaned and the lock held.
