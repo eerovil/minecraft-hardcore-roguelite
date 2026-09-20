@@ -235,8 +235,8 @@ adding machinery to the gap before the gap itself was removed. **There is now on
 > **write, then adopt.**
 
 A change is built as a whole new snapshot, written through `core/AtomicFile` — temporary file,
-fsync, rename, fsync the directory, so the file is either wholly old or wholly new — and only once
-that write has landed does `Progress` start answering with the new values. A write that fails
+flush the file, atomic rename, and the rename is last, so the file is either wholly old or wholly
+new — and only once that write has landed does `Progress` start answering with the new values. A write that fails
 changes nothing at all: not the file, not memory, not what the running game believes. There is
 nothing half-applied to notice, report or recover from, and no recovery machinery.
 
@@ -288,6 +288,12 @@ the furthest one along `BorderTier`, since the tiers are steps rather than choic
 when a server starts and again whenever the owned unlocks change.
 
 There is no border-specific save file, and there must not be one. The tier is derived state.
+
+The tiers are steps, so the catalogue sells them as steps too: owning one satisfies every tier no
+bigger than it, and `Catalogue` reports those as owned rather than offering a purchase that cannot
+change anything. Bigger is by size, from the `worldBorder` data the catalogue already reads — not
+the `BorderTier` constants, which are the border feature's business. Nothing extra is written to the
+snapshot for it; what the player bought stays what is recorded.
 
 `/mhr border <tier>` still overrides it by hand, and once it has, purchases stop deciding the size
 of *that* world; the flag is cleared when the next server starts. Tests depend on this, because they

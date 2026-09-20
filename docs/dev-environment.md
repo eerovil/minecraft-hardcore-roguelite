@@ -728,6 +728,10 @@ than asserting one field:
   believes neither half of it; the same purchase then goes through once the way is clear.
 - **a-refused-write-leaves-the-previous-progression-whole** — one purchase succeeds, the next cannot
   be written, and the snapshot still holds exactly what the successful one left.
+- **a-smaller-border-tier-cannot-be-charged-for-once-a-bigger-one-is-owned** — the tiers are steps
+  and the run gets the largest one owned, so a smaller one bought afterwards changes nothing. It
+  shows as owned, a purchase is refused, nothing is charged and nothing is written. The rule runs
+  one way only: owning the smallest tier leaves every bigger one for sale.
 - **an-older-profile-is-carried-into-one-file** — the two files an older build wrote are read and
   arrive in the snapshot whole, levels and currency both, and the old files are left where they are.
 - **the-oldest-save-shape-still-reads** — a bare list of ids, from before unlocks had levels.
@@ -763,8 +767,11 @@ the player would see and the left button goes down.
   square can be left undrawn with part of itself still inside the panel. Clicking the whole of where
   it would have been buys nothing; scrolling back and clicking the same square does, which is the
   control.
-- **buying-a-border-tier-resizes-the-world** — the only place a border tier is bought, because this
-  test has a dedicated server to itself.
+- **buying-a-border-tier-resizes-the-world** — the only place a border tier is applied to a real
+  world, because this test has a dedicated server to itself.
+- **a-smaller-border-tier-is-not-for-sale-once-a-bigger-one-is-owned** — the same rule where it can
+  be seen: Large is bought, Medium shows as owned on the screen, clicking it costs nothing and
+  writes nothing, and the world is still the size Large made it.
 
 The screenshots it takes are evidence rather than debris, and they are taken on the passing path:
 `shop-fresh-progression`, `shop-vanilla-plus-below`, `shop-after-buying-trees` and

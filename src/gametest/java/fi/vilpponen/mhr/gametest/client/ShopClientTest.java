@@ -50,6 +50,7 @@ public class ShopClientTest implements FabricClientGameTest {
 	private static final String ENCHANT = "player.craft.enchant";
 	private static final String BREAD = "starter.bread";
 	private static final String MEDIUM_BORDER = "world.border.medium";
+	private static final String LARGE_BORDER = "world.border.large";
 
 	private final List<String> failures = new ArrayList<>();
 
@@ -76,6 +77,8 @@ public class ShopClientTest implements FabricClientGameTest {
 						() -> aSquareThatIsNotDrawnCannotBeBought(context, player));
 				scenario(context, "buying-a-border-tier-resizes-the-world",
 						() -> buyingABorderTierResizesTheWorld(context, player));
+				scenario(context, "a-smaller-border-tier-is-not-for-sale-once-a-bigger-one-is-owned",
+						() -> aSmallerBorderTierIsNotForSaleOnceABiggerOneIsOwned(context, player));
 			}
 		}
 
@@ -340,6 +343,47 @@ public class ShopClientTest implements FabricClientGameTest {
 		} finally {
 			removeOverride(player);
 		}
+	}
+
+	/**
+	 * The tiers are steps, and the run gets the largest one owned. So once Large is bought, clicking
+	 * Medium cannot change the world — and it must not be able to take the price for trying.
+	 *
+	 * <p>The half that needs a real world: the border is actually applied here, so what is checked
+	 * at the end is the size of the world the player is standing in.
+	 */
+	private void aSmallerBorderTierIsNotForSaleOnceABiggerOneIsOwned(
+			ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		int largePrice = priceOf(player, LARGE_BORDER);
+		int spare = priceOf(player, MEDIUM_BORDER) + 7;
+		player.command("mhr currency set " + (largePrice + spare));
+		openShop(context, player);
+
+		clickSquare(context, player, LARGE_BORDER);
+		check(ownedOnServer(player, LARGE_BORDER), "setup: the large tier should have been bought");
+		double large = borderSize(player);
+		check(balanceOnServer(player) == spare,
+				"setup: and should have cost exactly " + largePrice + ", leaving " + spare);
+
+		// The screen has to stop offering it, not offer it and then have the click refused.
+		check(levelOnScreen(context, MEDIUM_BORDER) > 0,
+				"a tier smaller than the one owned must show as owned on the screen, and it shows level "
+						+ levelOnScreen(context, MEDIUM_BORDER));
+
+		clickSquare(context, player, MEDIUM_BORDER);
+
+		check(balanceOnServer(player) == spare,
+				"clicking it must cost nothing: the purse went from " + spare + " to "
+						+ balanceOnServer(player));
+		check(!ownedOnServer(player, MEDIUM_BORDER),
+				"and must write nothing: what was bought is what is recorded");
+		check(Math.abs(borderSize(player) - large) < 1.0,
+				"and the world must still be the size the large tier made it: it is " + borderSize(player)
+						+ " across rather than " + large);
+
+		// Put the world back, so nothing after this is fenced in by a purchase it did not make.
+		reset(player);
 	}
 
 	// --- talking to the shop ------------------------------------------------------------------

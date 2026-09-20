@@ -56,6 +56,12 @@ public class ShopPurchaseGameTest {
 	/** A second plain unlock, for the scenarios that need two purchases to be told apart. */
 	private static final String VILLAGE = "world.village";
 
+	/** Three of the four border tiers, smallest first. The run gets the largest one owned. */
+	private static final String TINY_BORDER = "world.border.tiny";
+	private static final String MEDIUM_BORDER = "world.border.medium";
+	private static final String LARGE_BORDER = "world.border.large";
+	private static final String UNBOUNDED_BORDER = "world.border.infinite";
+
 	@GameTest(maxTicks = 400)
 	public void theShopChargesForWhatItGrants(GameTestHelper helper) {
 		List<String> failures = new ArrayList<>();
@@ -83,6 +89,8 @@ public class ShopPurchaseGameTest {
 					this::aPurchaseTheDiskWillNotTakeChangesNothingAtAll);
 			scenario(failures, "a-refused-write-leaves-the-previous-progression-whole",
 					this::aRefusedWriteLeavesThePreviousProgressionWhole);
+			scenario(failures, "a-smaller-border-tier-cannot-be-charged-for-once-a-bigger-one-is-owned",
+					this::aSmallerBorderTierCannotBeChargedForOnceABiggerOneIsOwned);
 			scenario(failures, "an-older-profile-is-carried-into-one-file",
 					this::anOlderProfileIsCarriedIntoOneFile);
 			scenario(failures, "the-oldest-save-shape-still-reads",
@@ -352,6 +360,66 @@ public class ShopPurchaseGameTest {
 						+ after);
 	}
 
+	/**
+	 * The border tiers are steps, and the run gets the largest one owned. So once Large is bought,
+	 * Medium and Tiny cannot change anything about the world — and the shop lets tiers be bought in
+	 * any order, which made buying Large first turn Medium into a trap that took the price and did
+	 * nothing.
+	 *
+	 * <p>Nothing here applies a tier to the running world: {@code Purchase} writes the snapshot and
+	 * the border is only re-read when something fires the unlock effects, which this does not. The
+	 * half that needs a real world is in the client test, which has a server to itself.
+	 */
+	private void aSmallerBorderTierCannotBeChargedForOnceABiggerOneIsOwned() {
+		reset();
+		int largePrice = priceOf(LARGE_BORDER);
+		int before = largePrice + priceOf(MEDIUM_BORDER) + priceOf(UNBOUNDED_BORDER) + 5;
+		Wallet.get().set(before);
+
+		// The rule runs one way only. Owning a smaller tier must leave every bigger one for sale,
+		// or "buy the cheap one first" would quietly close the ladder.
+		check(Purchase.buy(TINY_BORDER).bought(), "setup: the smallest tier should be buyable");
+		check(!offer(MEDIUM_BORDER).isMaxed(),
+				"owning the smallest tier must not satisfy a bigger one, and " + MEDIUM_BORDER
+						+ " shows as owned");
+		check(!offer(LARGE_BORDER).isMaxed(),
+				"nor any of the ones above it, and " + LARGE_BORDER + " shows as owned");
+		check(!offer(UNBOUNDED_BORDER).isMaxed(),
+				"nor the unbounded one, and " + UNBOUNDED_BORDER + " shows as owned");
+
+		check(Purchase.buy(LARGE_BORDER).bought(), "setup: the large tier should be buyable");
+		int after = balance();
+		check(after == before - largePrice - priceOf(TINY_BORDER),
+				"setup: and should cost exactly " + largePrice);
+
+		// The shop must stop offering the smaller ones at all, rather than offering them and then
+		// refusing: a price shown is a price a player will click.
+		check(offer(MEDIUM_BORDER).isMaxed(),
+				"a tier smaller than the one owned must show as owned, and " + MEDIUM_BORDER + " does not");
+		check(offer(TINY_BORDER).isMaxed(),
+				"and so must every tier below it, and " + TINY_BORDER + " does not");
+
+		Purchase.Result medium = Purchase.buy(MEDIUM_BORDER);
+
+		check(medium.outcome() == Purchase.Outcome.ALREADY_MAXED,
+				"buying a smaller tier must be refused as already owned, and the answer was "
+						+ medium.outcome());
+		check(balance() == after,
+				"and must cost nothing: the purse went from " + after + " to " + balance());
+		check(!owns(MEDIUM_BORDER),
+				"nothing should be written to the snapshot either — what was bought is what is recorded");
+
+		// A bigger tier is still worth selling, which is what stops this from being "border tiers
+		// are unbuyable once you own any of them".
+		check(!offer(UNBOUNDED_BORDER).isMaxed(),
+				"a tier bigger than the one owned must still be for sale");
+		check(Purchase.buy(UNBOUNDED_BORDER).bought(), "and must still be buyable");
+		check(offer(LARGE_BORDER).isMaxed(),
+				"after which the tier that used to be the biggest is covered by it in turn");
+
+		reset();
+	}
+
 	// --- loading and migrating ----------------------------------------------------------------
 
 	/**
@@ -543,6 +611,11 @@ public class ShopPurchaseGameTest {
 			UnlockState.get().setLevel(offer.id(), 0);
 		}
 		Wallet.get().set(0);
+	}
+
+	private static Offer offer(String id) {
+		return Catalogue.offer(id)
+				.orElseThrow(() -> new AssertionError("The catalogue does not sell " + id));
 	}
 
 	private static int priceOf(String id) {
