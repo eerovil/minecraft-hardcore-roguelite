@@ -134,6 +134,30 @@ every listener has returned. A crash in that window, or a listener that throws, 
 that quietly skipped its starter chest, its border, or whatever the shop sells next. The run id is
 spent either way, so the retry is a different run and cannot be confused with the abandoned one.
 
+The same block covers moving the players in **and** the final write. By the time the record is
+committed, everybody is already standing in the new run — reset, upgraded and admitted — so a write
+that failed outside that block would leave the save saying `CREATING_RUN` with people playing a run
+it does not admit to. That is not merely untidy: the death hook only claims a run-world death while
+the record says `RUNNING`, so a death in that state would fall through to vanilla's hardcore game
+over. Failing at the commit therefore rolls back exactly like a failed player entry.
+
+### `LOBBY` is a permission, not a description
+
+The rollback has the mirror-image rule, and it is the one that is easy to get backwards. Writing
+`LOBBY` is what gives the *next* start leave to delete the three run worlds without asking who is
+in them. So the rollback evacuates everybody first, checks afterwards that they are actually out —
+"we moved them" and "they are out" are different claims — and only then writes the record.
+
+If evacuation cannot be proved, or the write itself fails, the save **stops** instead: a quarantine
+flag is set, the record is left saying the unfinished phase that is true, and every operation that
+would move the loop on or write over the record refuses until somebody has looked at it and
+restarted the server. An unfinished phase that is true is recoverable. A tidy `LOBBY` that is false
+cannot be told from a save that is genuinely fine, and the cost of believing it is a player deleted
+along with the world they are standing in.
+
+While a save is stopped, a death in a run world is still taken over and the player revived. The loop
+is already in trouble in that state; adding a lost world to it would be the worst available answer.
+
 ### Nothing advances past the disk
 
 `RunLifecycle.set` writes the record and only then assigns the field, and throws when the write
@@ -201,17 +225,48 @@ would start at run one's coordinates in terrain that no longer exists.
 
 ### A run is not only its chunks
 
-Since 26.1 several things that belong to one run do not live in a level at all: the weather, the
-world clocks and the wandering trader's timer are the **server's**. Replacing the three levels
-leaves them untouched, so run 2 would open in run 1's thunderstorm at run 1's time of day. `recreate`
-therefore resets them too — weather and spawn timers before the rebuild, because the new levels read
-those as they are constructed, and the clocks after it, because setting a clock tells the connected
-players and that reads the game rules off an overworld that does not exist in between.
+Since 26.1 a good deal of what one run accumulates does not live in a level at all. It lives on
+`MinecraftServer` and in `<save>/data/`, so replacing the three levels leaves it untouched: run 2
+would open in run 1's thunderstorm, at run 1's time of day, with the loot tables carrying on the
+random sequence run 1 left them in. `recreate` resets it — most of it before the rebuild, because
+the new levels read it as they are constructed, and the clocks after it, because setting a clock
+tells the connected players and that reads the game rules off an overworld that does not exist in
+between.
 
-The dividing line is per run versus per save. Weather, time and spawn timers are things a run
-accumulates. Game rules, the scoreboard and permanent progression belong to the save and are left
-alone — this is not a wipe. Anything server-global added later needs putting on one side of that
-line deliberately.
+**The rule, so this does not have to be rediscovered one item at a time.** Something belongs to one
+run when *ordinary play inside a run* is what produces it. Something belongs to the save when only
+an operator, a datapack or this mod's own progression can have made it — because then the lobby may
+own it just as easily as the run did, and nothing in `RunWorlds` can tell which. A roguelite run
+boundary is not a save wipe.
+
+Applied to 26.3's server-global state:
+
+| State | Side | Why |
+| --- | --- | --- |
+| `WeatherData` | per run | rain and thunder countdowns a run rolls through |
+| `ServerClockManager` (overworld + end clocks) | per run | time of day, advanced by playing |
+| `WanderingTraderData` | per run | spawn delay and chance ratchet over a playthrough |
+| `RandomSequences` | per run | loot-table RNG streams advance on every chest opened |
+| `GameRuleMap` | per save | server-global in 26.3, and shared with the lobby |
+| `ScoreboardSaveData`, `CustomBossEvents`, `Stopwatches`, `TimerQueue`, command storage | per save | only a command or a datapack creates these, and none of them says whether it was for the run or the lobby |
+| `StructureTemplateManager`, save version/brand metadata | per save | not gameplay accumulation at all |
+| Permanent progression | across saves | the whole point of the loop |
+
+Two traps inside that, both found the hard way:
+
+- **Being reset in memory is not being reset.** Only dirty `SavedData` is written, so a reset that
+  never marks it survives until the next restart and no further. `SavedDataStorage.set` marks what
+  it is handed — which is how the trader data gets there — but `RandomSequences.clear()` does not,
+  because vanilla only ever clears sequences in a world that goes on to re-roll them and re-rolling
+  is what marks it. `recreate` calls `setDirty()` itself.
+- **A new seed does not reseed an existing sequence.** `RandomSequence` stores the stream's current
+  position, not its seed, so a sequence that already exists is unaffected by the world seed
+  changing. It has to be removed, not re-derived.
+
+One known gap: filled maps and their id counter are server-global too, so a map drawn in run 1 still
+holds run 1's terrain. Nothing can reference one afterwards — map items live in inventories and
+ender chests, both emptied at the player boundary — and `SavedDataStorage` has no
+cache-invalidation API to drop the orphaned files with. Left alone deliberately.
 
 ### The old run's worlds are deleted at the *start* of the next run
 
@@ -287,7 +342,8 @@ Before adding a field, decide which column it belongs in.
 | Phase, run id, seed, run count, reward committed | The save, across runs | `<save>/hardcore-roguelite-run.json` |
 | Generated chunks/entities | One run | the run's dimensions, deleted between runs |
 | Player inventory, ender chest, XP, hunger, respawn point, effects | One run | `RunLifecycle.resetForNewRun`, as a player enters |
-| Weather, world clocks, wandering-trader timer | One run | server-global; reset by `RunWorlds.recreate` |
+| Weather, world clocks, wandering-trader timer, named random sequences | One run | server-global; reset by `RunWorlds.recreate` |
+| Game rules, scoreboard, bossbars, stopwatches, scheduled events, command storage | The save, across runs | server-global; deliberately **not** reset — see the rule above |
 | Lobby contents | The save, across runs | the lobby dimension |
 | Selected/active run setup derived from purchases | One run; recomputable at start | applied by a `RUN_STARTED` listener |
 | Shop UI screen state | transient | client/server session, not progression |
@@ -347,6 +403,14 @@ it by putting a diamond block in each run dimension and requiring it to be gone 
   and the lobby and the purchases still standing at the end.
 - `src/gametest/.../client/StarterChestClientTest.java` — the run-start hook doing its job once per
   run, across a reconnect and across two runs.
+
+The failure paths are driven rather than reasoned about. A listener that throws covers a failed
+run start, a failed player entry and a failed reward. The record write is the one thing a test
+cannot make fail by asking, so `fi.vilpponen.mhr.gametest.TestFaults` arms a countdown and a
+test-only mixin turns that many `RunStorage.save` calls into failures. One armed failure catches
+the commit and proves the rollback; two catch the rollback's own write and prove the save stops
+rather than claiming the lobby. The fault is armed from inside the `RUN_STARTED` hook, because that
+is the only place between a start's two record writes.
 
 **Known automation gap:** the harness cannot restart a dedicated server against the same save, so
 "a process restart resumes the run rather than counting a death" is proven in two halves — the

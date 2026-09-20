@@ -12,6 +12,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerCon
 import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -21,6 +22,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.saveddata.WanderingTraderData;
 
 /**
  * Driving the run loop from a client test.
@@ -242,6 +244,28 @@ final class TestRuns {
 	}
 
 	/**
+	 * Wait until a joining player has actually been put in the lobby.
+	 *
+	 * <p>Any test that connects and then does something where the player is standing needs this.
+	 * Chunks having rendered is not the same as the lifecycle having finished with the player: a
+	 * join that has to change dimension waits for the login to complete first, because moving a
+	 * half-logged-in player leaves them registered in two levels and receiving chunks from neither.
+	 * So the move can land a tick or two after the client thinks it has arrived, and a test that
+	 * put a crafting table down in between finds the player has since been teleported away from it.
+	 */
+	static void waitForPlayerInTheLobby(ClientGameTestContext context,
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		for (int attempt = 0; attempt < 100; attempt++) {
+			if (playerIsInTheLobby(server, connection)) {
+				return;
+			}
+			context.waitTicks(2);
+		}
+		throw new AssertionError("The player never reached the lobby; they are in "
+				+ playerDimension(server, connection));
+	}
+
+	/**
 	 * Does the lobby still hold a <em>live</em> registration for a player who has left it?
 	 *
 	 * <p>The lobby is the one level that outlives every run, so it is the one that can accumulate
@@ -349,6 +373,62 @@ final class TestRuns {
 
 	/** Nothing has happened yet: clear skies, first morning. */
 	static final String FRESH_WORLD = "raining false, thundering false, day 0";
+
+	/** The named loot-table random sequence this test uses to see whether RNG state carries over. */
+	static final Identifier TEST_SEQUENCE =
+			Identifier.fromNamespaceAndPath("hardcore_roguelite", "gametest_sequence");
+
+	/**
+	 * Draw some randomness from a named sequence, so the server has a sequence to carry over.
+	 *
+	 * <p>This is the same call a loot table makes: {@code LootContext} asks the server for the
+	 * sequence its table names, and every number taken from it advances the stored state. One run's
+	 * worth of opening chests is exactly this, many times over.
+	 */
+	static void useARandomSequence(TestDedicatedServerContext server) {
+		server.runOnServer(minecraftServer -> {
+			for (int i = 0; i < 16; i++) {
+				minecraftServer.getRandomSequence(TEST_SEQUENCE).nextInt();
+			}
+		});
+	}
+
+	/** How many named random sequences the server is carrying, and whether ours is among them. */
+	static String randomSequencesOn(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer -> {
+			int[] total = {0};
+			boolean[] ours = {false};
+			minecraftServer.getRandomSequences().forAllSequences((id, sequence) -> {
+				total[0]++;
+				if (id.equals(TEST_SEQUENCE)) {
+					ours[0] = true;
+				}
+			});
+			return total[0] + " sequence(s), ours " + (ours[0] ? "present" : "gone");
+		});
+	}
+
+	/**
+	 * Is the server-global state this mod resets actually going to reach the disk?
+	 *
+	 * <p>Resetting a {@code SavedData} in memory and never marking it dirty is a reset that lasts
+	 * until the next restart and no longer — the save loop writes only dirty entries. Asked of both
+	 * the pieces put back at a run boundary, because they get there by different routes: the
+	 * storage marks what it is handed dirty, and the sequences have to be marked by hand.
+	 *
+	 * <p>Asked at the moment of the reset rather than afterwards. The save loop clears the dirty
+	 * flag as it writes, so a later answer would depend on whether an autosave had happened to run
+	 * in between — which is not a thing this test gets to be about.
+	 */
+	static String persistableOn(MinecraftServer server) {
+		boolean trader = server.getDataStorage().get(WanderingTraderData.TYPE).isDirty();
+		boolean sequences = server.getRandomSequences().isDirty();
+		return "trader " + (trader ? "persistable" : "NOT persistable")
+				+ ", sequences " + (sequences ? "persistable" : "NOT persistable");
+	}
+
+	/** Both halves of the server's own run state will survive a restart. */
+	static final String PERSISTABLE = "trader persistable, sequences persistable";
 
 	/** Wait for one full server tick, so a command issued just before it has certainly run. */
 	static void settle(TestDedicatedServerContext server) {

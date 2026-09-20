@@ -1,10 +1,12 @@
 package fi.vilpponen.mhr.gametest.client;
 
 import fi.vilpponen.mhr.UnlockState;
+import fi.vilpponen.mhr.gametest.TestFaults;
 import fi.vilpponen.mhr.gametest.mixin.ChatComponentAccessor;
 import fi.vilpponen.mhr.run.Lobby;
 import fi.vilpponen.mhr.run.RunAdmission;
 import fi.vilpponen.mhr.run.RunEvents;
+import fi.vilpponen.mhr.run.RunLifecycle;
 import fi.vilpponen.mhr.run.RunPhase;
 import fi.vilpponen.mhr.run.RunRecord;
 import fi.vilpponen.mhr.run.RunStorage;
@@ -12,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
@@ -96,6 +99,29 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	private static final AtomicBoolean FAIL_RUN_START = new AtomicBoolean();
 	private static final AtomicBoolean FAIL_RUN_END = new AtomicBoolean();
 
+	/** Make the next run fail while a player is crossing into it, after they have already moved. */
+	private static final AtomicBoolean FAIL_PLAYER_ENTRY = new AtomicBoolean();
+
+	/**
+	 * Make the next start's record writes fail, counting from the commit rather than from now.
+	 *
+	 * <p>A start writes the record twice: once to say it has begun, and once to say it succeeded.
+	 * The second is the transaction's commit, and it is the interesting one — everybody is already
+	 * standing in the new run by the time it runs. Arming the fault from the test thread would catch
+	 * the first write instead and refuse the run before a single world was touched, which is a
+	 * different path with none of the danger in it. So the number is parked here and the run-start
+	 * hook, which fires between the two, arms it for real.
+	 */
+	private static final AtomicInteger FAIL_RECORD_WRITES = new AtomicInteger();
+
+	/**
+	 * Whether the server's own run state was marked as needing saving, read as a run was built.
+	 *
+	 * <p>Not afterwards: saving clears the flag, so the answer would otherwise depend on whether an
+	 * autosave happened to land in between.
+	 */
+	private static final AtomicReference<String> PERSISTABLE_AT_RUN_START = new AtomicReference<>();
+
 	private static boolean listenersRegistered;
 
 	private final List<String> failures = new ArrayList<>();
@@ -149,6 +175,10 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 
 				scenario(context, "a-run-start-that-fails-does-not-become-a-playable-run",
 						() -> aFailedStartIsNotARun(server, connection));
+				scenario(context, "a-run-whose-commit-cannot-be-written-rolls-back-out-of-the-run",
+						() -> aFailedCommitRollsTheStartBack(server, connection));
+				scenario(context, "a-player-upgrade-that-fails-after-the-move-is-not-a-run",
+						() -> aFailedPlayerUpgradeIsNotARun(server, connection));
 				scenario(context, "a-reward-that-fails-stays-owed-and-is-committed-once-on-retry",
 						() -> aFailedRewardIsRetriedOnce(server));
 				scenario(context, "a-run-cannot-start-without-a-lobby-to-leave-from",
@@ -166,6 +196,11 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 			TestRuns.waitForNobodyConnected(context, server);
 			scenario(context, "joining-a-server-with-no-lobby-does-not-fault",
 					() -> joiningWithNoLobby(context, server));
+
+			// Last, and it has to be: it leaves the save stopped, which is exactly what it is for.
+			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "a-rollback-that-cannot-be-written-stops-the-save",
+					() -> aRollbackThatCannotBeWrittenStopsTheSave(context, server));
 		}
 
 		if (!failures.isEmpty()) {
@@ -279,6 +314,15 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		check(!TestRuns.serverRunStateOf(server).equals(TestRuns.FRESH_WORLD),
 				"this run has to leave something behind for the next one to not inherit, and the"
 						+ " world is " + TestRuns.serverRunStateOf(server));
+
+		// And the least visible of them: a named loot-table random sequence, advanced the way a run
+		// advances it by opening chests. The stored state is the sequence's position, not its seed,
+		// so a new world seed does nothing to one that already exists — run 2's first chest would
+		// carry on rolling where run 1 stopped.
+		TestRuns.useARandomSequence(server);
+		check(TestRuns.randomSequencesOn(server).contains("ours present"),
+				"this run has to leave a random sequence behind for the next one to not continue, and"
+						+ " the server carries " + TestRuns.randomSequencesOn(server));
 
 		firstSeed = record.seed();
 		firstSpawn = TestRuns.runSpawn(server);
@@ -444,6 +488,20 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 				"run 2 must open on a fresh world, not the weather and time run 1 left behind: "
 						+ world);
 
+		String sequences = TestRuns.randomSequencesOn(server);
+		check(sequences.contains("ours gone"),
+				"run 2 must not continue run 1's loot randomness, and the server still carries "
+						+ sequences);
+
+		// A reset that never reaches the disk is a reset that lasts until the next restart. Only
+		// dirty saved data is written, and the two halves get there by different routes: handing the
+		// storage a fresh object marks it, emptying the sequences in place does not. Recorded as the
+		// run started rather than read now, because saving clears the flag it asks about.
+		String persistable = PERSISTABLE_AT_RUN_START.get();
+		check(TestRuns.PERSISTABLE.equals(persistable),
+				"what a run boundary puts back has to survive a restart, and at the moment run 2 was"
+						+ " built the server said " + persistable);
+
 		check(!TestRuns.playerIsInTheLobby(server, connection),
 				"starting the next run must take the player into it");
 		LOGGER.info("Run 2: seed {}, spawn {}", record.seed(), TestRuns.runSpawn(server));
@@ -602,6 +660,93 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 				"the abandoned run's id must not be handed to the one that worked: abandoned "
 						+ after.runId() + ", started " + good.runId());
 
+		TestRuns.end(server);
+	}
+
+	/**
+	 * The commit at the end of a run start fails, and the start rolls back.
+	 *
+	 * <p>This is the moment the other failure scenarios cannot reach. By the time the record is
+	 * written down as RUNNING, every connected player has already been moved into the new
+	 * overworld, reset and given whatever the run owes them — so a failure here is not "the run did
+	 * not begin", it is "the run began and the save does not know". Left there, a death in those
+	 * worlds is not recognised as this run's and falls through to vanilla's hardcore game over.
+	 *
+	 * <p>So what is asked is both halves: the record goes back to the lobby, <em>and</em> the player
+	 * is out of the run world before it says so.
+	 */
+	private void aFailedCommitRollsTheStartBack(
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		RunRecord before = TestRuns.record(server);
+		check(before.phase() == RunPhase.LOBBY,
+				"this scenario starts in the lobby, and the save says " + before.describe());
+
+		FAIL_RECORD_WRITES.set(1);
+		try {
+			TestRuns.start(server);
+		} finally {
+			FAIL_RECORD_WRITES.set(0);
+			TestFaults.stopFailingRecordWrites();
+		}
+
+		check(TestFaults.recordWriteFailuresLeft() == 0,
+				"the armed write failure must have been spent on the commit, and it was not used");
+
+		RunRecord after = TestRuns.record(server);
+		check(after.phase() == RunPhase.LOBBY,
+				"a run whose commit could not be written must roll all the way back, and the save says "
+						+ after.describe());
+		check(after.runId() > before.runId(),
+				"the half-built run must still spend its id: it was " + before.runId() + " and is now "
+						+ after.runId());
+		check(after.completedRuns() == before.completedRuns(),
+				"a run that never committed is not a run played");
+		check(TestRuns.playerIsInTheLobby(server, connection),
+				"the player must have been got out of the run before the rollback was written down,"
+						+ " and they are in " + TestRuns.playerDimension(server, connection));
+
+		// And the loop still works, so the refusal was the failed write and nothing this scenario
+		// broke on the way past.
+		TestRuns.start(server);
+		check(TestRuns.phase(server) == RunPhase.RUNNING,
+				"a run must still be startable after a commit failed, and the save says "
+						+ TestRuns.record(server).describe());
+		TestRuns.end(server);
+	}
+
+	/**
+	 * A player upgrade that throws after the player has already moved.
+	 *
+	 * <p>{@code PLAYER_ENTERED_RUN} runs when the player is in the run world, reset, and not yet
+	 * admitted. A listener failing there is the shop's own failure mode — a purchased effect that
+	 * cannot be applied — and the answer has to be the same as any other failed start: nobody is
+	 * left in a world the record does not admit to.
+	 */
+	private void aFailedPlayerUpgradeIsNotARun(
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		RunRecord before = TestRuns.record(server);
+		check(before.phase() == RunPhase.LOBBY,
+				"this scenario starts in the lobby, and the save says " + before.describe());
+
+		FAIL_PLAYER_ENTRY.set(true);
+		try {
+			TestRuns.start(server);
+		} finally {
+			FAIL_PLAYER_ENTRY.set(false);
+		}
+
+		RunRecord after = TestRuns.record(server);
+		check(after.phase() == RunPhase.LOBBY,
+				"a run nobody could be let into must not be left looking playable, and the save says "
+						+ after.describe());
+		check(TestRuns.playerIsInTheLobby(server, connection),
+				"and the player must be back out of it, and they are in "
+						+ TestRuns.playerDimension(server, connection));
+
+		TestRuns.start(server);
+		check(TestRuns.phase(server) == RunPhase.RUNNING,
+				"a run must still be startable afterwards, and the save says "
+						+ TestRuns.record(server).describe());
 		TestRuns.end(server);
 	}
 
@@ -815,6 +960,79 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		TestRuns.waitForNobodyConnected(context, server);
 	}
 
+	/**
+	 * When even the rollback cannot be written, the save stops rather than claiming the lobby.
+	 *
+	 * <p>The last scenario, because it leaves the save stopped for the rest of this server's life —
+	 * which is the behaviour, not a limitation of the test. LOBBY is not a description of where the
+	 * save is; it is the next start's permission to delete three worlds without checking who is in
+	 * them. Writing it on the strength of a rollback that did not finish is how somebody gets
+	 * deleted along with the world they are standing in. So the record keeps the unfinished phase
+	 * that is actually true, and the loop refuses to do anything until a person has looked at it.
+	 *
+	 * <p>The player is still got out of the run first. Evacuating and recording are separate steps
+	 * precisely so that the one that can fail is the one that costs least.
+	 */
+	private void aRollbackThatCannotBeWrittenStopsTheSave(
+			ClientGameTestContext context, TestDedicatedServerContext server) {
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			settle(context, connection);
+
+			if (TestRuns.phase(server) != RunPhase.LOBBY) {
+				TestRuns.end(server);
+			}
+			check(TestRuns.phase(server) == RunPhase.LOBBY,
+					"this scenario starts between runs, and the save says "
+							+ TestRuns.record(server).describe());
+
+			// Two: the commit, and then the rollback's own write.
+			FAIL_RECORD_WRITES.set(2);
+			try {
+				TestRuns.start(server);
+			} finally {
+				FAIL_RECORD_WRITES.set(0);
+				TestFaults.stopFailingRecordWrites();
+			}
+
+			RunRecord after = TestRuns.record(server);
+			check(after.phase() == RunPhase.CREATING_RUN,
+					"a rollback that could not be written must leave the unfinished phase that is true"
+							+ " rather than a tidy one that is not, and the save says " + after.describe());
+
+			String described = server.computeOnServer(unused -> RunLifecycle.get().describe());
+			check(described.startsWith("stopped:"),
+					"and the save must say it is stopped, and it says " + described);
+
+			check(TestRuns.playerIsInTheLobby(server, connection),
+					"the player must still have been got out of the run, because evacuating comes"
+							+ " before recording, and they are in "
+							+ TestRuns.playerDimension(server, connection));
+			// Waited for rather than read straight away: the message is sent on the far side of two
+			// respawns, and chat takes a moment to reach a client that is still rebuilding its
+			// world.
+			waitToBeToldOnTheClient(context, "This save is stopped");
+			check(wasToldOnTheClient(context, "This save is stopped"),
+					"and they must be told why nothing works any more, and what they have been shown"
+							+ " is " + clientMessages(context));
+
+			int refused = TestRuns.runCommandResult(server, "mhr run start");
+			check(refused == 0,
+					"nothing may start from a stopped save, and /mhr run start returned " + refused);
+			check(TestRuns.phase(server) == RunPhase.CREATING_RUN,
+					"and the refusal must not have moved the record: " + TestRuns.record(server).describe());
+		}
+	}
+
+	/** Give the client a while to be shown this, for messages that cross a world rebuild. */
+	private static void waitToBeToldOnTheClient(ClientGameTestContext context, String fragment) {
+		for (int attempt = 0; attempt < 100; attempt++) {
+			if (wasToldOnTheClient(context, fragment)) {
+				return;
+			}
+			context.waitTicks(2);
+		}
+	}
+
 	/** Has the client been shown a message containing this? */
 	private static boolean wasToldOnTheClient(ClientGameTestContext context, String fragment) {
 		return clientMessages(context).contains(fragment);
@@ -956,12 +1174,26 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 					throw new IllegalStateException("deliberate run-start failure");
 				}
 			});
+			// Fires between a start's two record writes, which is the only place from which the
+			// second one can be singled out. See FAIL_RECORD_WRITES.
+			RunEvents.RUN_STARTED.register((minecraftServer, overworld, run) -> {
+				PERSISTABLE_AT_RUN_START.set(TestRuns.persistableOn(minecraftServer));
+				int armed = FAIL_RECORD_WRITES.getAndSet(0);
+				if (armed > 0) {
+					TestFaults.failTheNextRecordWrites(armed);
+				}
+			});
 			RunEvents.RUN_ENDED.register((minecraftServer, run) -> {
 				if (FAIL_RUN_END.get()) {
 					throw new IllegalStateException("deliberate reward failure");
 				}
 			});
 			RunEvents.RUN_ENDED.register((minecraftServer, run) -> RUNS_ENDED.incrementAndGet());
+			RunEvents.PLAYER_ENTERED_RUN.register((minecraftServer, player, run) -> {
+				if (FAIL_PLAYER_ENTRY.get()) {
+					throw new IllegalStateException("deliberate player-entry failure");
+				}
+			});
 
 			// The hook a permanent player upgrade would hang off. Giving an effect here is the
 			// design's own example, and it is the thing that used to be impossible: applied on the

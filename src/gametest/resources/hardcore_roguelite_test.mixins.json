@@ -3,7 +3,8 @@
 	"package": "fi.vilpponen.mhr.gametest.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"mixins": [
-		"GameTestHelperAccessor"
+		"GameTestHelperAccessor",
+		"RunStorageFailureMixin"
 	],
 	"client": [
 		"ContainerScreenAccessor",

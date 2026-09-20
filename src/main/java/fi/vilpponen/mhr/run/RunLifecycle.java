@@ -174,18 +174,24 @@ public final class RunLifecycle {
 		// Still CREATING_RUN. Putting the players in is part of starting a run, not something that
 		// happens to a run already started: if one of them cannot be given what this run owes them,
 		// the run has not started.
+		//
+		// The commit is inside the same block, and that is the point rather than tidiness. By the
+		// time it runs, everybody is standing in the run — so a write that failed outside this block
+		// would leave the save saying CREATING_RUN with people playing a run it does not admit to.
+		// In that state a death is not recognised as this run's and falls through to vanilla's
+		// hardcore game over, which is the one outcome the whole loop exists to prevent. Failing
+		// here therefore rolls back exactly like a failed entry does.
 		try {
 			BlockPos spawn = server.getRespawnData().pos();
 			for (ServerPlayer player : players()) {
 				enterRun(player, overworld, spawn, "Run " + record.runId() + " begins.");
 			}
+			set(record.created());
 		} catch (RuntimeException failed) {
 			abandonCreation(failed);
 			throw new IllegalStateException(
-					"run " + record.runId() + " could not be entered: " + failed, failed);
+					"run " + record.runId() + " could not be started: " + failed, failed);
 		}
-
-		set(record.created());
 	}
 
 	/**
@@ -222,25 +228,77 @@ public final class RunLifecycle {
 	 * <p>The run id is spent either way. That is deliberate: ids are how a reward is recognised
 	 * later, and reusing the id of a run that half-existed would make two different runs
 	 * indistinguishable in the record.
+	 *
+	 * <p>The order here is the other half of the transaction the commit belongs to. Getting
+	 * everybody out comes first and writing LOBBY comes last, because LOBBY is not a description —
+	 * it is a permission. The next start deletes the three run worlds without asking anybody
+	 * whether they are standing in one, on the strength of that word. So it may only be written
+	 * once evacuation has been <em>proven</em>, not merely attempted, and if it cannot be proven
+	 * the save stops where it is instead. A true unfinished phase is recoverable; a false LOBBY is
+	 * somebody being deleted along with the world they are in.
 	 */
 	private void abandonCreation(RuntimeException cause) {
 		HardcoreRoguelite.LOGGER.error("Run {} could not be started; back to the lobby",
 				record.runId(), cause);
+
+		RuntimeException stillInside = null;
+		for (ServerPlayer player : players()) {
+			if (Lobby.isLobby(player.level())) {
+				continue;
+			}
+			try {
+				Lobby.returnFromRun(player);
+			} catch (RuntimeException failed) {
+				HardcoreRoguelite.LOGGER.error("{} could not be got out of run {}",
+						player.getGameProfile().name(), record.runId(), failed);
+				stillInside = failed;
+			}
+		}
+		// Asked afterwards as well as attempted, for the same reason the start does: "we moved them"
+		// and "they are out" are different claims, and only the second one may be written down.
+		for (ServerPlayer player : players()) {
+			if (isRunLevel(player.level())) {
+				stillInside = new IllegalStateException(player.getGameProfile().name() + " is still in "
+						+ player.level().dimension().identifier());
+			}
+		}
+		if (stillInside != null) {
+			stop("run " + record.runId() + " could not be started, and somebody could not be got out"
+					+ " of it", stillInside);
+			return;
+		}
+
 		try {
 			set(record.abandoned());
 		} catch (RuntimeException alsoFailed) {
-			HardcoreRoguelite.LOGGER.error("The abandoned run could not be written down either."
-					+ " The next start will recover it.", alsoFailed);
+			stop("run " + record.runId() + " could not be started, and giving it up could not be"
+					+ " written down", alsoFailed);
+			return;
 		}
 
-		for (ServerPlayer player : players()) {
-			if (!Lobby.isLobby(player.level())) {
-				Lobby.returnFromRun(player);
-			}
-			player.sendSystemMessage(Component.literal(
-					"That run could not be started, so it has not. You are still in the lobby;"
-							+ " see the server log."));
-		}
+		tellEverybody("That run could not be started, so it has not. You are still in the lobby;"
+				+ " see the server log.");
+	}
+
+	/**
+	 * Stop the save, because it is in a state nothing may be built on.
+	 *
+	 * <p>The record is deliberately left saying whatever it says — {@link RunPhase#CREATING_RUN},
+	 * most often — rather than being moved somewhere more comfortable. An unfinished phase that is
+	 * true can be recovered by the next server start; a tidy-looking one that is false cannot be
+	 * told from a save that is genuinely fine.
+	 *
+	 * <p>Everything that would move the loop on, or write over the record, refuses from here until
+	 * somebody has looked at it and restarted the server. That is a real cost, and it is the
+	 * smaller one.
+	 */
+	private void stop(String why, Throwable cause) {
+		this.quarantine = why;
+		HardcoreRoguelite.LOGGER.error("This save is stopped: {}. No run will start or end, and"
+				+ " nothing will be written over the run record, until somebody has looked at it"
+				+ " and restarted the server.", why, cause);
+		tellEverybody("This save is stopped: " + why + ". See the server log; nothing has been"
+				+ " written over.");
 	}
 
 	/**
@@ -449,6 +507,26 @@ public final class RunLifecycle {
 		RunArrival arrival = RunArrival.decide(quarantine != null, recordUnknown, record.isRunning(),
 				isRunLevel(player.level()), RunAdmission.isAdmittedTo(player, record.runId()));
 
+		// Taking a player to another dimension has to wait for their login to finish. This event
+		// fires part-way through one, and a player moved out of the level the rest of the login is
+		// about to add them to ends up added twice and tracked properly nowhere: the server sends
+		// them no chunks and their client sits on "Loading terrain" until it gives up. On an idle
+		// server the login is usually done by the time this runs, which is why the race only shows
+		// up when something else has made the tick slow.
+		//
+		// Only the arrivals that genuinely change dimension wait. Landing in the lobby a player is
+		// already standing in, or leaving them where they are, needs no chunks it has not got.
+		if (changesDimension(arrival, player)) {
+			if (!listed(player) && ticksWaited < JOIN_SETTLE_TICKS) {
+				server.execute(() -> placeOnJoin(player, ticksWaited + 1));
+				return;
+			}
+			if (!listed(player)) {
+				HardcoreRoguelite.LOGGER.warn("{} never finished joining; placing them anyway",
+						player.getGameProfile().name());
+			}
+		}
+
 		switch (arrival) {
 			case REFUSED -> {
 				// Turned away rather than relocated. Nobody knows what this save was doing, so
@@ -500,20 +578,6 @@ public final class RunLifecycle {
 		// started, or — and this is the one a dimension key cannot see — they logged out inside the
 		// *previous* run, whose overworld has since been replaced by this one's under the same key.
 		// See RunAdmission.
-		//
-		// Leaving the lobby is a respawn — see Lobby.leaveForRun — and a respawn has to wait for
-		// the login to finish. Moving a half-placed player takes them out of the server's list and
-		// the rest of the login then files the original, which nothing ever removes; the slot leaks
-		// for the session.
-		if (!listed(player) && ticksWaited < JOIN_SETTLE_TICKS) {
-			server.execute(() -> placeOnJoin(player, ticksWaited + 1));
-			return;
-		}
-		if (!listed(player)) {
-			HardcoreRoguelite.LOGGER.warn("{} never finished joining; moving them into the run anyway",
-					player.getGameProfile().name());
-		}
-
 		try {
 			enterRun(player, server.overworld(), server.getRespawnData().pos(),
 					"Run " + record.runId() + " started while you were away. You have joined it.");
@@ -527,6 +591,23 @@ public final class RunLifecycle {
 					"Something went wrong joining this run. See the server log; rejoining will try"
 							+ " again."));
 		}
+	}
+
+	/**
+	 * Will placing this player actually take them to a different dimension?
+	 *
+	 * <p>The distinction matters only because of the login race above, and it is drawn as narrowly
+	 * as the race is. Waiting on an arrival that moves nobody would hold up every ordinary join by
+	 * as long as the login takes, which other tests in this repository notice.
+	 */
+	private static boolean changesDimension(RunArrival arrival, ServerPlayer player) {
+		return switch (arrival) {
+			// Always: leaving the lobby for a run goes through a respawn, which rebuilds the player.
+			case INTO_THE_RUN -> true;
+			// Only from somewhere else. Already in the lobby is a move within one dimension.
+			case TO_THE_LOBBY -> !Lobby.isLobby(player.level());
+			case REFUSED, TOLD_AND_LEFT_ALONE, LEFT_WHERE_THEY_ARE -> false;
+		};
 	}
 
 	/**
@@ -589,6 +670,19 @@ public final class RunLifecycle {
 			HardcoreRoguelite.LOGGER.info("Run {} is over: death of {}",
 					record.runId(), player.getGameProfile().name());
 			server.execute(this::finishEnding);
+			return true;
+		}
+		if (isRunLevel(player.level())) {
+			// In a run world while the save says no run is being played. The honest cases are a
+			// start that could not be finished or rolled back, and a save stopped part-way through
+			// one — and in every one of them the loop is already in trouble. Handing the player a
+			// hardcore game-over screen on top of that would turn a recoverable fault into a lost
+			// world, which is the one thing this mod exists to stop. There is no run to end, so the
+			// death is simply taken and they stay where they fell.
+			HardcoreRoguelite.LOGGER.warn("{} died in {} while the save is {}; reviving them rather"
+					+ " than letting vanilla end the world", player.getGameProfile().name(),
+					player.level().dimension().identifier(), describe());
+			revive(player);
 			return true;
 		}
 		if (Lobby.isLobby(player.level())) {

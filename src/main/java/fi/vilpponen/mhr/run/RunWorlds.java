@@ -19,6 +19,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.PlayerSpawnFinder;
 import net.minecraft.server.level.ServerChunkCache;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.RandomSequences;
 import net.minecraft.world.entity.ai.village.VillageSiege;
 import net.minecraft.world.entity.npc.CatSpawner;
 import net.minecraft.world.entity.npc.wanderingtrader.WanderingTraderSpawner;
@@ -121,7 +122,7 @@ final class RunWorlds {
 		IOException leftovers = firstOf(unload(server), deleteFiles(server));
 
 		// Before the rebuild, because this is what the new levels read as they are constructed.
-		resetWeatherAndSpawnTimers(server);
+		resetServerRunState(server);
 
 		// Rebuilt whatever happened. The server has to have an overworld before anything else runs,
 		// including the code that is about to abandon this run.
@@ -143,21 +144,52 @@ final class RunWorlds {
 	 * Put back the run state Minecraft keeps on the server rather than in the levels.
 	 *
 	 * <p>Replacing the three {@link ServerLevel} objects is not the whole of a fresh run, because
-	 * since 26.1 several things that belong to one run do not live in a level at all. The weather,
-	 * the world clocks and the wandering trader's timer are the server's, and they would have
-	 * carried straight through: run 2 could open in run 1's thunderstorm, at run 1's time of day,
-	 * with a trader due in a hundred ticks. New chunks and a new seed, and the sky says otherwise.
+	 * since 26.1 a good deal of what one run accumulates does not live in a level at all. It lives
+	 * on {@link MinecraftServer}, in {@code <save>/data/}, and it would have carried straight
+	 * through: run 2 opening in run 1's thunderstorm, at run 1's time of day, with a trader due in
+	 * a hundred ticks and the loot tables carrying on the sequence run 1 left them in.
 	 *
-	 * <p>The dividing line is per run versus per save. Weather, time and spawn timers are things a
-	 * run accumulates, so they start again with it. Game rules, the scoreboard and permanent
-	 * progression belong to the save and are deliberately left alone — this is not a wipe.
+	 * <h2>Which server state is one run's, and which is the save's</h2>
+	 *
+	 * <p>This was found a piece at a time, so here is the rule instead of another list. Something
+	 * belongs to <b>one run</b> when ordinary play inside a run is what produces it. Something
+	 * belongs to <b>the save</b> when only an operator, a datapack or this mod's own progression
+	 * can have made it — because then the lobby may own it just as easily as the run did, and this
+	 * class has no way to tell which. A roguelite run boundary is not a save wipe.
+	 *
+	 * <p>Per run, and reset here:
+	 *
+	 * <ul>
+	 *   <li>{@link WeatherData} — rain and thunder countdowns, which a run rolls through as it is
+	 *       played.
+	 *   <li>{@link WanderingTraderData} — the spawn delay and chance, which ratchet over a
+	 *       playthrough.
+	 *   <li>{@link RandomSequences} — the named loot-table random streams. These advance every time
+	 *       somebody opens a chest, and the state is stored rather than the seed, so a new world
+	 *       seed does <em>not</em> reseed a sequence that already exists. Left alone, run 2's first
+	 *       chest continues run 1's roll.
+	 *   <li>The world clocks, in {@link #resetClocks}, which have to wait for the rebuild.
+	 * </ul>
+	 *
+	 * <p>Per save, deliberately left alone: game rules (server-global in 26.3 and shared with the
+	 * lobby), the scoreboard, custom boss bars, stopwatches, command storage and scheduled events —
+	 * every one of those exists only because somebody ran a command or shipped a datapack, and none
+	 * of them can be shown to have been for the run rather than the lobby. Also left: the structure
+	 * template library, the save's version and brand metadata, and permanent progression, which is
+	 * the whole point of the loop.
+	 *
+	 * <p>One known gap, listed rather than guessed at: filled maps and their id counter are
+	 * server-global too, so a map drawn in run 1 still holds run 1's terrain. Nothing can reference
+	 * one afterwards — map items live in inventories and ender chests, and both are emptied at the
+	 * player boundary — and there is no cache-invalidation API on the saved-data storage to drop
+	 * the orphaned files with. It is written up in {@code docs/codebase/run-lifecycle.md}.
 	 *
 	 * <p>This half runs before the levels are rebuilt, because that is when they read it: a new
 	 * {@code ServerLevel} takes the weather in its constructor, and the overworld's wandering
 	 * trader spawner reads its own saved data as it is built. The clocks are the other way round —
 	 * see {@link #resetClocks} — which is why they are not in here.
 	 */
-	private static void resetWeatherAndSpawnTimers(MinecraftServer server) {
+	private static void resetServerRunState(MinecraftServer server) {
 		// Mutated rather than replaced: the server holds this object for its lifetime, so putting a
 		// fresh one in the data storage would leave it using the old one.
 		WeatherData weather = server.getWeatherData();
@@ -169,8 +201,17 @@ final class RunWorlds {
 		weather.setDirty();
 
 		// Read fresh by the spawner that build() is about to construct, so replacing it is enough.
+		// SavedDataStorage.set marks what it is given dirty, so this reaches the disk on its own —
+		// which is worth saying out loud, because the two resets around it do not get that for free.
 		server.getDataStorage().set(WanderingTraderData.TYPE, new WanderingTraderData());
 
+		// The server keeps this one in a final field, so it has to be emptied in place rather than
+		// replaced. And emptying it does not mark it dirty — vanilla only ever clears sequences in
+		// a running world that goes on to re-roll them, and re-rolling is what marks it. A server
+		// stopped between the reset and the next chest would write the old sequences back out.
+		RandomSequences sequences = server.getRandomSequences();
+		sequences.clear();
+		sequences.setDirty();
 	}
 
 	/** Back to the first morning, for every clock the game has. */

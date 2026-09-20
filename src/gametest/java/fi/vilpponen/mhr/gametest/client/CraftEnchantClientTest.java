@@ -95,6 +95,12 @@ public class CraftEnchantClientTest implements FabricClientGameTest {
 	public void runTest(ClientGameTestContext context) {
 		try (TestDedicatedServerContext server = context.worldBuilder().createServer()) {
 			try (TestDedicatedServerConnection connection = server.connect()) {
+				// Every scenario below puts a crafting table where the player is standing, so the
+				// run lifecycle has to have finished moving them into the lobby before any of them
+				// runs — and the lobby's chunks have to be there once it has. Waiting for chunks
+				// first would wait for the wrong world's: a player who joins in the overworld can
+				// have it fully rendered before the move to the lobby has even happened.
+				TestRuns.waitForPlayerInTheLobby(context, server, connection);
 				connection.waitForChunksRender();
 				TestPlayer player = new TestPlayer(context, server, connection);
 
