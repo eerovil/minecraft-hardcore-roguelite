@@ -112,9 +112,20 @@ fi
 echo '$owner' >'$lock.owner'
 
 # The work, as a child of this shell and so holding this shell's lock descriptor.
-$as bash -s <<'MHR_LOCKED_SECTION'
+#
+# Written to a file and run from there, with its stdin closed off, rather than fed to a second
+# \`bash -s\`. This shell is itself reading its own script from stdin, a child inherits that, and
+# gradle reads stdin — so a piped work script gets eaten by the first gradle that runs, taking
+# whatever came after it with it. That is silent: gradle passes, and the steps the shell never got
+# to read simply never happen.
+mhr_work=/tmp/.mhr-locked-\$\$.sh
+cat >"\$mhr_work" <<'MHR_LOCKED_SECTION'
 $body
 MHR_LOCKED_SECTION
+$as bash "\$mhr_work" </dev/null
+mhr_status=\$?
+rm -f "\$mhr_work"
+exit \$mhr_status
 REMOTE
 
 	if ((status == LOCK_BUSY_STATUS)); then
@@ -362,6 +373,7 @@ if cd "$ws/build" 2>/dev/null; then
 		\( -name '*.log' -o -name '*.txt' -o -name '*.png' -o -name '*.html' -o -name '*.xml' \) \
 		-print0 2>/dev/null | tar -cf "$out" --null -T - 2>/dev/null || true
 fi
+echo "Packed $(tar -tf "$out" 2>/dev/null | wc -l) artifact files"
 exit $status
 EOF
 }
