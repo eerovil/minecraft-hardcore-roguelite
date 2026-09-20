@@ -91,10 +91,20 @@ open would block everybody. Don't sync or build from inside one while someone el
 Once the gametest lock is held, a JVM still running in that pod is either debris from a run that
 died — usually a client still holding 25565, which would fail your run for somebody else's reason —
 or somebody running without the lock, from an old checkout of the script or from
-`gametest-shell`. Those look identical from outside, and they want opposite treatment, so
-`gametest` waits: a real run finishes, debris does not. Whatever is still alive after
-`MHR_STRAY_GRACE` (default 10 minutes) is killed. When the pod is genuinely idle this costs
-nothing.
+`gametest-shell`. Those look identical from outside and want opposite treatment, so `gametest`
+waits `MHR_STRAY_GRACE` (default 10 minutes): a real run finishes, debris does not. When the pod is
+idle this costs nothing.
+
+Waiting narrows the ambiguity but cannot remove it — a run can simply be slower than the grace
+period. So if something is still there when the grace runs out, the command stops and tells you
+what it found rather than guessing. Killing is your decision:
+
+```sh
+MHR_KILL_STRAYS=1 scripts/dev.sh gametest
+```
+
+Once no branch in flight predates the lock, nothing can run without it, and that default could
+reasonably flip to killing.
 
 ## Automated gameplay tests
 

@@ -291,25 +291,38 @@ gradle --no-daemon --console=plain $*
 EOF
 }
 
-# Counting, then killing, the java processes in the pod. /proc rather than pkill, because the image
-# has no procps.
+# Counting, then killing, the java processes in the pod. Read straight out of /proc so this keeps
+# working if the pod image ever stops shipping procps.
+#
+# Match the executable name, not the whole command line. The helper below is `bash -c <this script
+# text>`, so its own /proc/<pid>/cmdline contains the word we are looking for: a substring match
+# finds the scanner itself, which makes an idle pod look busy and puts the killer on its own list.
+GAMETEST_JVM_SCAN='
+	is_java() {
+		comm=""
+		read -r comm 2>/dev/null <"$1/comm" || return 1
+		[ "$comm" = java ] && return 0
+		argv0=$(tr "\0" "\n" 2>/dev/null <"$1/cmdline" | head -n 1)
+		[ "${argv0##*/}" = java ]
+	}
+'
+
 gametest_jvms() {
-	kubectl -n "$NS" exec "$1" -- bash -c '
+	kubectl -n "$NS" exec "$1" -- bash -c "$GAMETEST_JVM_SCAN"'
 		n=0
 		for p in /proc/[0-9]*; do
-			[ -r "$p/cmdline" ] || continue
-			case "$(tr "\0" " " <"$p/cmdline")" in *java*) n=$((n + 1)) ;; esac
+			is_java "$p" && n=$((n + 1))
 		done
 		echo "$n"
 	' 2>/dev/null || echo 0
 }
 
 gametest_kill_jvms() {
-	kubectl -n "$NS" exec "$1" -- bash -c '
+	kubectl -n "$NS" exec "$1" -- bash -c "$GAMETEST_JVM_SCAN"'
 		for p in /proc/[0-9]*; do
-			[ -r "$p/cmdline" ] || continue
-			case "$(tr "\0" " " <"$p/cmdline")" in *java*) kill -9 "${p#/proc/}" 2>/dev/null || true ;; esac
+			is_java "$p" && kill -9 "${p#/proc/}" 2>/dev/null
 		done
+		true
 	' >/dev/null 2>&1 || true
 }
 
@@ -321,17 +334,23 @@ gametest_kill_jvms() {
 #   - a live run started by someone who is not taking the lock — an older checkout of this script,
 #     or a `gradle` typed into `gametest-shell`.
 #
-# Killing the first is required and killing the second is rude, and they look identical from here.
-# So wait first: a real run finishes, debris never does. Whatever is still alive after the grace
-# period is treated as debris.
+# Killing the first is required and killing the second destroys somebody's work, and they look
+# identical from here. So wait first: a real run finishes, debris never does. But waiting only
+# narrows the ambiguity, it does not remove it — a run can simply be slower than the grace period.
+# So when the grace runs out we stop and say what we found rather than guessing, and killing is a
+# decision the person at the keyboard makes with MHR_KILL_STRAYS=1.
+#
+# Once every branch in flight carries this script the ambiguity disappears, because nothing can run
+# without the lock any more, and the default could reasonably flip to killing.
 MHR_STRAY_GRACE="${MHR_STRAY_GRACE:-600}"
+MHR_KILL_STRAYS="${MHR_KILL_STRAYS:-0}"
 
 gametest_clear_strays() {
 	local pod="$1"
 	[[ "$(gametest_jvms "$pod")" == "0" ]] && return 0
 
-	echo "A JVM is still running in the gametest pod even though we hold the lock."
-	echo "Giving it up to ${MHR_STRAY_GRACE}s to finish in case somebody is running without the lock..."
+	echo "A JVM is running in the gametest pod even though we hold the lock. That is either debris"
+	echo "from a run that died, or somebody running without the lock. Waiting up to ${MHR_STRAY_GRACE}s..."
 	local waited=0
 	while ((waited < MHR_STRAY_GRACE)); do
 		sleep 10
@@ -342,8 +361,24 @@ gametest_clear_strays() {
 		fi
 	done
 
-	echo "Still there after ${MHR_STRAY_GRACE}s — treating it as debris from a dead run and killing it."
-	gametest_kill_jvms "$pod"
+	if [[ "$MHR_KILL_STRAYS" == "1" ]]; then
+		echo "Still there after ${MHR_STRAY_GRACE}s and MHR_KILL_STRAYS=1, so killing it."
+		gametest_kill_jvms "$pod"
+		return 0
+	fi
+
+	cat >&2 <<EOF
+Still there after ${MHR_STRAY_GRACE}s. Stopping rather than guessing: running now would fail on
+port 25565 anyway, and killing it might destroy somebody's run.
+
+  Somebody is working without the lock  -> wait, or ask them.
+  It is debris from a run that died     -> rerun with MHR_KILL_STRAYS=1, or clear it by hand:
+                                           kubectl -n $NS exec deploy/mhr-gametest -- pkill -f KnotClient
+
+To look first:
+  kubectl -n $NS exec deploy/mhr-gametest -- ps -ef
+EOF
+	exit 1
 }
 
 cmd_gametest() {
