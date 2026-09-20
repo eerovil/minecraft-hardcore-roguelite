@@ -45,15 +45,20 @@ import org.slf4j.LoggerFactory;
  * would test the opposite of what is wanted; the assertion is that two runs' seeds differ and that
  * each run's overworld reports the seed the record claims for it.
  *
- * <p><b>Known failure.</b> Two scenarios here are red, and for the same reason: when a run ends,
- * the server puts the player in the lobby and every server-side assertion about that passes, but
- * the client never follows — it stays in the world it was in, and
- * {@code waitForClientIn} says so. The other direction is fine: entering a run, which is where the
- * destination is a level object the client has never seen, works every time. The difference points
- * at the lobby being the same {@code ServerLevel} across the whole session. Moving the player with
- * an ordinary cross-dimension teleport and with {@code PlayerList.respawn} both behave the same
- * way, so it is not the entity-add path. This is left as an assertion rather than a warning so the
- * gap cannot be mistaken for a passing feature.
+ * <p>Both directions of the dimension change are asserted from the client as well as the server,
+ * because "the server thinks you are in the lobby" is only half of being in the lobby. They are
+ * given a long timeout rather than the harness default: see {@link #ARRIVAL_TIMEOUT}.
+ *
+ * <p><b>Known failure.</b> {@code checkClientSeesTheLobby} is red on the two scenarios that return
+ * from a run. Everything the server owns is right — the record, the phase, the player's dimension —
+ * and the client agrees it is in the lobby, but it has been sent none of the lobby's blocks, so the
+ * player stands in what their client draws as empty void. The cause is in Minecraft's own
+ * per-level entity bookkeeping: leaving the lobby does not untrack the player there, so the lobby's
+ * lookup keeps pointing at them, and the next arrival is only half registered and never starts
+ * receiving chunks. The first visit, before anyone has ever left, is fine — which is why the
+ * before-any-run scenario passes. Deferring the move by a tick, moving through
+ * {@code PlayerList.respawn} instead of a teleport, and force-loading the lobby's spawn chunk were
+ * all tried and none of them changes it.
  *
  * <p>See {@code docs/dev-environment.md} for how to run this.
  */
@@ -152,6 +157,8 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		check(floor, "the lobby must have generated a floor under its spawn, and there is none");
 
 		TestRuns.mark(server, Lobby.LEVEL, LOBBY_MARK, MARKER);
+		frameTheLobby(context, server);
+		checkClientSeesTheLobby(context);
 		context.takeScreenshot("run-lifecycle-lobby-before-any-run");
 	}
 
@@ -287,6 +294,8 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 						+ " they have " + health + " health");
 
 		waitForClientIn(context, connection, Lobby.LEVEL.identifier().toString());
+		frameTheLobby(context, server);
+		checkClientSeesTheLobby(context);
 		context.takeScreenshot("run-lifecycle-lobby-after-death");
 	}
 
@@ -390,6 +399,8 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		check(TestRuns.playerIsInTheLobby(server, connection),
 				"ending the run must bring the player back to the lobby");
 		waitForClientIn(context, connection, Lobby.LEVEL.identifier().toString());
+		frameTheLobby(context, server);
+		checkClientSeesTheLobby(context);
 		context.takeScreenshot("run-lifecycle-lobby-between-runs");
 	}
 
@@ -402,6 +413,17 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	 * drives, so registering twice would double every number this test asserts on.
 	 */
 	/**
+	 * How long a client may take to follow the player somewhere, in client ticks.
+	 *
+	 * <p>The harness's own default is 200, ten seconds, and that is not enough here. A dimension
+	 * change has to survive the server's chunk-load handshake, which vanilla itself allows thirty
+	 * seconds for, on a pod that renders with llvmpipe and shares its CPU with whatever else is
+	 * running. Two minutes' worth is not a guess at how long it takes — it is far enough past the
+	 * longest observed arrival that a failure here means the client never arrived at all.
+	 */
+	private static final int ARRIVAL_TIMEOUT = 20 * 120;
+
+	/**
 	 * Wait for a freshly connected client to be properly in the world.
 	 *
 	 * <p>Rendered chunks are not the whole of it: the "Loading terrain" screen is still up while the
@@ -410,26 +432,29 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	 */
 	private static void settle(ClientGameTestContext context, TestDedicatedServerConnection connection) {
 		connection.waitForChunksRender();
-		context.waitFor(client -> client.gui.screen() == null);
+		context.waitFor(client -> client.gui.screen() == null, ARRIVAL_TIMEOUT);
 		context.waitTicks(20);
 	}
 
 	/**
 	 * Assert that the client itself has arrived in a dimension and drawn it.
 	 *
-	 * <p>Not only evidence. The server deciding a player is in the lobby is half the claim; the
-	 * other half is the player seeing it. This currently fails for the run-to-lobby direction —
-	 * see the note on {@link #runTest} — and is deliberately left as an assertion rather than a
-	 * warning so that the gap stays visible.
+	 * <p>Not only evidence, though it is that too: the server deciding a player is in the lobby is
+	 * half the claim and the player seeing it is the other half, so this is an assertion rather
+	 * than a best-effort wait.
+	 *
+	 * <p>Deliberately not {@code waitForChunksRender}. That waits for every chunk in render distance
+	 * to have geometry, and the lobby is one bedrock plane in an empty biome — there is nothing out
+	 * there to render, and waiting for it to appear is waiting for something that never happens.
+	 * What matters is that the client is in the right world with the loading screen gone.
 	 */
 	private static void waitForClientIn(ClientGameTestContext context,
 			TestDedicatedServerConnection connection, String dimension) {
 		try {
 			context.waitFor(client -> client.player != null
-					&& client.player.level().dimension().identifier().toString().equals(dimension));
-			connection.waitForChunksRender();
-			context.waitFor(client -> client.gui.screen() == null);
-			context.waitTicks(20);
+					&& client.player.level().dimension().identifier().toString().equals(dimension)
+					&& client.gui.screen() == null, ARRIVAL_TIMEOUT);
+			context.waitTicks(40);
 		} catch (Throwable stuck) {
 			String where = context.computeOnClient(client -> client.player == null
 					? "nowhere (no player)"
@@ -437,8 +462,43 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 			String screen = context.computeOnClient(client ->
 					client.gui.screen() == null ? "none" : client.gui.screen().getClass().getSimpleName());
 			throw new AssertionError("The client never followed the player into " + dimension
-					+ ": it is still in " + where + " with screen " + screen, stuck);
+					+ ": it is in " + where + " with screen " + screen, stuck);
 		}
+	}
+
+	/**
+	 * Point the camera at the lobby floor before photographing it.
+	 *
+	 * <p>Arriving leaves the player looking level, and the lobby's horizon is a bedrock plane under
+	 * an empty biome — which photographs as most of a sky and a grey band. Looking down at a block
+	 * a few paces away puts the floor in the picture, which is the thing worth seeing.
+	 */
+	private static void frameTheLobby(ClientGameTestContext context, TestDedicatedServerContext server) {
+		server.runCommand("time set noon");
+		context.getInput().lookAt(Lobby.SPAWN.below().offset(4, 0, 4));
+		context.waitTicks(10);
+	}
+
+	/**
+	 * Has the client actually been sent the lobby?
+	 *
+	 * <p>The strongest client-side claim there is, and the one that catches the failure the
+	 * dimension check does not: a player can be in the lobby as far as both sides' bookkeeping is
+	 * concerned while the client has received none of its blocks, in which case they are standing
+	 * in what looks to them like empty void. Asked about two blocks rather than one so that a
+	 * single chunk arriving does not pass for the lobby having arrived.
+	 */
+	private static void checkClientSeesTheLobby(ClientGameTestContext context) {
+		String under = context.computeOnClient(client ->
+				client.level.getBlockState(Lobby.SPAWN.below()).getBlock().toString());
+		String ahead = context.computeOnClient(client ->
+				client.level.getBlockState(Lobby.SPAWN.below().offset(4, 0, 4)).getBlock().toString());
+		LOGGER.info("Lobby as the client has it: under the player {}, four paces on {}", under, ahead);
+
+		check(under.contains("bedrock") && ahead.contains("bedrock"),
+				"the client must have been sent the lobby's floor, and where it should be bedrock it"
+						+ " has " + under + " under the player and " + ahead + " four paces on —"
+						+ " the player is standing in a lobby their client draws as empty void");
 	}
 
 	private static void countRunEndings(TestDedicatedServerContext server) {
