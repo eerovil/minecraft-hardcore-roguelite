@@ -162,7 +162,9 @@ final class TestRuns {
 	 * Everything a player is carrying that belongs to one run and must not outlive it.
 	 *
 	 * <p>Read back as one string so an assertion can say what was still there rather than which of
-	 * three separate checks tripped.
+	 * four separate checks tripped. The respawn point is in here with the rest because it is the
+	 * same kind of thing: a bed from the last run points into the new one, since the runs share
+	 * their dimension keys.
 	 */
 	static String runLocalStateOf(TestDedicatedServerContext server) {
 		return server.computeOnServer(minecraftServer -> {
@@ -172,13 +174,14 @@ final class TestRuns {
 			}
 			return "inventory " + live.getInventory().countItem(Items.DIAMOND) + " diamond(s),"
 					+ " ender chest " + live.getEnderChestInventory().countItem(Items.EMERALD)
-					+ " emerald(s), " + live.experienceLevel + " xp level(s)";
+					+ " emerald(s), " + live.experienceLevel + " xp level(s), respawn point "
+					+ (live.getRespawnConfig() == null ? "unset" : "set");
 		});
 	}
 
 	/** Nothing carried, nothing stored, no experience. */
 	static final String NOTHING_CARRIED =
-			"inventory 0 diamond(s), ender chest 0 emerald(s), 0 xp level(s)";
+			"inventory 0 diamond(s), ender chest 0 emerald(s), 0 xp level(s), respawn point unset";
 
 	/** Everybody the server has and where they are, for a failure message worth reading. */
 	static String describePlayers(TestDedicatedServerContext server) {

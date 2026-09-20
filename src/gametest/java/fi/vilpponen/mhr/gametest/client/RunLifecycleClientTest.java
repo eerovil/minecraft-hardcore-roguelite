@@ -681,12 +681,11 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 					"this scenario needs the player inside the run, and they are in "
 							+ TestRuns.playerDimension(server, connection));
 
-			server.runCommand("give Player0 minecraft:diamond 5");
-			server.runCommand("item replace entity Player0 enderchest.0 with minecraft:emerald 3");
-			server.runCommand("xp set Player0 7 levels");
-			TestRuns.settle(server);
-			check(!TestRuns.runLocalStateOf(server).equals(TestRuns.NOTHING_CARRIED),
-					"this scenario has to start with something to lose");
+			carryEverythingARunCanGive(server);
+			check(TestRuns.runLocalStateOf(server).contains("respawn point set"),
+					"including a respawn point inside this run's overworld, which the next run will"
+							+ " replace under the same dimension key: "
+							+ TestRuns.runLocalStateOf(server));
 		}
 		// Quit inside the run, in the overworld — not the lobby.
 		TestRuns.waitForNobodyConnected(context, server);
@@ -724,13 +723,12 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		String before;
 		try (TestDedicatedServerConnection connection = server.connect()) {
 			settle(context, connection);
-			server.runCommand("give Player0 minecraft:diamond 5");
-			server.runCommand("item replace entity Player0 enderchest.0 with minecraft:emerald 3");
-			server.runCommand("xp set Player0 7 levels");
-			TestRuns.settle(server);
+			carryEverythingARunCanGive(server);
 
 			before = TestRuns.runLocalStateOf(server);
 			check(!before.equals(TestRuns.NOTHING_CARRIED), "something to keep");
+			check(before.contains("respawn point set"),
+					"including a respawn point, which is the one the reset used to miss: " + before);
 		}
 		TestRuns.waitForNobodyConnected(context, server);
 
@@ -795,6 +793,20 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 			}
 			return said.toString();
 		});
+	}
+
+	/**
+	 * Everything one run can leave on a player that would still mean something in the next.
+	 *
+	 * <p>The respawn point is set through {@code /spawnpoint} rather than by sleeping, because what
+	 * matters is that the player carries one, not how they came by it.
+	 */
+	private static void carryEverythingARunCanGive(TestDedicatedServerContext server) {
+		server.runCommand("give Player0 minecraft:diamond 5");
+		server.runCommand("item replace entity Player0 enderchest.0 with minecraft:emerald 3");
+		server.runCommand("xp set Player0 7 levels");
+		server.runCommand("spawnpoint Player0 ~ ~ ~");
+		TestRuns.settle(server);
 	}
 
 	// --- plumbing --------------------------------------------------------------------------

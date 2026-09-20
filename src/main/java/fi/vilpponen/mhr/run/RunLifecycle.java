@@ -68,6 +68,17 @@ public final class RunLifecycle {
 	 */
 	private String quarantine;
 
+	/**
+	 * True when the save was stopped because its record could not be read.
+	 *
+	 * <p>The two causes are not equally bad. A missing lobby leaves the record intact, so the
+	 * lifecycle still knows what the save was doing and a player standing where they are is safe.
+	 * An unreadable record means the phase is genuinely unknown — that save might have been
+	 * mid-run — and anything done to a player is a guess across the boundary the quarantine exists
+	 * to preserve.
+	 */
+	private boolean recordUnknown;
+
 	private RunLifecycle() {
 	}
 
@@ -323,6 +334,7 @@ public final class RunLifecycle {
 		this.server = started;
 		this.storage = new RunStorage(started.getWorldPath(LevelResource.ROOT));
 		this.quarantine = null;
+		this.recordUnknown = false;
 
 		try {
 			this.record = storage.load();
@@ -332,6 +344,7 @@ public final class RunLifecycle {
 			// nothing is written until somebody has looked at it.
 			this.record = RunRecord.NEW_SAVE;
 			this.quarantine = "its run record cannot be read";
+			this.recordUnknown = true;
 			HardcoreRoguelite.LOGGER.error("This save's run record cannot be read, so the loop is"
 					+ " stopped: no run will start or end, and nothing will be written over it."
 					+ " Fix or remove {}", storage.file(), unreadable);
@@ -366,6 +379,7 @@ public final class RunLifecycle {
 		this.storage = null;
 		this.record = RunRecord.NEW_SAVE;
 		this.quarantine = null;
+		this.recordUnknown = false;
 	}
 
 	/**
@@ -394,45 +408,60 @@ public final class RunLifecycle {
 				player.getGameProfile().name(), player.level().dimension().identifier(),
 				record.describe());
 
-		if (quarantine != null) {
-			// Two different faults end up here and they cannot be handled the same way. When the
-			// record is unreadable the lobby is fine and is where the player belongs; when the
-			// lobby itself is what is missing, asking to go there throws for exactly the reason the
-			// save was stopped, and the player would never hear why.
-			if (Lobby.exists(server)) {
-				Lobby.send(player);
-			}
-			player.sendSystemMessage(Component.literal(
-					"This save is stopped: " + quarantine + ". See the server log; nothing has been"
-							+ " overwritten."));
-			return;
-		}
-		if (!record.isRunning()) {
-			if (!Lobby.exists(server)) {
-				// The lobby has gone since this server started, so there is nowhere to put them.
-				// Leaving them where they are is the only safe answer — no run is in progress, so
-				// nothing is about to delete the world they are standing in.
-				HardcoreRoguelite.LOGGER.error("{} joined but there is no {} dimension to put them"
-						+ " in. Is the mod's data pack still loaded?",
-						player.getGameProfile().name(), Lobby.LEVEL.identifier());
-				player.sendSystemMessage(Component.literal(
-						"There is no lobby on this server, so the loop is stopped. See the server log."));
+		RunArrival arrival = RunArrival.decide(quarantine != null, recordUnknown, record.isRunning(),
+				isRunLevel(player.level()), RunAdmission.isAdmittedTo(player, record.runId()));
+
+		switch (arrival) {
+			case REFUSED -> {
+				// Turned away rather than relocated. Nobody knows what this save was doing, so
+				// anything done to this player is a guess — and letting them in changes their save
+				// while turning them away does not. See RunArrival.
+				player.connection.disconnect(Component.literal(
+						"This save is stopped: " + quarantine + ". Nothing has been overwritten —"
+								+ " see the server log, repair or remove the run record, and restart."));
 				return;
 			}
-			Lobby.send(player);
-			player.sendSystemMessage(Component.literal(
-					"No run in progress. Start one with /mhr run start."));
-			return;
-		}
-		if (isRunLevel(player.level()) && RunAdmission.isAdmittedTo(player, record.runId())) {
-			// Genuinely back in the run they were playing. Everything they are carrying is theirs.
-			return;
+			case TOLD_AND_LEFT_ALONE -> {
+				// The lobby is missing but the record is intact, so the save still knows what it
+				// was doing. Standing where they are is safe: nothing can start, so nothing will
+				// delete the world they are in.
+				player.sendSystemMessage(Component.literal(
+						"This save is stopped: " + quarantine + ". See the server log; nothing has"
+								+ " been overwritten."));
+				return;
+			}
+			case TO_THE_LOBBY -> {
+				if (!Lobby.exists(server)) {
+					// The lobby has gone since this server started, so there is nowhere to put
+					// them. Leaving them where they are is the only safe answer — no run is in
+					// progress, so nothing is about to delete the world they are standing in.
+					HardcoreRoguelite.LOGGER.error("{} joined but there is no {} dimension to put"
+							+ " them in. Is the mod's data pack still loaded?",
+							player.getGameProfile().name(), Lobby.LEVEL.identifier());
+					player.sendSystemMessage(Component.literal(
+							"There is no lobby on this server, so the loop is stopped. See the"
+									+ " server log."));
+					return;
+				}
+				Lobby.send(player);
+				player.sendSystemMessage(Component.literal(
+						"No run in progress. Start one with /mhr run start."));
+				return;
+			}
+			case LEFT_WHERE_THEY_ARE -> {
+				// Genuinely back in the run they were playing. Everything they are carrying is
+				// theirs.
+				return;
+			}
+			case INTO_THE_RUN -> {
+				// Handled below, because it is the one that has to wait for the login to finish.
+			}
 		}
 
-		// What is left is somebody who has not crossed this run's start boundary. Either they were
-		// in the lobby when it started, or — and this is the one a dimension key cannot see — they
-		// logged out inside the *previous* run, whose overworld has since been replaced by this
-		// one's under the same key. See RunAdmission.
+		// They have not crossed this run's start boundary. Either they were in the lobby when it
+		// started, or — and this is the one a dimension key cannot see — they logged out inside the
+		// *previous* run, whose overworld has since been replaced by this one's under the same key.
+		// See RunAdmission.
 		//
 		// Leaving the lobby is a respawn — see Lobby.leaveForRun — and a respawn has to wait for
 		// the login to finish. Moving a half-placed player takes them out of the server's list and
@@ -447,10 +476,6 @@ public final class RunLifecycle {
 					player.getGameProfile().name());
 		}
 
-		// Reset, and only here. This player was away when the run started, so they have never
-		// crossed its start boundary and everything they are carrying belongs to the run before —
-		// which is a roguelite handing a fresh run last run's diamonds. Somebody reconnecting into
-		// a run they were already playing returns above, keeps their things, and must.
 		ServerPlayer inTheRun =
 				Lobby.leaveForRun(player, server.overworld(), server.getRespawnData().pos());
 		resetForNewRun(inTheRun);
@@ -536,13 +561,26 @@ public final class RunLifecycle {
 
 	// --- player state ----------------------------------------------------------------------
 
-	/** Everything a run gives a player, taken back. */
+	/**
+	 * Everything a run gives a player, taken back.
+	 *
+	 * <p>This is the whole of the fresh-run boundary for a player, and the list is the interesting
+	 * part. Anything a run can give somebody that would still mean something in the next one
+	 * belongs here — the run's dimensions are deleted, but the player is not, so whatever is
+	 * written on them is what survives.
+	 *
+	 * <p>The respawn point is the one that does not look like an item. A bed slept in during run 4
+	 * is a position in a world that no longer exists, and because the next run reuses the same
+	 * dimension keys it does not read as stale: it points at whatever run 5 generated there. Left
+	 * alone it is a free teleport into the new run's terrain on the player's first death.
+	 */
 	private static void resetForNewRun(ServerPlayer player) {
 		revive(player);
 		player.getInventory().clearContent();
 		player.getEnderChestInventory().clearContent();
 		player.setExperienceLevels(0);
 		player.setExperiencePoints(0);
+		player.setRespawnPosition(null, false);
 	}
 
 	private static void revive(ServerPlayer player) {
