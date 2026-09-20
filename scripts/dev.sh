@@ -297,13 +297,19 @@ EOF
 # Match the executable name, not the whole command line. The helper below is `bash -c <this script
 # text>`, so its own /proc/<pid>/cmdline contains the word we are looking for: a substring match
 # finds the scanner itself, which makes an idle pod look busy and puts the killer on its own list.
+#
+# An empty cmdline means the process has none: a kernel thread, or — and the pod collects hundreds
+# of these — a JVM that has exited and is waiting to be reaped. The pod's pid 1 is a `sleep`, which
+# never reaps anything, so dead JVMs stay in /proc as zombies named `java` forever. A zombie holds
+# no port and cannot be killed, so counting one would keep an idle pod looking busy for good.
 GAMETEST_JVM_SCAN='
 	is_java() {
+		argv0=$(tr "\0" "\n" 2>/dev/null <"$1/cmdline" | head -n 1)
+		[ -n "$argv0" ] || return 1
+		[ "${argv0##*/}" = java ] && return 0
 		comm=""
 		read -r comm 2>/dev/null <"$1/comm" || return 1
-		[ "$comm" = java ] && return 0
-		argv0=$(tr "\0" "\n" 2>/dev/null <"$1/cmdline" | head -n 1)
-		[ "${argv0##*/}" = java ]
+		[ "$comm" = java ]
 	}
 '
 
