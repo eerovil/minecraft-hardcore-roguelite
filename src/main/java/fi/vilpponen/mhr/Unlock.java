@@ -15,7 +15,7 @@ import fi.vilpponen.mhr.core.BalanceManager;
  * are owned by id alone — see {@code fi.vilpponen.mhr.starter} and {@link UnlockState}.
  *
  * <p>The id is one string used everywhere: it is the key in {@code default-balance.json}, the value
- * written to the unlock save file, and what the dev command takes. It is namespaced — {@code world.}
+ * written under {@code unlocks} in the progression snapshot, and what the dev command takes. It is namespaced — {@code world.}
  * for things missing from the world, {@code player.} for things missing from the player — so the
  * shop can group the catalogue without a second table saying which is which. See
  * {@code docs/balance.md}. Renaming one is a save migration, so pick it once: {@link UnlockState}

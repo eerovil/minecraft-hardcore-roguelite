@@ -52,10 +52,10 @@ persistence — several of the rules there exist because the alternative was tri
 One dotted string is intentionally reused across the system:
 
 - the key in the balance catalogue;
-- the key in the unlock save file;
+- the key under `unlocks` in the `Progress` snapshot;
 - the dev command argument;
 - the value Java feature code asks `UnlockState` about;
-- eventually, the id the shop buys.
+- the id the shop buys.
 
 Examples:
 
@@ -330,8 +330,9 @@ Ask one question first:
 
 > Should deleting the current Minecraft world delete this state?
 
-If **no**, it is permanent/meta progression and must live outside the world (currently
-`UnlockState`, and future currency/profile persistence).
+If **no**, it is permanent/meta progression and belongs in the `Progress` snapshot, outside every
+world. That is one file with one writer, so a new kind of permanent state is a new key in it — not a
+new file, and not a store of its own.
 
 If **yes**, it is run state and should live with the world, normally through Minecraft
 `SavedData` or another world-owned mechanism.
