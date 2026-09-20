@@ -133,9 +133,17 @@ to run **on the Mac**, generated from the Dockerfile so the Dockerfile stays the
 goes into the image.
 
 ```sh
-scripts/dev.sh image        # then run what it prints, on the Mac
-kubectl -n mhr-dev rollout restart deploy/mhr-gametest
+# 1. bump the tag in k8s/dev.yaml if the Dockerfile changed
+# 2. print the build command and run what it prints, on the Mac
+scripts/dev.sh image
+# 3. put the new tag in the cluster and wait for the pod
+kubectl apply -f k8s/dev.yaml
+kubectl -n mhr-dev rollout status deploy/mhr-gametest --timeout=5m
 ```
+
+`apply`, not `rollout restart`. A restart rolls the deployment as the cluster already has it, so
+it would faithfully start the old tag again; the new tag only exists in your local
+`k8s/dev.yaml` until something applies it.
 
 **There is no registry, and that is deliberate.** The command imports the built image straight
 into the node container's containerd (`docker save … | docker exec desktop-control-plane ctr -n
@@ -149,8 +157,8 @@ import route leaves no standing infrastructure to keep alive.
 Two consequences worth knowing:
 
 - **The tag is pinned in `k8s/dev.yaml`** (`mhr-gametest:1`) and `scripts/dev.sh image` reads it
-  from there. Change the Dockerfile, bump the tag in the manifest, rebuild — otherwise the node
-  keeps the old image under the old name and nothing tells you.
+  from there. Change the Dockerfile, bump the tag in the manifest, rebuild, apply — otherwise the
+  node keeps the old image under the old name and nothing tells you.
 - **`imagePullPolicy: Never`.** Nothing can pull this image from anywhere. A pod stuck on
   `ErrImageNeverPull` means the node has never been given the image, not that a pull failed.
 
