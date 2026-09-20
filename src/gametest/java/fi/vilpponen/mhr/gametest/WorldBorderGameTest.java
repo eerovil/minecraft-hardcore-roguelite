@@ -2,6 +2,7 @@ package fi.vilpponen.mhr.gametest;
 
 import fi.vilpponen.mhr.border.BorderTier;
 import fi.vilpponen.mhr.core.BalanceManager;
+import fi.vilpponen.mhr.gametest.mixin.GameTestHelperAccessor;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +15,9 @@ import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.gametest.framework.GameTestInfo;
+import net.minecraft.gametest.framework.GameTestListener;
+import net.minecraft.gametest.framework.GameTestRunner;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -139,6 +143,14 @@ public final class WorldBorderGameTest {
 		scenario(failures, "a-reloaded-override-resizes-the-tier-on-its-next-application",
 				() -> aReloadedOverrideResizesTheTierOnItsNextApplication(server));
 
+		// The journeys move state the whole server shares — the run's spawn and the border in every
+		// dimension — and they hold it across ticks while a traveller is on its way. A traveller
+		// that never arrives is a failure this test has to be able to report, and a test that fails
+		// or times out never reaches the end of its own sequence, so putting the world back cannot
+		// be a step there. It goes on the framework's own end-of-test hook instead, registered
+		// before anything is moved, and that hook runs whichever way the test ends.
+		putTheWorldBackWhateverHappens(helper);
+
 		helper.startSequence()
 				.thenExecute(() -> aTravellerStandsInARealNetherPortal(helper))
 				.thenWaitUntil(() -> waitForArrival(helper, netherTraveller, Level.NETHER, NETHER_JOURNEY))
@@ -148,9 +160,38 @@ public final class WorldBorderGameTest {
 				.thenWaitUntil(() -> waitForArrival(helper, endTraveller, Level.END, END_JOURNEY))
 				.thenExecute(() -> verdict(failures, END_JOURNEY,
 						() -> theEndArrivalIsInsideTheEndBorder(helper)))
-				.thenExecute(() -> putTheWorldBack(helper))
 				.thenExecute(() -> report(helper, failures))
 				.thenSucceed();
+	}
+
+	/**
+	 * Hangs the teardown off the end of the test itself, rather than off the end of its sequence.
+	 *
+	 * <p>{@code testPassed} and {@code testFailed} are the two ways a GameTest can end, and a
+	 * timeout is a failure, so between them they cover a traveller that never arrives just as well
+	 * as one that does. The listener wants the {@link GameTestInfo} a {@link GameTestHelper} keeps
+	 * private, which is the whole reason {@link GameTestHelperAccessor} exists.
+	 */
+	private void putTheWorldBackWhateverHappens(GameTestHelper helper) {
+		((GameTestHelperAccessor) helper).mhr$testInfo().addListener(new GameTestListener() {
+			@Override
+			public void testStructureLoaded(GameTestInfo info) {
+			}
+
+			@Override
+			public void testPassed(GameTestInfo info, GameTestRunner runner) {
+				putTheWorldBack(helper);
+			}
+
+			@Override
+			public void testFailed(GameTestInfo info, GameTestRunner runner) {
+				putTheWorldBack(helper);
+			}
+
+			@Override
+			public void testAddedForRerun(GameTestInfo before, GameTestInfo after, GameTestRunner runner) {
+			}
+		});
 	}
 
 	private static void report(GameTestHelper helper, List<String> failures) {
@@ -558,11 +599,15 @@ public final class WorldBorderGameTest {
 	/**
 	 * Puts back everything the journeys moved: the run's spawn, a border wide enough not to fence
 	 * anybody in, and the two pigs, which are in other dimensions by now.
+	 *
+	 * <p>Safe to run at any point, including before the journeys have started and more than once: a
+	 * teardown that has to run exactly once to be correct is a teardown waiting to be skipped.
 	 */
 	private void putTheWorldBack(GameTestHelper helper) {
 		MinecraftServer server = helper.getLevel().getServer();
 		if (spawnBeforeTheJourneys != null) {
 			server.getWorldData().overworldData().setSpawn(spawnBeforeTheJourneys);
+			spawnBeforeTheJourneys = null;
 		}
 		runCommand(server, "mhr border " + BorderTier.INFINITE.id());
 		for (UUID uuid : new UUID[] {netherTraveller, endTraveller}) {
@@ -571,6 +616,8 @@ public final class WorldBorderGameTest {
 				traveller.discard();
 			}
 		}
+		netherTraveller = null;
+		endTraveller = null;
 	}
 
 	// --- plumbing ----------------------------------------------------------------------------------
