@@ -15,8 +15,9 @@ import org.junit.jupiter.api.Test;
  * The rules of the loop, without a game.
  *
  * <p>Every one of these is an acceptance criterion of the run lifecycle that does not need a world
- * to be true: a run cannot start twice, a death ends a run once, a reward is committed once, and a
- * reload does not turn a quit into a death or a half-built run into a playable one. They live here
+ * to be true: a run cannot start twice, a death ends a run once, a reward is never written down as
+ * given until it has been given, and a reload does not turn a quit into a death or a half-built run
+ * into a playable one. They live here
  * rather than in a GameTest because the rules are rules about {@link RunRecord} and nothing else,
  * and a test that boots Minecraft to ask them would be slower without proving more.
  */
@@ -69,6 +70,30 @@ class RunRecordTest {
 		}
 
 		@Test
+		void aRunThatCouldNotBeBuiltGoesBackToTheLobbyWithoutCountingAsPlayed() {
+			RunRecord abandoned = lobby().beginCreating(1L, 0L).abandoned();
+
+			assertEquals(RunPhase.LOBBY, abandoned.phase());
+			assertEquals(0, abandoned.completedRuns());
+			assertFalse(abandoned.isRunning());
+		}
+
+		@Test
+		void anAbandonedRunKeepsItsIdSpent() {
+			RunRecord abandoned = lobby().beginCreating(1L, 0L).abandoned();
+
+			assertEquals(1, abandoned.runId());
+			assertEquals(2, abandoned.beginCreating(2L, 0L).runId(),
+					"a second attempt is a different run and must not answer to the first one's id");
+		}
+
+		@Test
+		void onlyARunBeingBuiltCanBeAbandoned() {
+			assertThrows(IllegalStateException.class, () -> lobby().abandoned());
+			assertThrows(IllegalStateException.class, () -> running().abandoned());
+		}
+
+		@Test
 		void eachRunGetsItsOwnId() {
 			RunRecord first = running();
 			RunRecord second = first.beginEnding().rewarded().returnedToLobby().beginCreating(99L, 0L);
@@ -116,7 +141,7 @@ class RunRecordTest {
 	}
 
 	@Nested
-	@DisplayName("committing the reward exactly once")
+	@DisplayName("committing the reward")
 	class Reward {
 		@Test
 		void aRunThatHasJustEndedIsOwedItsReward() {
@@ -137,6 +162,29 @@ class RunRecordTest {
 
 			IllegalStateException thrown = assertThrows(IllegalStateException.class, paid::rewarded);
 			assertTrue(thrown.getMessage().contains("already been rewarded"), thrown.getMessage());
+		}
+
+		@Test
+		void aPayoutThatFailedIsStillOwed() {
+			// The lifecycle only calls rewarded() once the listeners have returned, so a payout that
+			// threw, or a write that failed, leaves exactly this record — and it still says owed.
+			RunRecord ending = running().beginEnding();
+
+			assertTrue(ending.rewardOutstanding());
+			assertEquals(ending, ending.recovered(),
+					"a reload must not decide the reward happened after all");
+			assertTrue(ending.recovered().rewardOutstanding());
+		}
+
+		@Test
+		void aRetryAfterAFailedPayoutCommitsOnce() {
+			RunRecord owed = running().beginEnding();
+
+			RunRecord paid = owed.rewarded();
+
+			assertFalse(paid.rewardOutstanding());
+			assertThrows(IllegalStateException.class, paid::rewarded);
+			assertEquals(1, paid.returnedToLobby().completedRuns());
 		}
 
 		@Test

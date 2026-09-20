@@ -85,21 +85,48 @@ What a reload makes of each phase (`RunRecord.recovered()`):
 An unreadable file is reported loudly and read as a save nobody has played. That loses at most one
 run and never any permanent progression, which is stored elsewhere.
 
-## Exactly-once boundaries
+## Once-only boundaries
 
-These operations must happen once and are each guarded by the record rather than by "this callback
-normally fires once":
+These operations must not happen twice, and each is guarded by the record rather than by "this
+callback normally fires once":
 
 | Operation | Guard |
 | --- | --- |
 | ending a run | phase must be `RUNNING` |
-| committing the reward | `rewardedRunId` is set to `runId`, written before and after the payout |
 | counting a completed run | only the `ENDING_RUN -> LOBBY` transition increments it |
 | creating the next run | phase must be `LOBBY` |
-| granting once-per-run starter items | `RUN_STARTED` fires once per run by construction |
+| granting once-per-run starter items | `RUN_STARTED` fires once per successful run start |
 
-Currency does not exist yet. When it does, credit it from a `RUN_ENDED` listener; that event is
-already exactly-once across a crash.
+### The reward is at least once, not exactly once
+
+`RUN_ENDED` is the exception and the documentation used to overstate it. The run is written down as
+rewarded only *after* the listeners return, so there is a window — a crash, or a failed write —
+where the payout happened and the note saying so did not. The next start finds the reward still
+owed and calls the listeners again for the same run id.
+
+The lifecycle cannot close that window on its own; only the store being written to can. **A listener
+that grants permanent progression must therefore be idempotent for `run.runId()`**: credit against
+the id and make a repeat call a no-op. When currency arrives, that means a ledger of paid run ids
+next to the balance, not a bare "add N".
+
+The other side is enforced here: a listener that throws is **not** swallowed. The run stays in
+`ENDING_RUN` with the reward still outstanding, `/mhr run end` retries it, and the next server start
+finishes it. Recording a failed payout as done would lose it for good.
+
+### A run start is all-or-nothing
+
+`RUN_STARTED` fires while the record still says `CREATING_RUN`, and `RUNNING` is written only after
+every listener has returned. A crash in that window, or a listener that throws, therefore leaves a
+`CREATING_RUN` record — which the next start recovers to the lobby — rather than a `RUNNING` save
+that quietly skipped its starter chest, its border, or whatever the shop sells next. The run id is
+spent either way, so the retry is a different run and cannot be confused with the abandoned one.
+
+### Nothing advances past the disk
+
+`RunLifecycle.set` writes the record and only then assigns the field, and throws when the write
+fails. What the running process believes can never be ahead of what the save says. A failed run-world
+delete is the same idea: `RunWorlds.recreate` rebuilds the levels so the server still has an
+overworld, then throws, and the run is abandoned rather than played on top of the last one's chunks.
 
 ## The run-start hook
 

@@ -5,8 +5,9 @@ package fi.vilpponen.mhr.run;
  * next.
  *
  * <p>This is deliberately plain Java with no Minecraft in it. The rules that matter — a run cannot
- * be started twice, a death ends a run once, a reward is committed once — are rules about these six
- * numbers, so they are decided here and tested without starting a game. {@link RunLifecycle} does
+ * be started twice, a death ends a run once, a reward is not written down as given until it has
+ * been given — are rules about these six numbers, so they are decided here and tested without
+ * starting a game. {@link RunLifecycle} does
  * the world surgery around the answers; it does not get to form its own opinion about them.
  *
  * <p>Every transition throws {@link IllegalStateException} when the phase does not allow it, rather
@@ -49,7 +50,7 @@ public record RunRecord(
 		return new RunRecord(RunPhase.CREATING_RUN, runId + 1, seed, now, completedRuns, rewardedRunId);
 	}
 
-	/** The worlds exist and the player is in them. */
+	/** The worlds exist and everything a run start owes them has been done. */
 	public RunRecord created() {
 		require(phase == RunPhase.CREATING_RUN, "no run is being created; phase is " + phase);
 		return new RunRecord(RunPhase.RUNNING, runId, seed, startedAt, completedRuns, rewardedRunId);
@@ -88,19 +89,29 @@ public record RunRecord(
 	}
 
 	/**
+	 * Give up on a run that was being built.
+	 *
+	 * <p>The run id stays spent. A half-built run that is started again gets the next id, because
+	 * ids are how a reward is recognised and two different attempts must not answer to the same
+	 * one.
+	 */
+	public RunRecord abandoned() {
+		require(phase == RunPhase.CREATING_RUN, "no run is being created; phase is " + phase);
+		return new RunRecord(RunPhase.LOBBY, runId, seed, startedAt, completedRuns, rewardedRunId);
+	}
+
+	/**
 	 * What this record means after a restart.
 	 *
 	 * <p>The only phase that cannot survive a restart is {@link RunPhase#CREATING_RUN}: the worlds
 	 * it was building are half-made, and nobody ever played them, so the save falls back to the
 	 * lobby and the next start builds again from scratch under a new id. A run that was simply
 	 * being played is still being played — quitting the game is not dying — and a run that was
-	 * ending is still ending, which is how the reward gets committed exactly once even if the
-	 * process died in the middle of committing it.
+	 * ending is still ending, which is how a reward that was interrupted gets handed over rather
+	 * than lost.
 	 */
 	public RunRecord recovered() {
-		return phase == RunPhase.CREATING_RUN
-				? new RunRecord(RunPhase.LOBBY, runId, seed, startedAt, completedRuns, rewardedRunId)
-				: this;
+		return phase == RunPhase.CREATING_RUN ? abandoned() : this;
 	}
 
 	public String describe() {

@@ -10,6 +10,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerCon
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
@@ -86,11 +87,67 @@ final class TestRuns {
 		});
 	}
 
-	/** Which dimension the server says this connection's player is standing in. */
+	/**
+	 * Which dimension the server says this connection's player is standing in.
+	 *
+	 * <p>Looked up in the player list by id rather than taken from the connection. Moving a player
+	 * between dimensions here replaces the {@code ServerPlayer} object, and a test holding the one
+	 * from login would keep answering for a player the server destroyed — which reads as "they
+	 * never moved" when in fact they did.
+	 */
 	static String playerDimension(
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
-		return server.computeOnServer(unused ->
-				connection.getServerPlayer().level().dimension().identifier().toString());
+		return server.computeOnServer(minecraftServer -> {
+			ServerPlayer live = livePlayer(minecraftServer);
+			return live == null
+					? "nowhere (not connected)"
+					: live.level().dimension().identifier().toString();
+		});
+	}
+
+	/** How much health this connection's player has, asked of the player the server currently has. */
+	static float playerHealth(
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		return server.computeOnServer(minecraftServer -> {
+			ServerPlayer live = livePlayer(minecraftServer);
+			return live == null ? 0.0F : live.getHealth();
+		});
+	}
+
+	/**
+	 * The player the server currently has, asked of the server and nothing else.
+	 *
+	 * <p>Deliberately not routed through the connection. Moving a player between dimensions here
+	 * replaces the {@code ServerPlayer} object, and anything holding the one from login keeps
+	 * answering for a player the server has destroyed — which reads as "they never moved" when they
+	 * did. These tests run one player, so the live one is simply the one in the list that is not
+	 * removed.
+	 */
+	private static ServerPlayer livePlayer(MinecraftServer server) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isRemoved()) {
+				return player;
+			}
+		}
+		return null;
+	}
+
+	/** Everybody the server has and where they are, for a failure message worth reading. */
+	static String describePlayers(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer -> {
+			StringBuilder described = new StringBuilder();
+			for (ServerPlayer player : minecraftServer.getPlayerList().getPlayers()) {
+				if (!described.isEmpty()) {
+					described.append("; ");
+				}
+				described.append(player.getGameProfile().name())
+						.append(" #").append(player.getId())
+						.append(" in ").append(player.level().dimension().identifier())
+						.append(player.isRemoved() ? " (removed)" : "")
+						.append(player.connection == null ? " (no connection)" : "");
+			}
+			return described.isEmpty() ? "nobody" : described.toString();
+		});
 	}
 
 	static boolean playerIsInTheLobby(
@@ -139,7 +196,10 @@ final class TestRuns {
 			if (lobby == null) {
 				return "there is no lobby at all";
 			}
-			ServerPlayer current = connection.getServerPlayer();
+			ServerPlayer current = livePlayer(minecraftServer);
+			if (current == null) {
+				return "";
+			}
 			UUID id = current.getUUID();
 
 			Entity held = lobby.getEntity(id);
@@ -155,6 +215,26 @@ final class TestRuns {
 			}
 			return "entity lookup holds a live " + held + ", player list holds one: " + listedAlive;
 		});
+	}
+
+	/**
+	 * Wait until the server has nobody connected.
+	 *
+	 * <p>Closing a connection does not free the slot in the same breath, and this harness's server
+	 * allows one player. Reconnecting too eagerly is answered with "The server is full!", which
+	 * looks like a fault in whatever the scenario was actually about.
+	 */
+	static void waitForNobodyConnected(ClientGameTestContext context, TestDedicatedServerContext server) {
+		// Generous on purpose: this pod’s server runs tens of ticks behind the client, so a budget
+		// counted in client ticks buys far fewer server ticks than it looks like.
+		for (int attempt = 0; attempt < 600; attempt++) {
+			if (server.computeOnServer(minecraftServer ->
+					minecraftServer.getPlayerList().getPlayers().isEmpty())) {
+				return;
+			}
+			context.waitTicks(2);
+		}
+		throw new AssertionError("The server never let go of " + describePlayers(server));
 	}
 
 	/** Wait for one full server tick, so a command issued just before it has certainly run. */

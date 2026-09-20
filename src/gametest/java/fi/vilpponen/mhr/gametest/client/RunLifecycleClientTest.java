@@ -8,6 +8,7 @@ import fi.vilpponen.mhr.run.RunRecord;
 import fi.vilpponen.mhr.run.RunStorage;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -75,7 +76,19 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 
 	/** How many times a run has been reported as ended, counted on the server. */
 	private static final AtomicInteger RUNS_ENDED = new AtomicInteger();
-	private static boolean counting;
+
+	/**
+	 * Make the next run start, or the next reward, fail on purpose.
+	 *
+	 * <p>Both boundaries are meant to survive a listener that throws — a failed start must not leave
+	 * a run that looks playable, and a failed reward must stay owed rather than be recorded as
+	 * given. Neither can be asked about without a listener that actually fails, so the test brings
+	 * its own and turns it on for one scenario at a time.
+	 */
+	private static final AtomicBoolean FAIL_RUN_START = new AtomicBoolean();
+	private static final AtomicBoolean FAIL_RUN_END = new AtomicBoolean();
+
+	private static boolean listenersRegistered;
 
 	private final List<String> failures = new ArrayList<>();
 
@@ -115,6 +128,21 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 						() -> progressionSurvives(server));
 				scenario(context, "the-lobby-survived-both-runs",
 						() -> theLobbySurvived(context, server, connection));
+			}
+
+			// Its own connection: the point of it is logging in again.
+			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "reconnecting-from-the-lobby-during-a-run-lands-in-the-run",
+					() -> reconnectingFromTheLobbyJoinsTheRun(context, server));
+
+			TestRuns.waitForNobodyConnected(context, server);
+			try (TestDedicatedServerConnection connection = server.connect()) {
+				settle(context, connection);
+
+				scenario(context, "a-run-start-that-fails-does-not-become-a-playable-run",
+						() -> aFailedStartIsNotARun(server, connection));
+				scenario(context, "a-reward-that-fails-stays-owed-and-is-committed-once-on-retry",
+						() -> aFailedRewardIsRetriedOnce(server));
 			}
 		}
 
@@ -296,7 +324,7 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		check(TestRuns.playerIsInTheLobby(server, connection),
 				"a death must return the player to the lobby, and they are in "
 						+ TestRuns.playerDimension(server, connection));
-		float health = server.computeOnServer(unused -> connection.getServerPlayer().getHealth());
+		float health = TestRuns.playerHealth(server, connection);
 		check(health > 0.0F,
 				"the player must arrive in the lobby alive rather than on a game-over screen, and"
 						+ " they have " + health + " health");
@@ -412,6 +440,135 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		context.takeScreenshot("run-lifecycle-lobby-between-runs");
 	}
 
+	/**
+	 * Somebody who quit between runs, and comes back to find a run already going.
+	 *
+	 * <p>Their saved position is the lobby, so joining moves them out of it — and moving out of the
+	 * lobby is the transition that has to go through the respawn lifecycle or the lobby is left
+	 * holding them. The last two checks are the ones that would have caught it: nothing live left
+	 * behind, and the lobby still usable when they come back to it.
+	 */
+	private void reconnectingFromTheLobbyJoinsTheRun(
+			ClientGameTestContext context, TestDedicatedServerContext server) {
+		check(TestRuns.phase(server) == RunPhase.LOBBY,
+				"this scenario starts between runs, and the save says " + TestRuns.record(server).describe());
+
+		// Started while nobody is connected, which is exactly the situation: the player is away.
+		TestRuns.start(server);
+		check(TestRuns.describePlayers(server).equals("nobody"),
+				"this scenario needs the player to be away while the run starts, and the server has "
+						+ TestRuns.describePlayers(server));
+		check(TestRuns.phase(server) == RunPhase.RUNNING, "the run did not start");
+
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			settle(context, connection);
+
+			// They log in in the lobby, because that is where they left off, and are moved into the
+			// run on the tick after. Waited for rather than assumed: the assertion is that they end
+			// up in the run, not that it happens within one tick of the login.
+			waitForClientIn(context, connection, "minecraft:overworld");
+
+			String where = TestRuns.playerDimension(server, connection);
+			check(where.equals("minecraft:overworld"),
+					"a player logging in from a saved lobby position while a run is going belongs in"
+							+ " the run, and they are in " + where
+							+ " — the server has " + TestRuns.describePlayers(server));
+
+			String stale = TestRuns.liveLobbyRegistrationOf(server, connection);
+			check(stale.isEmpty(), "joining the run out of the lobby must not leave the lobby holding"
+					+ " them, and it kept " + stale);
+
+			// And the lobby still works for them, which is what that leak used to break.
+			TestRuns.end(server);
+			waitForClientIn(context, connection, Lobby.LEVEL.identifier().toString());
+			frameTheLobby(context, server);
+			checkClientSeesTheLobby(context);
+		}
+	}
+
+	/**
+	 * A run whose start setup fails is not a run.
+	 *
+	 * <p>The record must not be left saying a run is in progress when the things a run start owes it
+	 * — the starter chest, the border, whatever the shop sells next — did not all happen.
+	 */
+	private void aFailedStartIsNotARun(
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		RunRecord before = TestRuns.record(server);
+		check(before.phase() == RunPhase.LOBBY,
+				"this scenario starts in the lobby, and the save says " + before.describe());
+
+		FAIL_RUN_START.set(true);
+		try {
+			TestRuns.start(server);
+		} finally {
+			FAIL_RUN_START.set(false);
+		}
+
+		RunRecord after = TestRuns.record(server);
+		check(after.phase() == RunPhase.LOBBY,
+				"a run whose start setup failed must not be left looking playable, and the save says "
+						+ after.describe());
+		check(after.completedRuns() == before.completedRuns(),
+				"a run that never started is not a run played");
+		check(TestRuns.playerIsInTheLobby(server, connection),
+				"the player must be left in the lobby, and they are in "
+						+ TestRuns.playerDimension(server, connection));
+
+		// And the next attempt works, under an id of its own.
+		TestRuns.start(server);
+		RunRecord good = TestRuns.record(server);
+		check(good.phase() == RunPhase.RUNNING,
+				"a run must still be startable after one failed, and the save says " + good.describe());
+		check(good.runId() > after.runId(),
+				"the abandoned run's id must not be handed to the one that worked: abandoned "
+						+ after.runId() + ", started " + good.runId());
+
+		TestRuns.end(server);
+	}
+
+	/**
+	 * A reward that could not be handed over is still owed, and the retry hands it over once.
+	 *
+	 * <p>Both halves matter. Recording a failed payout as done loses it for good; retrying one that
+	 * did happen pays it twice. The counter is the evidence, because it only counts reward
+	 * listeners that actually ran to the end.
+	 */
+	private void aFailedRewardIsRetriedOnce(TestDedicatedServerContext server) {
+		int committedBefore = RUNS_ENDED.get();
+		TestRuns.start(server);
+		RunRecord run = TestRuns.record(server);
+
+		FAIL_RUN_END.set(true);
+		try {
+			TestRuns.end(server);
+		} finally {
+			FAIL_RUN_END.set(false);
+		}
+
+		RunRecord stuck = TestRuns.record(server);
+		check(stuck.phase() == RunPhase.ENDING_RUN,
+				"a run whose reward failed must stay unfinished, and the save says " + stuck.describe());
+		check(stuck.rewardOutstanding(),
+				"the reward must still be owed rather than written down as given");
+		check(RUNS_ENDED.get() == committedBefore,
+				"nothing was committed, and the reward hook reports " + RUNS_ENDED.get()
+						+ " against " + committedBefore + " before");
+		check(stuck.runId() == run.runId(), "it is still the same run");
+
+		// The retry: the same run, handed over once.
+		TestRuns.end(server);
+
+		RunRecord done = TestRuns.record(server);
+		check(done.phase() == RunPhase.LOBBY,
+				"the retry must finish the run, and the save says " + done.describe());
+		check(RUNS_ENDED.get() == committedBefore + 1,
+				"the reward must be committed exactly once across the failure and the retry, and the"
+						+ " hook has now fired " + (RUNS_ENDED.get() - committedBefore) + " time(s) for it");
+		check(done.completedRuns() == run.completedRuns() + 1,
+				"the run is counted once, and the record counts " + done.completedRuns());
+	}
+
 	// --- plumbing --------------------------------------------------------------------------
 
 	/**
@@ -511,10 +668,24 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 
 	private static void countRunEndings(TestDedicatedServerContext server) {
 		server.runOnServer(unused -> {
-			if (counting) {
+			if (listenersRegistered) {
 				return;
 			}
-			counting = true;
+			listenersRegistered = true;
+
+			// Order matters. The failing listeners go first so that a failed reward never reaches
+			// the counter — which is what makes "committed once across a failure and a retry" a
+			// question the counter can answer.
+			RunEvents.RUN_STARTED.register((minecraftServer, overworld, run) -> {
+				if (FAIL_RUN_START.get()) {
+					throw new IllegalStateException("deliberate run-start failure");
+				}
+			});
+			RunEvents.RUN_ENDED.register((minecraftServer, run) -> {
+				if (FAIL_RUN_END.get()) {
+					throw new IllegalStateException("deliberate reward failure");
+				}
+			});
 			RunEvents.RUN_ENDED.register((minecraftServer, run) -> RUNS_ENDED.incrementAndGet());
 		});
 	}

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -74,6 +75,36 @@ class RunStorageTest {
 			assertEquals(java.util.List.of(RunStorage.FILE_NAME),
 					entries.map(path -> path.getFileName().toString()).sorted().toList());
 		}
+	}
+
+	@Test
+	@DisplayName("a write that cannot happen says so rather than pretending")
+	void unwritableSaveDirectory() throws IOException {
+		// The lifecycle refuses to move the record on when this returns false, which is the only
+		// thing standing between a full disk and a run that only the running process believes in.
+		Path readOnly = save.resolve("read-only");
+		Files.createDirectory(readOnly);
+		Files.setPosixFilePermissions(readOnly, PosixFilePermissions.fromString("r-xr-xr-x"));
+
+		try {
+			assertFalse(new RunStorage(readOnly).save(RunRecord.NEW_SAVE));
+		} finally {
+			Files.setPosixFilePermissions(readOnly, PosixFilePermissions.fromString("rwxr-xr-x"));
+		}
+	}
+
+	@Test
+	@DisplayName("a failed write leaves the last good record readable")
+	void failedWriteKeepsTheOldRecord() throws IOException {
+		RunStorage storage = new RunStorage(save);
+		RunRecord good = new RunRecord(RunPhase.RUNNING, 1, 5L, 0L, 0, 0);
+		assertTrue(storage.save(good));
+
+		// A directory where the temporary file wants to be: the write fails, the old file stands.
+		Files.createDirectory(save.resolve(RunStorage.FILE_NAME + ".tmp"));
+
+		assertFalse(storage.save(new RunRecord(RunPhase.LOBBY, 1, 5L, 0L, 1, 1)));
+		assertEquals(good, storage.load());
 	}
 
 	@Test

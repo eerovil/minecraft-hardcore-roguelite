@@ -112,12 +112,21 @@ public final class RunLifecycle {
 			}
 		}
 
-		ServerLevel overworld = RunWorlds.recreate(server, chosen);
-		set(record.created());
+		// Everything a run needs before it counts as one happens while the record still says
+		// CREATING_RUN. A crash in here, or a run-start listener that fails, therefore leaves a
+		// phase that the next start recovers to the lobby — never a RUNNING save that quietly
+		// skipped its starter chest, its border or whatever the shop sells next.
+		ServerLevel overworld;
+		try {
+			overworld = RunWorlds.recreate(server, chosen);
+			RunEvents.RUN_STARTED.invoker().onRunStarted(server, overworld, record);
+		} catch (RuntimeException failed) {
+			abandonCreation(failed);
+			throw new IllegalStateException(
+					"run " + record.runId() + " could not be built: " + failed, failed);
+		}
 
-		// Unlocks are applied to the finished worlds before anybody arrives in them.
-		fire(() -> RunEvents.RUN_STARTED.invoker().onRunStarted(server, overworld, record),
-				"a run-start listener");
+		set(record.created());
 
 		BlockPos spawn = server.getRespawnData().pos();
 		for (ServerPlayer player : players()) {
@@ -130,6 +139,33 @@ public final class RunLifecycle {
 	}
 
 	/**
+	 * Give up on a run that could not be built, and say so.
+	 *
+	 * <p>The run id is spent either way. That is deliberate: ids are how a reward is recognised
+	 * later, and reusing the id of a run that half-existed would make two different runs
+	 * indistinguishable in the record.
+	 */
+	private void abandonCreation(RuntimeException cause) {
+		HardcoreRoguelite.LOGGER.error("Run {} could not be started; back to the lobby",
+				record.runId(), cause);
+		try {
+			set(record.abandoned());
+		} catch (RuntimeException alsoFailed) {
+			HardcoreRoguelite.LOGGER.error("The abandoned run could not be written down either."
+					+ " The next start will recover it.", alsoFailed);
+		}
+
+		for (ServerPlayer player : players()) {
+			if (!Lobby.isLobby(player.level())) {
+				Lobby.returnFromRun(player);
+			}
+			player.sendSystemMessage(Component.literal(
+					"That run could not be started, so it has not. You are still in the lobby;"
+							+ " see the server log."));
+		}
+	}
+
+	/**
 	 * End the current run, as a death does.
 	 *
 	 * <p>Separate from {@link #playerDied} so the dev command can end a run without killing anybody
@@ -138,6 +174,16 @@ public final class RunLifecycle {
 	 * @throws IllegalStateException if no run is in progress
 	 */
 	public synchronized void endRun(String reason) {
+		if (record.phase() == RunPhase.ENDING_RUN) {
+			// Already over, and stuck: a previous attempt could not commit the reward or could not
+			// write the record. Retry the part that did not finish rather than refusing, so a save
+			// in this state has a way out that is not "restart the server".
+			HardcoreRoguelite.LOGGER.info("Run {} was already ending; trying to finish it again",
+					record.runId());
+			finishEnding();
+			return;
+		}
+
 		set(record.beginEnding());
 		HardcoreRoguelite.LOGGER.info("Run {} is over: {}", record.runId(), reason);
 		finishEnding();
@@ -150,9 +196,10 @@ public final class RunLifecycle {
 	 * why every step of it asks the record whether it still needs doing.
 	 */
 	private synchronized void finishEnding() {
-		if (record.rewardOutstanding()) {
-			fire(() -> RunEvents.RUN_ENDED.invoker().onRunEnded(server, record), "a run-end listener");
-			set(record.rewarded());
+		if (record.rewardOutstanding() && !commitReward()) {
+			// Still owed. The run stays in ENDING_RUN, which is the one phase the next server start
+			// finishes on its own, and /mhr run end retries it in the meantime.
+			return;
 		}
 
 		for (ServerPlayer player : players()) {
@@ -163,6 +210,51 @@ public final class RunLifecycle {
 		}
 
 		set(record.returnedToLobby());
+	}
+
+	/**
+	 * Hand this run's reward over, once.
+	 *
+	 * <p>"Once" is a promise the lifecycle cannot keep on its own, and pretending otherwise is how
+	 * permanent progression gets paid twice. What is guaranteed here is *at least* once: the run is
+	 * only written down as rewarded after the listeners have returned, so a process that dies
+	 * between the payout and that write comes back with the reward still owed and calls them again.
+	 * The other side of that window is a listener that throws — which is not swallowed, because a
+	 * payout that failed must be retried rather than recorded as done.
+	 *
+	 * <p>So a listener that grants permanent progression has to be idempotent for a given run id.
+	 * See {@link RunEvents#RUN_ENDED}, which says so where somebody writing one will read it.
+	 *
+	 * @return true if the run is now recorded as rewarded
+	 */
+	private boolean commitReward() {
+		try {
+			RunEvents.RUN_ENDED.invoker().onRunEnded(server, record);
+		} catch (RuntimeException failed) {
+			HardcoreRoguelite.LOGGER.error("Run {}'s reward could not be committed. The run stays"
+					+ " unfinished and will be tried again.", record.runId(), failed);
+			tellEverybody("This run's reward could not be handed over yet. Nothing has been lost —"
+					+ " it will be tried again.");
+			return false;
+		}
+
+		try {
+			set(record.rewarded());
+			return true;
+		} catch (RuntimeException failed) {
+			// The payout happened and the note saying so did not. The next attempt will call the
+			// listeners again, which is exactly why they have to be idempotent by run id.
+			HardcoreRoguelite.LOGGER.error("Run {} was rewarded but that could not be written down."
+					+ " The reward will be offered again and must be recognised as the same one.",
+					record.runId(), failed);
+			return false;
+		}
+	}
+
+	private void tellEverybody(String message) {
+		for (ServerPlayer player : players()) {
+			player.sendSystemMessage(Component.literal(message));
+		}
 	}
 
 	// --- hooks -----------------------------------------------------------------------------
@@ -178,8 +270,9 @@ public final class RunLifecycle {
 		if (record.phase() == RunPhase.ENDING_RUN) {
 			HardcoreRoguelite.LOGGER.info("Finishing run {}, interrupted last time", record.runId());
 			finishEnding();
-		} else {
-			storage.save(record);
+		} else if (!storage.save(record)) {
+			HardcoreRoguelite.LOGGER.error("Could not write {}. The loop will refuse to start or end"
+					+ " a run until it can.", storage.file());
 		}
 	}
 
@@ -201,25 +294,55 @@ public final class RunLifecycle {
 		// and moving them to another dimension from inside that leaves the dimension they arrive in
 		// holding two of them — after which the server never sends that player any chunks and their
 		// client sits on "Loading terrain" for ever.
-		server.execute(() -> placeOnJoin(player));
+		server.execute(() -> placeOnJoin(player, 0));
 	}
 
-	private synchronized void placeOnJoin(ServerPlayer player) {
-		if (player.isRemoved()) {
+	/** How many ticks to wait for a login to finish before moving the player anyway. */
+	private static final int JOIN_SETTLE_TICKS = 100;
+
+	private synchronized void placeOnJoin(ServerPlayer player, int ticksWaited) {
+		if (player.isRemoved() || player.hasDisconnected()) {
 			return;
 		}
+		HardcoreRoguelite.LOGGER.info("{} joined in {} while the save is {}",
+				player.getGameProfile().name(), player.level().dimension().identifier(),
+				record.describe());
+
 		if (!record.isRunning()) {
 			Lobby.send(player);
 			player.sendSystemMessage(Component.literal(
 					"No run in progress. Start one with /mhr run start."));
 			return;
 		}
-		if (!isRunLevel(player.level())) {
-			ServerLevel overworld = server.overworld();
-			BlockPos spawn = server.getRespawnData().pos();
-			player.teleportTo(overworld, spawn.getX() + 0.5, spawn.getY(), spawn.getZ() + 0.5,
-					Set.of(), 0.0F, 0.0F, true);
+		if (isRunLevel(player.level())) {
+			return;
 		}
+
+		// What is left is a player logging in from a saved position in the lobby while a run is
+		// going: they were between runs when they quit and somebody started one. Leaving the lobby
+		// is a respawn — see Lobby.leaveForRun — and a respawn has to wait for the login to finish.
+		// Moving a half-placed player takes them out of the server's list and the rest of the login
+		// then files the original, which nothing ever removes; the slot leaks for the session.
+		if (!listed(player) && ticksWaited < JOIN_SETTLE_TICKS) {
+			server.execute(() -> placeOnJoin(player, ticksWaited + 1));
+			return;
+		}
+		if (!listed(player)) {
+			HardcoreRoguelite.LOGGER.warn("{} never finished joining; moving them into the run anyway",
+					player.getGameProfile().name());
+		}
+
+		Lobby.leaveForRun(player, server.overworld(), server.getRespawnData().pos());
+	}
+
+	/** Is this the very object the server has connected, rather than one that merely matches it? */
+	private boolean listed(ServerPlayer player) {
+		for (ServerPlayer connected : server.getPlayerList().getPlayers()) {
+			if (connected == player) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -240,7 +363,18 @@ public final class RunLifecycle {
 			// tick: vanilla is in the middle of the damage that would have killed this player, and
 			// moving them to another dimension from inside that leaves their client still rendering
 			// the world it was told to leave.
-			set(record.beginEnding());
+			try {
+				set(record.beginEnding());
+			} catch (RuntimeException failed) {
+				// The save cannot be written, so this run has not ended and must not be treated as
+				// though it had. The death is still taken over: a disk error is no reason to hand
+				// the player a hardcore game-over screen.
+				HardcoreRoguelite.LOGGER.error("{} died but the run could not be ended; they are"
+						+ " alive where they fell", player.getGameProfile().name(), failed);
+				player.sendSystemMessage(Component.literal(
+						"That death could not be recorded, so the run has not ended. See the server log."));
+				return true;
+			}
 			HardcoreRoguelite.LOGGER.info("Run {} is over: death of {}",
 					record.runId(), player.getGameProfile().name());
 			server.execute(this::finishEnding);
@@ -285,25 +419,18 @@ public final class RunLifecycle {
 		return List.copyOf(server.getPlayerList().getPlayers());
 	}
 
-	private void set(RunRecord next) {
-		this.record = next;
-		if (storage != null) {
-			storage.save(next);
-		}
-	}
-
 	/**
-	 * Run a listener list without letting it take the loop down with it.
+	 * Move the record on — on the disk first, and only then in memory.
 	 *
-	 * <p>A feature that throws while reacting to a run boundary is a bug in that feature. Letting
-	 * it propagate would leave the record saying one thing and the worlds another, which is the one
-	 * state this design exists to avoid.
+	 * <p>That order is the whole point. What this object believes can never be ahead of what the
+	 * save says, so a write that fails cannot leave a run that only this process thinks happened.
+	 *
+	 * @throws IllegalStateException if the record could not be written
 	 */
-	private static void fire(Runnable listeners, String what) {
-		try {
-			listeners.run();
-		} catch (RuntimeException e) {
-			HardcoreRoguelite.LOGGER.error("{} failed; the run continues without it", what, e);
+	private void set(RunRecord next) {
+		if (storage != null && !storage.save(next)) {
+			throw new IllegalStateException("could not write the run record to " + storage.file());
 		}
+		this.record = next;
 	}
 }

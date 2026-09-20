@@ -105,8 +105,18 @@ final class RunWorlds {
 	static ServerLevel recreate(MinecraftServer server, long seed) {
 		useSeed(server, seed);
 		unload(server);
-		deleteFiles(server);
-		return build(server);
+		IOException leftovers = deleteFiles(server);
+
+		// Rebuilt whatever happened. The server has to have an overworld before anything else runs,
+		// including the code that is about to abandon this run.
+		ServerLevel overworld = build(server);
+
+		if (leftovers != null) {
+			throw new IllegalStateException("the last run's worlds could not be deleted, so what"
+					+ " has just been built is not a fresh run and must not be played as one",
+					leftovers);
+		}
+		return overworld;
 	}
 
 	private static void useSeed(MinecraftServer server, long seed) {
@@ -136,37 +146,61 @@ final class RunWorlds {
 		}
 	}
 
-	private static void deleteFiles(MinecraftServer server) {
+	/**
+	 * Delete everything the finished run owned.
+	 *
+	 * <p>Every failure is reported rather than logged and stepped over. A run world that could not
+	 * be deleted is a run world the next one would generate on top of, which is the one thing a
+	 * fresh run must not be, so the caller has to hear about it.
+	 *
+	 * @return the first failure, with any others suppressed under it, or null if everything went
+	 */
+	private static IOException deleteFiles(MinecraftServer server) {
 		LevelStorageSource.LevelStorageAccess storage = ((MinecraftServerAccessor) server).mhr$storageSource();
 		Path saveRoot = storage.getDimensionPath(Level.OVERWORLD);
+		IOException failure = null;
 
 		for (ResourceKey<Level> key : RUN_LEVELS) {
 			Path directory = storage.getDimensionPath(key);
 			if (directory.equals(saveRoot)) {
 				// The overworld has no folder of its own: it is the save. Take only what is its own.
 				for (String name : RUN_DIRECTORIES) {
-					deleteRecursively(directory.resolve(name));
+					failure = firstOf(failure, deleteRecursively(directory.resolve(name)));
 				}
 				for (SavedDataType<?> type : RUN_SAVED_DATA) {
-					delete(type.id().withSuffix(".dat").resolveAgainst(directory.resolve("data")));
+					failure = firstOf(failure,
+							delete(type.id().withSuffix(".dat").resolveAgainst(directory.resolve("data"))));
 				}
 			} else {
-				deleteRecursively(directory);
+				failure = firstOf(failure, deleteRecursively(directory));
 			}
 		}
+		return failure;
 	}
 
-	private static void delete(Path path) {
+	private static IOException firstOf(IOException kept, IOException next) {
+		if (kept == null) {
+			return next;
+		}
+		if (next != null) {
+			kept.addSuppressed(next);
+		}
+		return kept;
+	}
+
+	private static IOException delete(Path path) {
 		try {
 			Files.deleteIfExists(path);
+			return null;
 		} catch (IOException e) {
 			HardcoreRoguelite.LOGGER.error("Could not delete {} from the finished run", path, e);
+			return e;
 		}
 	}
 
-	private static void deleteRecursively(Path root) {
+	private static IOException deleteRecursively(Path root) {
 		if (!Files.exists(root)) {
-			return;
+			return null;
 		}
 		try (Stream<Path> walk = Files.walk(root)) {
 			// Deepest first, so a directory is always empty by the time it is reached.
@@ -175,7 +209,17 @@ final class RunWorlds {
 			}
 		} catch (IOException e) {
 			HardcoreRoguelite.LOGGER.error("Could not delete {} from the finished run", root, e);
+			return e;
 		}
+
+		// Walking can finish without throwing and still leave something behind — a directory that
+		// refused, or a file written under us. Deleted means nothing is left.
+		if (Files.exists(root)) {
+			IOException left = new IOException(root + " is still there after deleting it");
+			HardcoreRoguelite.LOGGER.error("Could not delete {} from the finished run", root, left);
+			return left;
+		}
+		return null;
 	}
 
 	/**
