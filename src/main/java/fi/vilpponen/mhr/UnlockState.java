@@ -1,34 +1,18 @@
 package fi.vilpponen.mhr;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-import fi.vilpponen.mhr.core.AtomicFile;
-import fi.vilpponen.mhr.core.BalanceManager;
-import fi.vilpponen.mhr.core.PersistenceException;
-import java.io.IOException;
-import java.io.Reader;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import fi.vilpponen.mhr.progression.Progress;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
-import net.fabricmc.loader.api.FabricLoader;
 
 /**
  * Which unlocks the player owns, and how far each repeatable one has been taken.
  *
- * <p>Deliberately stored outside the save: unlocks are permanent across runs, and every run is a
- * new world. The file lives in the config directory, so it survives deleting worlds.
- *
- * <p>The file is a JSON object of unlock id to level, where a missing id means the unlock is not
- * owned. A plain list of ids, which is what the mod wrote before unlocks had levels, still reads and
- * counts as level one each; it is rewritten in the current shape the first time it is read.
+ * <p>A view, not a store. What is owned lives in {@link Progress}, in one file with the currency,
+ * because a purchase moves both and there is no such thing as half of one. This is the name the
+ * rest of the mod asks by, and the place the rules about unlock ids live: what an id's ceiling is,
+ * and what counts as an id this build can act on.
  *
  * <p>What is owned is keyed by id, not by enum constant. Most ids have an {@link Unlock} behind
  * them, because some Java asks whether they are owned. Some have none: a starter item is nothing
@@ -36,108 +20,60 @@ import net.fabricmc.loader.api.FabricLoader;
  * on the id means the two kinds are the same kind here, in the file, and in the dev command —
  * which is the point of ids being strings in the first place.
  *
- * <p>Read from the worldgen threads, so the backing map is guarded by this object's monitor.
+ * <p>Read from the worldgen threads. {@link Progress} is synchronized and hands out an immutable
+ * map, so there is nothing to guard here.
  */
 public final class UnlockState {
-	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-	private static final String FILE_NAME = "hardcore-roguelite-unlocks.json";
+	private static final UnlockState INSTANCE = new UnlockState();
 
-	/**
-	 * Unlock ids that have been renamed, old name to current one.
-	 *
-	 * <p>A save written before the rename is migrated on load and rewritten once, so nobody loses a
-	 * purchase to a refactor. An entry can be dropped once no save that old can plausibly exist —
-	 * for {@code trees}, the five {@code slot_*} names and the six bare animal names that is as
-	 * soon as the mod has shipped anywhere, since they predate the namespaced ids and only ever
-	 * existed in development.
-	 */
-	private static final Map<String, String> RENAMED_IDS = Map.ofEntries(
-			Map.entry("trees", "world.trees"),
-			Map.entry("cow", "world.animal.cow"),
-			Map.entry("pig", "world.animal.pig"),
-			Map.entry("sheep", "world.animal.sheep"),
-			Map.entry("chicken", "world.animal.chicken"),
-			Map.entry("horse", "world.animal.horse"),
-			Map.entry("wolf", "world.animal.wolf"),
-			Map.entry("slot_helmet", "player.slot.helmet"),
-			Map.entry("slot_chestplate", "player.slot.chestplate"),
-			Map.entry("slot_leggings", "player.slot.leggings"),
-			Map.entry("slot_boots", "player.slot.boots"),
-			Map.entry("slot_offhand", "player.slot.offhand"));
-
-	private static volatile UnlockState instance;
-
-	private final Path file;
-	private final Map<String, Integer> levels = new TreeMap<>();
-
-	private UnlockState(Path file) {
-		this.file = file;
+	private UnlockState() {
 	}
 
 	public static UnlockState get() {
-		UnlockState local = instance;
-		if (local == null) {
-			synchronized (UnlockState.class) {
-				local = instance;
-				if (local == null) {
-					local = new UnlockState(FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME));
-					local.load();
-					instance = local;
-				}
-			}
-		}
-		return local;
+		// Touching the store here means the first caller still pays for the load, exactly as before.
+		Progress.get();
+		return INSTANCE;
 	}
 
 	/**
 	 * Throw away what is loaded and read the file again.
 	 *
-	 * <p>Nothing in the game needs this: one process is one player's unlocks from launch to exit,
-	 * and every purchase is written through as it is made. It exists for the automated tests, where
-	 * the dedicated server runs inside the client's own process — so a test that wants to know
-	 * whether a purchase really reached the file has no process boundary to cross and has to ask
-	 * for one. Between two runs is the honest place to call it, because that is where a real player
-	 * would have quit the game.
+	 * <p>For the automated tests, where the dedicated server runs inside the client's own process,
+	 * so a test that wants to know whether a purchase really reached the disk has no process
+	 * boundary to cross. See {@link Progress#reloadFromFile()}.
 	 *
 	 * @return the state as the file on disk now says it is
 	 */
 	public static UnlockState reloadFromFile() {
-		synchronized (UnlockState.class) {
-			instance = null;
-			return get();
-		}
+		Progress.reloadFromFile();
+		return INSTANCE;
 	}
 
-	/** Where what is owned is stored. Public so a test can get in the way of it on purpose. */
-	public Path file() {
-		return file;
-	}
-
-	public synchronized boolean isOwned(Unlock unlock) {
+	public boolean isOwned(Unlock unlock) {
 		return level(unlock) > 0;
 	}
 
 	/** @param id a stable unlock id, whether or not an {@link Unlock} constant carries it. */
-	public synchronized boolean isOwned(String id) {
+	public boolean isOwned(String id) {
 		return level(id) > 0;
 	}
 
 	/** How many times this unlock has been bought: zero when it is not owned at all. */
-	public synchronized int level(Unlock unlock) {
+	public int level(Unlock unlock) {
 		return level(unlock.id());
 	}
 
-	public synchronized int level(String id) {
-		return levels.getOrDefault(id, 0);
+	public int level(String id) {
+		return Progress.get().level(id);
 	}
 
 	/** @return true if this changed anything. */
-	public synchronized boolean set(Unlock unlock, boolean value) {
+	public boolean set(Unlock unlock, boolean value) {
 		return setLevel(unlock.id(), value ? Math.max(level(unlock), 1) : 0);
 	}
 
 	/** @return true if this changed anything. */
-	public synchronized boolean set(String id, boolean value) {
+	public boolean set(String id, boolean value) {
 		return setLevel(id, value ? Math.max(level(id), 1) : 0);
 	}
 
@@ -146,45 +82,21 @@ public final class UnlockState {
 	 * can hand over whatever a player typed.
 	 *
 	 * @return true if this changed anything.
+	 * @throws fi.vilpponen.mhr.core.PersistenceException if it did not reach the disk, in which case
+	 *     nothing changed at all
 	 */
-	public synchronized boolean setLevel(Unlock unlock, int level) {
+	public boolean setLevel(Unlock unlock, int level) {
 		return setLevel(unlock.id(), level);
 	}
 
 	/** @return true if this changed anything. */
-	public synchronized boolean setLevel(String id, int level) {
+	public boolean setLevel(String id, int level) {
 		int clamped = Math.clamp(level, 0, maxLevelOf(id));
 		if (clamped == level(id)) {
 			return false;
 		}
-		if (clamped == 0) {
-			levels.remove(id);
-		} else {
-			levels.put(id, clamped);
-		}
-		save();
+		Progress.get().setLevel(id, clamped);
 		return true;
-	}
-
-	/**
-	 * Set a level and write the file, whether or not the value changed.
-	 *
-	 * <p>{@link #setLevel} does nothing when the level is already what it is asked for, which is the
-	 * right answer for a purchase and the wrong one for finishing an unfinished purchase: there,
-	 * memory has already been changed and it is the <em>disk</em> that is behind. Short-circuiting
-	 * on memory would report an obligation as discharged while the file still said nothing was
-	 * bought — and the record would then be deleted on the strength of it.
-	 *
-	 * @throws fi.vilpponen.mhr.core.PersistenceException if it did not reach the disk
-	 */
-	public synchronized void restoreLevel(String id, int level) {
-		int clamped = Math.clamp(level, 0, maxLevelOf(id));
-		if (clamped == 0) {
-			levels.remove(id);
-		} else {
-			levels.put(id, clamped);
-		}
-		save();
 	}
 
 	/**
@@ -192,19 +104,19 @@ public final class UnlockState {
 	 *
 	 * <p>A constant answers for itself, from balance data. Everything else the catalogue sells — a
 	 * starter item, or an unlock whose code has not been written yet — is bought once and no more.
-	 * An id that is in neither is not clamped at all: see {@link #put}.
 	 */
 	private static int maxLevelOf(String id) {
 		Unlock unlock = Unlock.byId(id);
 		return unlock == null ? 1 : unlock.maxLevel();
 	}
 
-	public synchronized String describe() {
+	public String describe() {
+		Map<String, Integer> levels = Progress.get().levels();
 		if (levels.isEmpty()) {
 			return "(nothing)";
 		}
 		StringBuilder description = new StringBuilder();
-		for (Map.Entry<String, Integer> entry : sortedById().entrySet()) {
+		for (Map.Entry<String, Integer> entry : levels.entrySet()) {
 			if (!description.isEmpty()) {
 				description.append(", ");
 			}
@@ -217,9 +129,9 @@ public final class UnlockState {
 	}
 
 	/** The owned ids that a constant is named after. Ones with no constant are simply not here. */
-	public synchronized Set<Unlock> owned() {
+	public Set<Unlock> owned() {
 		Set<Unlock> owned = EnumSet.noneOf(Unlock.class);
-		for (String id : levels.keySet()) {
+		for (String id : Progress.get().levels().keySet()) {
 			Unlock unlock = Unlock.byId(id);
 			if (unlock != null) {
 				owned.add(unlock);
@@ -229,119 +141,7 @@ public final class UnlockState {
 	}
 
 	/** Every owned id, including the ones no {@link Unlock} constant carries. */
-	public synchronized Set<String> ownedIds() {
-		return Set.copyOf(levels.keySet());
-	}
-
-	private synchronized Map<String, Integer> sortedById() {
-		return new TreeMap<>(levels);
-	}
-
-	private synchronized void load() {
-		if (!Files.isRegularFile(file)) {
-			return;
-		}
-		boolean migrated;
-		try (Reader reader = Files.newBufferedReader(file)) {
-			JsonElement root = JsonParser.parseReader(reader);
-			if (root == null || root.isJsonNull()) {
-				return;
-			}
-			// A list of ids is the shape from before unlocks had levels, and is worth rewriting on
-			// its own, so the file on disk always says what the code says.
-			migrated = root.isJsonArray()
-					? readOwnedIds(root.getAsJsonArray())
-					: readLevels(root.getAsJsonObject());
-		} catch (IOException | RuntimeException e) {
-			HardcoreRoguelite.LOGGER.error("Could not read {}, starting with nothing unlocked", file, e);
-			return;
-		}
-
-		// Write the current shape and the current names back straight away, so a migration happens
-		// once rather than on every start. This one rewrite is allowed to fail quietly: nothing has
-		// changed about what is owned, so the only cost is doing it again next time.
-		if (migrated) {
-			try {
-				save();
-			} catch (PersistenceException e) {
-				HardcoreRoguelite.LOGGER.error("Could not rewrite {} in its current shape", file, e);
-			}
-		}
-	}
-
-	/** The shape from before unlocks had levels: a bare list of the ids owned. */
-	private synchronized boolean readOwnedIds(JsonArray ids) {
-		for (JsonElement id : ids) {
-			put(id.getAsString(), 1);
-		}
-		return true;
-	}
-
-	/** @return true if anything read had to be migrated. */
-	private synchronized boolean readLevels(JsonObject byId) {
-		boolean migrated = false;
-		for (Map.Entry<String, JsonElement> entry : byId.entrySet()) {
-			migrated |= put(entry.getKey(), entry.getValue().getAsInt());
-		}
-		return migrated;
-	}
-
-	/**
-	 * Take one id and level out of the file.
-	 *
-	 * <p>An id this build cannot act on is still kept, and still written back. A purchase is
-	 * permanent, and this build not knowing what to do with one is a fact about this build, not
-	 * about the purchase: pull a starter item out of the catalogue for a release and put it back in
-	 * the next, and the player still owns it, where dropping it on load would have quietly spent
-	 * their currency for them. It is not clamped either, because nothing here knows what its
-	 * ceiling would be. Everything that acts on an unlock asks for the one it cares about by id, so
-	 * one that resolves to nothing simply never matches.
-	 *
-	 * @return true if the id had been renamed since the file was written.
-	 */
-	private synchronized boolean put(String id, int level) {
-		String current = RENAMED_IDS.getOrDefault(id, id);
-		boolean renamed = !current.equals(id);
-		if (renamed) {
-			HardcoreRoguelite.LOGGER.info("Unlock '{}' is now called '{}'", id, current);
-		}
-
-		int kept = level;
-		if (isKnown(current)) {
-			kept = Math.clamp(level, 0, maxLevelOf(current));
-			if (kept != level) {
-				HardcoreRoguelite.LOGGER.warn("Clamping unlock '{}' level {} to {} in {}", current, level, kept, file);
-			}
-		} else {
-			HardcoreRoguelite.LOGGER.warn(
-					"Nothing in this build sells unlock '{}', which {} says is owned."
-							+ " Keeping it: a purchase is permanent, and it works again if it comes back.",
-					current, file);
-		}
-
-		if (kept > 0) {
-			levels.put(current, kept);
-		}
-		return renamed;
-	}
-
-	/** Is this an id anything in this build can act on — a constant, or something the shop sells? */
-	private static boolean isKnown(String id) {
-		return Unlock.byId(id) != null
-				|| BalanceManager.get().unlock(id).isPresent()
-				|| BalanceManager.get().borderByUnlockId(id).isPresent();
-	}
-
-	/**
-	 * @throws PersistenceException if what is owned did not reach the disk. It used to be logged and
-	 *     swallowed, which made a failed write indistinguishable from a successful one to everything
-	 *     above — including a purchase deciding whether it had happened.
-	 */
-	private synchronized void save() {
-		try {
-			AtomicFile.write(file, GSON.toJson(sortedById()));
-		} catch (IOException e) {
-			throw new PersistenceException("Could not write " + file, e);
-		}
+	public Set<String> ownedIds() {
+		return Set.copyOf(Progress.get().levels().keySet());
 	}
 }

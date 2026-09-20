@@ -6,7 +6,7 @@ import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.progression.Catalogue;
 import fi.vilpponen.mhr.progression.Offer;
 import fi.vilpponen.mhr.progression.Purchase;
-import fi.vilpponen.mhr.progression.PurchaseJournal;
+import fi.vilpponen.mhr.progression.Progress;
 import fi.vilpponen.mhr.progression.Wallet;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -35,6 +35,9 @@ import org.slf4j.LoggerFactory;
  * side by side in the same world. Inside the method the scenarios are strictly sequential and each
  * begins by putting progression back to nothing, so the order does not matter and nothing leaks
  * into the tests around it.
+ *
+ * <p>Currency and what is owned are one file, so the scenarios that used to be about two writes
+ * getting out of step are now about one write either happening or not.
  *
  * <p>Nothing here buys a border tier. Owning one resizes the world the moment it is bought, and
  * these scenarios share a world with every other server test in the batch; that path is proven in
@@ -73,21 +76,15 @@ public class ShopPurchaseGameTest {
 					this::aPurchaseIsStillThereAfterTheFilesAreReadAgain);
 			scenario(failures, "the-price-charged-is-the-one-in-the-balance-data",
 					() -> thePriceChargedIsTheOneInTheBalanceData(helper));
-			scenario(failures, "a-finished-purchase-leaves-no-record-behind",
-					this::aFinishedPurchaseLeavesNoRecordBehind);
-			scenario(failures, "a-purchase-the-disk-will-not-take-is-refused-and-costs-nothing",
-					this::aPurchaseTheDiskWillNotTakeIsRefused);
-			scenario(failures, "a-purchase-that-was-cut-off-is-finished-on-the-next-start",
-					this::aPurchaseThatWasCutOffIsFinishedOnTheNextStart);
-			scenario(failures, "a-purchase-cut-off-after-the-currency-landed-is-not-charged-twice",
-					this::aPurchaseCutOffAfterTheCurrencyLandedIsNotChargedTwice);
-			scenario(failures, "a-second-purchase-cannot-write-over-an-unfinished-one",
-					this::aSecondPurchaseCannotWriteOverAnUnfinishedOne);
+			scenario(failures, "both-halves-of-a-purchase-reach-the-disk-together",
+					this::bothHalvesOfAPurchaseReachTheDiskTogether);
+			scenario(failures, "a-purchase-the-disk-will-not-take-changes-nothing-at-all",
+					this::aPurchaseTheDiskWillNotTakeChangesNothingAtAll);
+			scenario(failures, "a-refused-write-leaves-the-previous-progression-whole",
+					this::aRefusedWriteLeavesThePreviousProgressionWhole);
 		} finally {
 			removeOverride(helper);
-			unblockTheRecord();
-			unblock(UnlockState.get().file());
-			clearTheRecord();
+			unblock(Progress.file());
 			reset();
 		}
 
@@ -262,175 +259,86 @@ public class ShopPurchaseGameTest {
 	}
 
 	/**
-	 * The ordinary state of the commit record is not to exist: a purchase that finished has nothing
-	 * left to finish.
+	 * The conservation check that the single snapshot exists for: after a purchase, the file itself
+	 * says both halves moved, and it says so having been written once.
 	 */
-	private void aFinishedPurchaseLeavesNoRecordBehind() {
+	private void bothHalvesOfAPurchaseReachTheDiskTogether() {
 		reset();
-		Wallet.get().set(priceOf(TREES));
+		int price = priceOf(TREES);
+		Wallet.get().set(price + 11);
 
 		check(Purchase.buy(TREES).bought(), "setup: the purchase should succeed");
 
-		check(!PurchaseJournal.isPending(),
-				"a purchase that finished must not leave a record behind, and one is still there");
-		check(!Files.exists(PurchaseJournal.file()),
-				"the record file itself must be gone, and " + PurchaseJournal.file() + " still exists");
+		// Read from the disk rather than from memory: memory would agree even if nothing was written.
+		Progress.reloadFromFile();
+		check(owns(TREES), TREES + " must be owned in the file, and it is not");
+		check(balance() == 11,
+				"and the currency must have moved in the same file: it holds " + balance() + " rather than 11");
 	}
 
 	/**
-	 * The commit point is a write, and a write can fail. When it does, the answer is a refusal —
-	 * not an unlock nobody paid for, and not currency taken for nothing.
+	 * A write that cannot happen changes nothing: not the disk, not memory, not what the running
+	 * game believes. This is what the single snapshot buys — there is no half of it to be left in.
 	 */
-	private void aPurchaseTheDiskWillNotTakeIsRefused() {
+	private void aPurchaseTheDiskWillNotTakeChangesNothingAtAll() {
 		reset();
 		int price = priceOf(TREES);
 		Wallet.get().set(price + 4);
-		blockTheRecord();
+		block(Progress.file());
 
 		try {
 			Purchase.Result result = Purchase.buy(TREES);
 
 			check(result.outcome() == Purchase.Outcome.NOT_SAVED,
-					"a purchase whose record cannot be written should be refused as unsaveable, and the"
-							+ " answer was " + result.outcome());
-			check(!owns(TREES), "a refused purchase must not grant the unlock");
+					"a purchase that cannot be written should be refused as unsaveable, and the answer was "
+							+ result.outcome());
+			check(!owns(TREES), "the running game must not think it owns something it could not write");
 			check(balance() == price + 4,
-					"a refused purchase must not charge: the purse went from " + (price + 4) + " to "
-							+ balance());
+					"and must not think it paid: the purse holds " + balance() + " rather than " + (price + 4));
 		} finally {
-			unblockTheRecord();
+			unblock(Progress.file());
 		}
 
-		// And the same purchase goes through once the disk will take it, so the refusal above was
-		// the write failing rather than anything else about the purchase.
+		// The same purchase goes through once the disk will take it, so the refusal was the write
+		// failing rather than anything else about the purchase.
 		check(Purchase.buy(TREES).bought(), "with the disk working again the same purchase should succeed");
 		check(owns(TREES) && balance() == 4, "and it should charge exactly once");
 	}
 
 	/**
-	 * The crash this whole arrangement exists for: the record landed, neither file did, and the
-	 * process stopped. Starting again has to produce the purchase, not lose it.
+	 * The other half of the same promise: a refused write leaves the snapshot that was already there
+	 * exactly as it was, so a restart finds the progression the player last successfully had.
 	 */
-	private void aPurchaseThatWasCutOffIsFinishedOnTheNextStart() {
-		reset();
-		int price = priceOf(TREES);
-		Wallet.get().set(price + 6);
-
-		// Exactly what a session that stopped immediately after the commit point leaves behind.
-		commitRecord(TREES, 1, 6);
-		UnlockState.reloadFromFile();
-		Wallet.reloadFromFile();
-		check(!owns(TREES), "setup: before recovery the unlock file should still say nothing is owned");
-		check(balance() == price + 6, "setup: and the purse should still be untouched");
-
-		PurchaseJournal.settle();
-
-		check(owns(TREES), "the interrupted purchase must be finished, and " + TREES + " is still not owned");
-		check(balance() == 6,
-				"and the currency must be taken exactly once: the purse holds " + balance() + " rather than 6");
-		check(!PurchaseJournal.isPending(), "a finished recovery must take its record away");
-
-		// It has to survive being read off the disk, and running recovery again must not charge a
-		// second time — which is what makes the record safe to replay.
-		UnlockState.reloadFromFile();
-		Wallet.reloadFromFile();
-		PurchaseJournal.settle();
-		check(owns(TREES) && balance() == 6,
-				"recovery must be safe to repeat, and afterwards the purse holds " + balance()
-						+ " with " + TREES + (owns(TREES) ? " owned" : " not owned"));
-	}
-
-	/**
-	 * The other half of the same window: the currency reached the disk and the unlock did not. The
-	 * record says what the total should be, not what to subtract, so finishing it cannot charge
-	 * again.
-	 */
-	private void aPurchaseCutOffAfterTheCurrencyLandedIsNotChargedTwice() {
-		reset();
-		int price = priceOf(TREES);
-		Wallet.get().set(price + 2);
-
-		commitRecord(TREES, 1, 2);
-		Wallet.get().set(2);
-		UnlockState.reloadFromFile();
-		check(!owns(TREES), "setup: the unlock half should be the one still missing");
-
-		PurchaseJournal.settle();
-
-		check(owns(TREES), "the missing half must be filled in, and " + TREES + " is still not owned");
-		check(balance() == 2,
-				"the half that had already landed must not be charged again: the purse holds " + balance()
-						+ " rather than 2");
-	}
-
-	/**
-	 * There is one commit record, so only one purchase may be outstanding at a time.
-	 *
-	 * <p>The dangerous shape: the first purchase commits, its unlock write fails, and the shop is
-	 * still open. A second purchase committing over that record would replace the only note of the
-	 * first — and the first unlock would be gone while both prices stayed spent. So the second one
-	 * is refused until the first is finished.
-	 */
-	private void aSecondPurchaseCannotWriteOverAnUnfinishedOne() {
+	private void aRefusedWriteLeavesThePreviousProgressionWhole() {
 		reset();
 		int treesPrice = priceOf(TREES);
 		int villagePrice = priceOf(VILLAGE);
-		int before = treesPrice + villagePrice + 5;
-		Wallet.get().set(before);
+		Wallet.get().set(treesPrice + villagePrice + 7);
+		check(Purchase.buy(TREES).bought(), "setup: the first purchase should succeed");
+		int after = balance();
 
-		Path unlockFile = UnlockState.get().file();
-		block(unlockFile);
+		// Not a directory this time: the snapshot has to stay readable, because the point is what is
+		// still in it afterwards. A directory where the temporary file goes stops the write just as
+		// dead and leaves the real file alone.
+		Path temporary = Progress.file().resolveSibling(Progress.file().getFileName() + ".tmp");
+		block(temporary);
 		try {
-			// Commits, takes the currency, and cannot write the unlock: exactly the state that leaves
-			// a record outstanding while the game carries on.
-			Purchase.Result first = Purchase.buy(TREES);
-			check(first.bought(), "setup: the first purchase should be reported as bought, and it was "
-					+ first.outcome());
-			check(PurchaseJournal.isPending(),
-					"setup: with the unlock file blocked the first purchase should still be outstanding");
-
-			Purchase.Result second = Purchase.buy(VILLAGE);
-
-			check(second.outcome() == Purchase.Outcome.NOT_SAVED,
-					"a second purchase must be refused while the first is unfinished, and the answer was "
-							+ second.outcome());
-			check(balance() == before - treesPrice,
-					"the refused second purchase must not be charged: the purse holds " + balance()
-							+ " rather than " + (before - treesPrice));
+			check(Purchase.buy(VILLAGE).outcome() == Purchase.Outcome.NOT_SAVED,
+					"the second purchase should be refused while the snapshot cannot be written");
 		} finally {
-			unblock(unlockFile);
+			unblock(temporary);
 		}
 
-		// The disk works again. What is outstanding is the first purchase, and only the first.
-		Wallet.reloadFromFile();
-		UnlockState.reloadFromFile();
-		check(PurchaseJournal.settle(), "with the disk working again the outstanding purchase should finish");
-
-		check(owns(TREES), TREES + " was bought first and must survive, and it is not owned");
-		check(!owns(VILLAGE), VILLAGE + " was refused and must not be owned");
-		check(balance() == before - treesPrice,
-				"exactly one price should have been charged: the purse went from " + before + " to "
-						+ balance());
+		Progress.reloadFromFile();
+		check(owns(TREES), "the purchase that did succeed must still be in the file, and " + TREES
+				+ " is not owned");
+		check(!owns(VILLAGE), "the purchase that did not must not be, and " + VILLAGE + " is owned");
+		check(balance() == after,
+				"and the currency must be what the last successful write left: " + balance() + " rather than "
+						+ after);
 	}
 
 	// --- plumbing --------------------------------------------------------------------------
-
-	/** Leave behind what a session cut off just after the commit point would have left. */
-	private static void commitRecord(String id, int level, int balance) {
-		try {
-			PurchaseJournal.commit(new PurchaseJournal.Record(id, level, balance));
-		} catch (IOException e) {
-			throw new UncheckedIOException("Could not write the purchase record", e);
-		}
-	}
-
-	private static void clearTheRecord() {
-		try {
-			Files.deleteIfExists(PurchaseJournal.file());
-		} catch (IOException e) {
-			throw new UncheckedIOException("Could not remove the purchase record", e);
-		}
-	}
 
 	/**
 	 * Make a write to this path fail, by putting a directory in its way.
@@ -464,18 +372,8 @@ public class ShopPurchaseGameTest {
 		}
 	}
 
-	private static void blockTheRecord() {
-		clearTheRecord();
-		block(PurchaseJournal.file());
-	}
-
-	private static void unblockTheRecord() {
-		unblock(PurchaseJournal.file());
-	}
-
 	/** Nothing owned, nothing to spend. Every scenario starts here. */
 	private static void reset() {
-		clearTheRecord();
 		for (Offer offer : Catalogue.offers()) {
 			UnlockState.get().setLevel(offer.id(), 0);
 		}

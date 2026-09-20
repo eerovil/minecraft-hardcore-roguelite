@@ -15,7 +15,7 @@ shop-owned or feature-owned progression store beside it.
 Permanent unlock ownership lives in `UnlockState`.
 
 `UnlockState` is deliberately stored in the Fabric config directory as
-`hardcore-roguelite-unlocks.json`, outside every Minecraft world. Deleting a run/world must not
+`hardcore-roguelite-progress.json`, outside every Minecraft world. Deleting a run/world must not
 delete what the player has bought.
 
 The persisted shape is:
@@ -192,13 +192,12 @@ shop    -> private internals of every mixin
 Both exist now, in `fi.vilpponen.mhr.progression`, sitting above the catalogue and `UnlockState`
 rather than replacing either:
 
-- `Wallet` — the permanent purse, in `config/hardcore-roguelite-currency.json`, outside every world
-  for the same reason `UnlockState` is.
+- `Progress` — the one snapshot of permanent progression, and the only writer of it. See below.
+- `Wallet` — a view of the currency in that snapshot.
 - `Catalogue` — what is for sale and at what price, read from balance data every time. The `unlocks`
   section plus the `worldBorder` tiers under their `world.border.*` ids.
 - `Purchase.buy(id)` — the one operation that turns currency into ownership. The shop screen's click
   and `/mhr unlock` both end up here or in `UnlockState` directly; nothing else moves currency.
-- `PurchaseJournal` — the commit point, and the reason a purchase cannot half-happen. See below.
 
 **Currency is still not earned.** Nothing in gameplay pays into the wallet, because how it is earned
 is the blocking open question in `docs/open-questions.md`. `/mhr currency give` is a development
@@ -214,74 +213,47 @@ stand-in. Do not add an earning rule as a side effect of another change.
 6. persist both sides safely;
 7. notify/apply runtime effects where necessary.
 
-## A purchase cannot half-happen
+## One snapshot, one write
 
-The two halves live in two files, and no ordering of two writes is safe on its own: a crash in
-between leaves either a free unlock or currency spent on nothing. So **neither file write is the
-commit point**.
+Currency and what is owned are two halves of the same thing: a purchase moves both, and a state
+where one has moved and the other has not is not a state the game should ever be in.
 
-`PurchaseJournal` is. Before either file is touched it writes one small record —
-`config/hardcore-roguelite-purchase.json`, holding the id, the level to end up owning and the total
-to be left with — atomically, through `core/AtomicFile`: temporary file, fsync, rename, fsync the
-directory. Then:
+They used to be a file each. That made a purchase two writes with a gap in the middle, and no
+amount of ordering, journalling or recovery turns two writes into one — three review rounds went by
+adding machinery to the gap before the gap itself was removed. **There is now one file**,
+`config/hardcore-roguelite-progress.json`, holding both:
 
-- **the record did not land** — nothing has moved, the purchase is refused with `NOT_SAVED`, and the
-  player still has their currency;
-- **the record landed** — the purchase is the player's. Both files are then brought up to date, and
-  once they are, the record is deleted. If the game stops first, `PurchaseJournal.settle()` finishes
-  whichever half is missing.
+```json
+{
+  "currency": 35,
+  "unlocks": { "world.trees": 1, "player.craft.enchant": 2 }
+}
+```
 
-**There is room for one record, so only one purchase may be outstanding at a time.** A second
-purchase committed over an unfinished first would replace the only note of the first, losing that
-unlock while keeping both prices. So every purchase calls `settle()` before it commits anything and
-refuses with `NOT_SAVED` if settling does not work. A record that is still there is an obligation,
-and nothing is allowed to write over it.
+`progression/Progress` owns it and is the only thing that writes it. Every change follows one rule:
 
-The record holds the values to arrive at, not the amounts to move. That is what makes replay safe:
-setting a number to what it already is does nothing, so recovery can run twice, or on a purchase
-that had in fact finished, without charging again.
+> **write, then adopt.**
 
-Consequences to keep:
+A change is built as a whole new snapshot, written through `core/AtomicFile` — temporary file,
+fsync, rename, fsync the directory, so the file is either wholly old or wholly new — and only once
+that write has landed does `Progress` start answering with the new values. A write that fails
+changes nothing at all: not the file, not memory, not what the running game believes. There is
+nothing half-applied to notice, report or recover from, and no recovery machinery.
 
-- `Wallet.save()` and `UnlockState.save()` **throw** `PersistenceException` rather than logging and
-  returning. A failed write that reports success is how a purchase ends up claimed but not stored.
-- Both put the new value in memory before writing it, so a running game stays consistent even when
-  the disk does not; the cost of a failed write is paid at the next start, by recovery.
-- `Wallet` has no `spend`. A purchase decides the total it wants while holding the wallet's monitor
-  and then sets it, because the total it writes has to be the same number that went into the record.
-- `PurchaseJournal.settle()` runs in `HardcoreRoguelite.onInitialize` before anything reads what is
-  owned, and again at the start of every purchase.
-- Settling writes both files **unconditionally**, through `Wallet.set` and `UnlockState.restoreLevel`.
-  What is outstanding is a write, not a value: the half that failed has memory that already agrees
-  and a file that does not, so `setLevel`'s "nothing changed, nothing to do" would report the
-  obligation as discharged and delete the record on the strength of it. `restoreLevel` exists for
-  exactly that and nothing else.
-- `core/AtomicFile.writeFully` loops until the buffer is drained. `FileChannel.write` is allowed to
-  take fewer bytes than it is offered, and one unchecked call would force and rename a truncated
-  file as the permanent state.
+`Purchase.buy` therefore works out what progression should look like afterwards and asks for it
+once. Either the write lands and the purchase happened, or it does not and the purchase is refused
+with `NOT_SAVED`.
 
-Do not add a second writer of either file that skips this, and do not go back to swallowing write
-failures.
+Rules to keep:
 
-That operation is the single path used by the shop. `/mhr unlock` remains a development adapter that
-grants without charging, and is not the model for charging currency.
-
-Features are told to look again through `fi.vilpponen.mhr.UnlockEffects`. A feature whose rule is
-about state that already exists — an equipment slot that just closed, the size of the world —
-registers a listener at init, and whoever changed the state fires it once. Do not call a feature
-directly from the shop or from a command; that is how one of the two callers ends up forgetting.
-
-Until currency semantics are specified by the relevant issue/design decision, do not invent:
-
-- refunds;
-- dynamic prices;
-- hidden prerequisites;
-- random shop availability;
-- per-run ownership;
-- alternative currencies.
-
-The design currently says everything is visible/buyable from the start if affordable and prices are
-fixed.
+- **One writer.** `Progress` writes; nothing else does. `Wallet` and `UnlockState` are views over it
+  and own nothing. Do not add a second file for a new kind of permanent progression — add a key to
+  the snapshot.
+- **Never change memory before the write.** That is the whole of the guarantee.
+- `Progress.commit` throws `PersistenceException` rather than logging and returning. A failed write
+  that reports success is how a purchase ends up claimed but not stored.
+- The two old files are read once, on a profile written by an older build, and left where they are.
+  A purchase that has already been paid for is not something to risk on a tidy-up.
 
 ## World border reads permanent progression
 
@@ -329,8 +301,9 @@ Examples:
 - an unknown owned id is preserved;
 - a starter catalogue entry needs no enum constant;
 - currency purchase conserves currency and cannot double-buy on one action;
-- a purchase whose commit record cannot be written changes nothing;
-- a purchase cut off after the commit record is finished by recovery, exactly once, from either half;
+- a purchase whose snapshot cannot be written changes nothing, on the disk or in memory;
+- a refused write leaves the previous snapshot wholly intact;
+- both halves of a purchase are in the file together after a reload;
 - deleting/replacing a world does not erase permanent state;
 - a new run sees the permanent purchase again.
 

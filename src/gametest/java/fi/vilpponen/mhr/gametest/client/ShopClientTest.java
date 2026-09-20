@@ -5,6 +5,11 @@ import fi.vilpponen.mhr.UnlockEffects;
 import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.border.BorderTier;
 import fi.vilpponen.mhr.core.BalanceManager;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import fi.vilpponen.mhr.progression.Catalogue;
 import fi.vilpponen.mhr.progression.Offer;
 import fi.vilpponen.mhr.progression.Wallet;
@@ -65,6 +70,8 @@ public class ShopClientTest implements FabricClientGameTest {
 						() -> clickingAnUnaffordableSquareChangesNothing(context, player));
 				scenario(context, "owned-and-part-upgraded-states-reach-the-screen",
 						() -> ownedAndPartUpgradedStatesReachTheScreen(context, player));
+				scenario(context, "a-balance-reload-reaches-an-open-shop",
+						() -> aBalanceReloadReachesAnOpenShop(context, player));
 				scenario(context, "a-square-that-is-not-drawn-cannot-be-bought",
 						() -> aSquareThatIsNotDrawnCannotBeBought(context, player));
 				scenario(context, "buying-a-border-tier-resizes-the-world",
@@ -298,6 +305,43 @@ public class ShopClientTest implements FabricClientGameTest {
 				"and then charge exactly once: the purse holds " + balanceOnServer(player) + " rather than 9");
 	}
 
+	/**
+	 * A price change reaches a shop that is already open, and the price it then shows is the price
+	 * it charges.
+	 *
+	 * <p>The screen only ever knows what it was last sent. Before this, {@code /mhr reload} changed
+	 * what the server charged without telling anyone, so an open shop went on advertising the old
+	 * price — and the first the player heard of it was being charged something else.
+	 */
+	private void aBalanceReloadReachesAnOpenShop(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		int original = priceOf(player, TREES);
+		int retuned = original + 41;
+		player.command("mhr currency set " + (retuned + 6));
+		openShop(context, player);
+
+		check(priceOnScreen(context, TREES) == original,
+				"setup: the screen should start showing the bundled price, and it shows "
+						+ priceOnScreen(context, TREES));
+
+		try {
+			writeOverride(player, "{\"unlocks\": {\"" + TREES + "\": {\"price\": " + retuned + "}}}");
+
+			check(priceOnScreen(context, TREES) == retuned,
+					"a reload must reach the open screen: it should now show " + retuned + " and it shows "
+							+ priceOnScreen(context, TREES));
+
+			// And the price it shows is the price it takes. Clicking without reopening anything.
+			clickSquare(context, player, TREES);
+			check(ownedOnServer(player, TREES), "the click should still buy it");
+			check(balanceOnServer(player) == 6,
+					"the charge must match the price on the screen: the purse went from " + (retuned + 6)
+							+ " to " + balanceOnServer(player));
+		} finally {
+			removeOverride(player);
+		}
+	}
+
 	// --- talking to the shop ------------------------------------------------------------------
 
 	/** Nothing owned, nothing to spend, no screen open — on the server, where it counts. */
@@ -452,6 +496,40 @@ public class ShopClientTest implements FabricClientGameTest {
 			}
 			return -1;
 		});
+	}
+
+	/** The price the screen is showing right now — what the player is being told it costs. */
+	private int priceOnScreen(ClientGameTestContext context, String unlockId) {
+		return context.computeOnClient(client -> {
+			for (Offer offer : SyncedShop.offers()) {
+				if (offer.id().equals(unlockId)) {
+					return offer.price();
+				}
+			}
+			return -1;
+		});
+	}
+
+	/** Retune the catalogue the way a balance edit would, and reload it as a player would. */
+	private void writeOverride(TestPlayer player, String json) {
+		Path file = player.onServerComputing(server -> BalanceManager.overrideFile());
+		try {
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, json, StandardCharsets.UTF_8);
+		} catch (IOException e) {
+			throw new UncheckedIOException("Could not write the balance override " + file, e);
+		}
+		player.command("mhr reload");
+	}
+
+	private void removeOverride(TestPlayer player) {
+		Path file = player.onServerComputing(server -> BalanceManager.overrideFile());
+		try {
+			Files.deleteIfExists(file);
+		} catch (IOException e) {
+			throw new UncheckedIOException("Could not remove the balance override " + file, e);
+		}
+		player.command("mhr reload");
 	}
 
 	private int currencyOnScreen(ClientGameTestContext context) {

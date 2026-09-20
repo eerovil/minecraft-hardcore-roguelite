@@ -238,7 +238,7 @@ Two consequences worth knowing:
 
 Nothing carries over between runs. Loom wipes `build/run/clientGameTest` before each one, and that
 directory is the client's *and* the dedicated server's game directory, so the world, the config
-directory, `hardcore-roguelite-unlocks.json` and the player's inventory all start empty. On top of
+directory, `hardcore-roguelite-progress.json` and the player's inventory all start empty. On top of
 that every scenario sets up the state it depends on rather than inheriting it — the equipment ones
 lock all five slots and empty the player, the tree ones set `world.trees` to what they need and
 clear their own patch of ground, the animal ones lock all six species — so one scenario cannot make
@@ -625,7 +625,7 @@ the unlock file, which is exactly the difference between rejoining and starting 
   unlock state first, through `UnlockState.reloadFromFile()`, because this harness runs its
   dedicated server *inside the client's process*: without that the second run would read the very
   same object the first one bought from, and a purchase that never reached
-  `hardcore-roguelite-unlocks.json` would go unnoticed. That call is the one thing the tests ask of
+  `hardcore-roguelite-progress.json` would go unnoticed. That call is the one thing the tests ask of
   the mod itself, and it exists because the process boundary a real player crosses between runs is
   the one thing the harness cannot give them. This and the one above are the two halves of "once
   per run", and neither means anything without the other.
@@ -721,19 +721,13 @@ than asserting one field:
   re-read from disk, which is the nearest a test sharing the server's process gets to quitting.
 - **the-price-charged-is-the-one-in-the-balance-data** — an override, `/mhr reload`, and the next
   purchase charges the new price.
-- **a-finished-purchase-leaves-no-record-behind** — the commit record's ordinary state is not to
-  exist.
-- **a-purchase-the-disk-will-not-take-is-refused-and-costs-nothing** — a directory is put where the
-  commit record has to go, so the write cannot succeed; the purchase is refused, nothing is charged,
-  and the same purchase then goes through once the way is clear.
-- **a-purchase-that-was-cut-off-is-finished-on-the-next-start** — a commit record is left behind the
-  way a crashed session leaves one, both files are re-read, and recovery produces the purchase. Run
-  twice, to prove replay does not charge twice.
-- **a-purchase-cut-off-after-the-currency-landed-is-not-charged-twice** — the other half of the same
-  window.
-- **a-second-purchase-cannot-write-over-an-unfinished-one** — the unlock file is blocked so the first
-  purchase commits and cannot finish; a second purchase of a different id is then refused, and once
-  the disk works again the first unlock is there and the second was never charged.
+- **both-halves-of-a-purchase-reach-the-disk-together** — the snapshot is re-read from disk rather
+  than trusted in memory, and says both the level and the currency moved.
+- **a-purchase-the-disk-will-not-take-changes-nothing-at-all** — a directory is put where the
+  snapshot has to go, so the write cannot succeed. The purchase is refused, and the running game
+  believes neither half of it; the same purchase then goes through once the way is clear.
+- **a-refused-write-leaves-the-previous-progression-whole** — one purchase succeeds, the next cannot
+  be written, and the snapshot still holds exactly what the successful one left.
 
 `AtomicFileTest` covers the writer itself in plain JUnit, including a channel that takes one byte per
 call — a real file almost never writes short, which is why a missing loop there cannot be provoked
@@ -752,6 +746,9 @@ the player would see and the left button goes down.
 - **clicking-an-unaffordable-square-changes-nothing**.
 - **owned-and-part-upgraded-states-reach-the-screen** — owned, part-upgraded, affordable and out of
   reach all established for real and read back off the screen's own copy.
+- **a-balance-reload-reaches-an-open-shop** — a price is retuned and `/mhr reload` run while the
+  shop is open; the screen shows the new price without being reopened, and the click then charges
+  what the screen was showing.
 - **a-square-that-is-not-drawn-cannot-be-bought** — one scroll notch is smaller than a square, so a
   square can be left undrawn with part of itself still inside the panel. Clicking the whole of where
   it would have been buys nothing; scrolling back and clicking the same square does, which is the
@@ -835,7 +832,7 @@ scripts/dev.sh rcon "fill 0 100 0 8 100 8 minecraft:dirt"
 scripts/dev.sh rcon "place feature minecraft:oak 4 101 4"
 ```
 
-Locked, that answers "Failed to place feature". After `mhr unlock world.trees` it answers "Placed". The unlock file lives at `/server/config/hardcore-roguelite-unlocks.json`
+Locked, that answers "Failed to place feature". After `mhr unlock world.trees` it answers "Placed". The progression file lives at `/server/config/hardcore-roguelite-progress.json`
 on the volume — outside the world, because unlocks are meant to survive it.
 
 ## Testing the villages unlock
@@ -1078,7 +1075,7 @@ scripts/dev.sh rcon "mhr unlock player.craft.enchant 4"   # straight to the top 
 scripts/dev.sh rcon "mhr lock player.craft.enchant"
 ```
 
-The levels are kept in the same file as everything else, `/server/config/hardcore-roguelite-unlocks.json`,
+The levels are kept in the same file as everything else, `/server/config/hardcore-roguelite-progress.json`,
 which is now a map of unlock id to level rather than a list of ids. A file in the old format still
 reads, with everything in it counting as level one, and is rewritten in the new shape on the spot.
 

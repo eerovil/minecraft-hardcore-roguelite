@@ -208,7 +208,7 @@ world.border.medium
 ```
 
 There is exactly one id per unlock. The same string is the key in the balance file, the value
-written to `config/hardcore-roguelite-unlocks.json`, the argument the dev command takes, and what
+written to `config/hardcore-roguelite-progress.json`, the argument the dev command takes, and what
 `Unlock.id()` returns — so `balance.unlockPrice(unlock.id())` finds the price, and nothing needs a
 table translating one id into another.
 
@@ -319,7 +319,7 @@ answer for what fits an item is asked as well.
 
 ```
 core/        shared state and config loading — Balance, BalanceManager
-progression/ the purse and the one purchase operation — Wallet, Catalogue, Purchase
+progression/ permanent state and the one purchase operation — Progress, Wallet, Catalogue, Purchase
 shop/        the shop screen, its networking and its arrangement
 features/    gameplay mechanics only — no balance numbers of their own
 ```
