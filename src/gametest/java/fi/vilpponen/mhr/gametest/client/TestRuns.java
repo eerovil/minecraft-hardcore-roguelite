@@ -1,5 +1,6 @@
 package fi.vilpponen.mhr.gametest.client;
 
+import fi.vilpponen.mhr.mixin.MinecraftServerAccessor;
 import fi.vilpponen.mhr.run.Lobby;
 import fi.vilpponen.mhr.run.RunLifecycle;
 import fi.vilpponen.mhr.run.RunPhase;
@@ -7,6 +8,7 @@ import fi.vilpponen.mhr.run.RunRecord;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
+import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
@@ -258,6 +260,31 @@ final class TestRuns {
 			context.waitTicks(2);
 		}
 		throw new AssertionError("The server never let go of " + describePlayers(server));
+	}
+
+	/**
+	 * Take the lobby dimension off the server, run something, and put it back.
+	 *
+	 * <p>The only way to ask what happens when the persistent lobby is not there. It is taken out of
+	 * the server's level map rather than closed or deleted, so the very same level object goes back
+	 * afterwards and the rest of the run carries on with it — nothing about the world on disk is
+	 * touched.
+	 */
+	static void withNoLobby(TestDedicatedServerContext server, Runnable body) {
+		ServerLevel lobby = server.computeOnServer(minecraftServer -> {
+			Map<ResourceKey<Level>, ServerLevel> levels =
+					((MinecraftServerAccessor) minecraftServer).mhr$levels();
+			return levels.remove(Lobby.LEVEL);
+		});
+		if (lobby == null) {
+			throw new AssertionError("there was no lobby to take away");
+		}
+		try {
+			body.run();
+		} finally {
+			server.runOnServer(minecraftServer ->
+					((MinecraftServerAccessor) minecraftServer).mhr$levels().put(Lobby.LEVEL, lobby));
+		}
 	}
 
 	/** Wait for one full server tick, so a command issued just before it has certainly run. */

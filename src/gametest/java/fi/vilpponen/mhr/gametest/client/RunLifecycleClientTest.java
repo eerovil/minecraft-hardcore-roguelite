@@ -143,6 +143,8 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 						() -> aFailedStartIsNotARun(server, connection));
 				scenario(context, "a-reward-that-fails-stays-owed-and-is-committed-once-on-retry",
 						() -> aFailedRewardIsRetriedOnce(server));
+				scenario(context, "a-run-cannot-start-without-a-lobby-to-leave-from",
+						() -> noLobbyMeansNoRun(server, connection));
 			}
 		}
 
@@ -589,6 +591,45 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 						+ " hook has now fired " + (RUNS_ENDED.get() - committedBefore) + " time(s) for it");
 		check(done.completedRuns() == run.completedRuns() + 1,
 				"the run is counted once, and the record counts " + done.completedRuns());
+	}
+
+	/**
+	 * With no lobby there is nowhere safe to stand, so nothing may start.
+	 *
+	 * <p>This is the branch that used to improvise. Without a lobby to evacuate into, the old code
+	 * put the player in the overworld — the very world the run start was about to delete, and the
+	 * reason they were being moved at all. So the question is not only "does it refuse" but "where
+	 * is the player afterwards", and the answer has to be: exactly where they were.
+	 */
+	private void noLobbyMeansNoRun(
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		RunRecord before = TestRuns.record(server);
+		check(before.phase() == RunPhase.LOBBY,
+				"this scenario starts between runs, and the save says " + before.describe());
+		String wasIn = TestRuns.playerDimension(server, connection);
+
+		TestRuns.withNoLobby(server, () -> {
+			TestRuns.start(server);
+
+			RunRecord after = TestRuns.record(server);
+			check(after.phase() == RunPhase.LOBBY,
+					"with no lobby dimension no run may start, and the save says " + after.describe());
+			check(after.runId() == before.runId(),
+					"a run that was refused before it began must not spend an id: it was "
+							+ before.runId() + " and is now " + after.runId());
+
+			String nowIn = TestRuns.playerDimension(server, connection);
+			check(nowIn.equals(wasIn), "a refused run must leave the player where they were, and they"
+					+ " were in " + wasIn + " and are now in " + nowIn);
+		});
+
+		// And with it back, the loop works again — so the refusal was the missing lobby and not
+		// something this scenario broke on its way past.
+		TestRuns.start(server);
+		check(TestRuns.phase(server) == RunPhase.RUNNING,
+				"with the lobby back a run must start again, and the save says "
+						+ TestRuns.record(server).describe());
+		TestRuns.end(server);
 	}
 
 	// --- plumbing --------------------------------------------------------------------------

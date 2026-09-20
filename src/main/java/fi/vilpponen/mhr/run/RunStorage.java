@@ -145,6 +145,9 @@ public final class RunStorage {
 	 * <p>Every field is required and nothing is defaulted. A record missing its run id is not a
 	 * record with run id zero — it is a record this build cannot tell the truth about, and filling
 	 * the gap in would produce a plausible-looking state that never existed.
+	 *
+	 * <p>This only turns JSON into the six values. Whether those values are a save that could
+	 * exist is {@link RunRecord}'s own rule, and it throws for itself.
 	 */
 	private static RunRecord read(JsonObject json) {
 		RunPhase phase = RunPhase.byName(required(json, "phase").getAsString());
@@ -160,20 +163,11 @@ public final class RunStorage {
 		long startedAt = number(json, "startedAt");
 		int completedRuns = wholeNumber(json, "completedRuns");
 		int rewardedRunId = wholeNumber(json, "rewardedRunId");
-		RunRecord record =
-				new RunRecord(phase, runId, seed, startedAt, completedRuns, rewardedRunId);
 
-		if (runId < 0 || completedRuns < 0 || rewardedRunId < 0) {
-			throw new IllegalStateException("negative counts in " + record.describe());
-		}
-		if (phase != RunPhase.LOBBY && runId < 1) {
-			throw new IllegalStateException(phase + " needs a run, and the run id is " + runId);
-		}
-		if (rewardedRunId > runId) {
-			throw new IllegalStateException(
-					"run " + rewardedRunId + " was rewarded but only " + runId + " runs have started");
-		}
-		return record;
+		// Whether these numbers describe a save that could exist is RunRecord's question, not this
+		// class's. Asking it here as well is how the two answers drifted apart in the first place:
+		// the loader had some of the rules and the record had the rest.
+		return new RunRecord(phase, runId, seed, startedAt, completedRuns, rewardedRunId);
 	}
 
 	private static JsonElement required(JsonObject json, String key) {

@@ -52,50 +52,58 @@ public final class Lobby {
 		return level.dimension().equals(LEVEL);
 	}
 
+	/** Is the dimension this whole loop is built on actually here? */
+	public static boolean exists(MinecraftServer server) {
+		return level(server) != null;
+	}
+
 	/**
 	 * Put a player in the lobby.
 	 *
-	 * <p>Falls back to the overworld if the lobby dimension is missing, which can only happen if
-	 * the mod's own data has been stripped out. Leaving the player inside a run world that is about
-	 * to be deleted would be worse than landing somewhere unintended.
+	 * <p>There is no fallback, deliberately. This used to drop the player into the overworld when
+	 * the lobby was missing, which is the worst place it could have chosen: the overworld is the
+	 * world a run start is about to delete, and the reason the players are being moved at all is to
+	 * get them out of it. On the way back it was worse still — the record would go on to say the
+	 * save was safely between runs while the player stood in a disposable dimension.
 	 *
-	 * @return true if the player really is in the lobby now.
+	 * <p>A missing lobby is not a situation to improvise around. It is caught at server start and
+	 * stops the loop; reaching here without one means something removed it since.
+	 *
+	 * @throws IllegalStateException if the lobby dimension is not there
 	 */
-	public static boolean send(ServerPlayer player) {
+	public static void send(ServerPlayer player) {
 		MinecraftServer server = player.level().getServer();
-		ServerLevel lobby = level(server);
-		if (lobby == null) {
-			HardcoreRoguelite.LOGGER.error(
-					"No {} dimension — is the mod's data pack loaded? Sending {} to the overworld instead.",
-					LEVEL.identifier(), player.getGameProfile().name());
-			ServerLevel overworld = server.overworld();
-			player.teleportTo(overworld, 0.5, overworld.getSeaLevel() + 1, 0.5, Set.of(), 0.0F, 0.0F, true);
-			return false;
-		}
+		ServerLevel lobby = require(server);
 
 		if (player.level().dimension().equals(LEVEL)) {
 			// Already here. Moving them within the dimension needs no dimension change, and asking
 			// for one would send the client off to load a world it is already in.
 			player.teleportTo(SPAWN.getX() + 0.5, SPAWN.getY(), SPAWN.getZ() + 0.5);
-			return true;
+			return;
 		}
 
 		player.teleportTo(lobby, SPAWN.getX() + 0.5, SPAWN.getY(), SPAWN.getZ() + 0.5,
 				Set.of(), 0.0F, 0.0F, true);
-		return true;
+	}
+
+	private static ServerLevel require(MinecraftServer server) {
+		ServerLevel lobby = level(server);
+		if (lobby == null) {
+			throw new IllegalStateException("there is no " + LEVEL.identifier()
+					+ " dimension — is the mod's data pack loaded?");
+		}
+		return lobby;
 	}
 
 	/**
 	 * Bring a player out of a finished run and into the lobby.
 	 *
 	 * @return the player as they are now — a different object from the one passed in.
+	 * @throws IllegalStateException if the lobby dimension is not there, rather than leaving them
+	 *     in a run world the record is about to describe as finished
 	 */
 	public static ServerPlayer returnFromRun(ServerPlayer player) {
-		MinecraftServer server = player.level().getServer();
-		if (level(server) == null) {
-			send(player);
-			return player;
-		}
+		require(player.level().getServer());
 		return moveThroughRespawn(player, LEVEL, SPAWN);
 	}
 

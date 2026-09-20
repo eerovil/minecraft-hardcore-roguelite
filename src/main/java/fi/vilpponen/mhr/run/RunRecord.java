@@ -13,6 +13,8 @@ package fi.vilpponen.mhr.run;
  * <p>Every transition throws {@link IllegalStateException} when the phase does not allow it, rather
  * than returning the record unchanged. A second "start run" is a bug in the caller, not a
  * no-op worth swallowing, and the coordinator turns the throw into a message for whoever asked.
+ * Constructing a record that could never have existed throws {@link IllegalArgumentException}
+ * instead: the first says "not from here", the second says "not at all".
  *
  * @param phase where the save is in the loop
  * @param runId the current (or most recent) run, counting from one; zero means no run has ever
@@ -28,6 +30,49 @@ public record RunRecord(
 
 	/** A save nobody has played yet: in the lobby, no run behind it. */
 	public static final RunRecord NEW_SAVE = new RunRecord(RunPhase.LOBBY, 0, 0L, 0L, 0, 0);
+
+	/**
+	 * Every record has to be a state the loop could actually have reached.
+	 *
+	 * <p>Here rather than in {@link RunStorage} because a record arrives two ways — off the disk and
+	 * out of a transition — and only one of those was being checked. The one that matters most is
+	 * the third rule: a run that is being built or played cannot already be marked as rewarded. If
+	 * it were, {@link #beginEnding()} would carry that forward, {@link #rewardOutstanding()} would
+	 * answer false, and the run would return to the lobby without its payout ever being handed
+	 * over — silently, and with the record looking perfectly ordinary.
+	 *
+	 * @throws IllegalArgumentException if these numbers describe a save that cannot exist
+	 */
+	public RunRecord {
+		if (phase == null) {
+			throw new IllegalArgumentException("a record needs a phase");
+		}
+		if (runId < 0 || completedRuns < 0 || rewardedRunId < 0) {
+			throw new IllegalArgumentException("counts cannot be negative: run " + runId + ", "
+					+ completedRuns + " completed, " + rewardedRunId + " rewarded");
+		}
+		if (completedRuns > runId) {
+			throw new IllegalArgumentException(completedRuns + " runs completed but only " + runId
+					+ " ever started");
+		}
+		if (rewardedRunId > runId) {
+			throw new IllegalArgumentException("run " + rewardedRunId + " was rewarded but only "
+					+ runId + " ever started");
+		}
+		if (phase != RunPhase.LOBBY) {
+			if (runId < 1) {
+				throw new IllegalArgumentException(phase + " needs a run, and the run id is " + runId);
+			}
+			if (completedRuns >= runId) {
+				throw new IllegalArgumentException("run " + runId + " is " + phase
+						+ " and cannot already be one of the " + completedRuns + " completed");
+			}
+		}
+		if ((phase == RunPhase.CREATING_RUN || phase == RunPhase.RUNNING) && rewardedRunId == runId) {
+			throw new IllegalArgumentException("run " + runId + " is " + phase
+					+ " and cannot already have been rewarded");
+		}
+	}
 
 	public boolean isRunning() {
 		return phase == RunPhase.RUNNING;

@@ -202,6 +202,82 @@ class RunRecordTest {
 	}
 
 	@Nested
+	@DisplayName("states that could never have happened")
+	class Impossible {
+		@Test
+		void aRunBeingPlayedCannotAlreadyHaveBeenRewarded() {
+			// The dangerous one. beginEnding would carry this forward, rewardOutstanding would say
+			// false, and the run would reach the lobby without its payout ever being handed over.
+			IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.RUNNING, 2, 5L, 0L, 1, 2));
+			assertTrue(thrown.getMessage().contains("rewarded"), thrown.getMessage());
+		}
+
+		@Test
+		void aRunBeingBuiltCannotAlreadyHaveBeenRewarded() {
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.CREATING_RUN, 2, 5L, 0L, 1, 2));
+		}
+
+		@Test
+		void aRunEndingMayHaveBeenRewardedBecauseThatIsTheWholePoint() {
+			RunRecord paid = new RunRecord(RunPhase.ENDING_RUN, 2, 5L, 0L, 1, 2);
+
+			assertFalse(paid.rewardOutstanding());
+		}
+
+		@Test
+		void moreRunsCannotHaveFinishedThanEverStarted() {
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.LOBBY, 1, 5L, 0L, 2, 1));
+		}
+
+		@Test
+		void aRunCannotBeRewardedBeforeItHasStarted() {
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.LOBBY, 1, 5L, 0L, 1, 4));
+		}
+
+		@Test
+		void theRunBeingPlayedCannotAlsoBeOneOfTheCompletedOnes() {
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.RUNNING, 2, 5L, 0L, 2, 1));
+		}
+
+		@Test
+		void aPhaseOtherThanTheLobbyNeedsARun() {
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.RUNNING, 0, 5L, 0L, 0, 0));
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.ENDING_RUN, 0, 5L, 0L, 0, 0));
+		}
+
+		@Test
+		void countsCannotBeNegative() {
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.LOBBY, -1, 5L, 0L, 0, 0));
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.LOBBY, 1, 5L, 0L, -1, 0));
+			assertThrows(IllegalArgumentException.class,
+					() -> new RunRecord(RunPhase.LOBBY, 1, 5L, 0L, 0, -1));
+		}
+
+		@Test
+		void everyTransitionProducesALegalRecord() {
+			// The rules are only worth having if the loop itself can still go round.
+			RunRecord record = RunRecord.NEW_SAVE;
+			for (int run = 0; run < 5; run++) {
+				record = record.beginCreating(run, run).created().beginEnding().rewarded()
+						.returnedToLobby();
+			}
+			assertEquals(5, record.completedRuns());
+			assertEquals(5, record.runId());
+
+			assertEquals(RunPhase.LOBBY, record.beginCreating(9L, 0L).abandoned().phase());
+		}
+	}
+
+	@Nested
 	@DisplayName("what a reload means")
 	class Recovery {
 		@Test

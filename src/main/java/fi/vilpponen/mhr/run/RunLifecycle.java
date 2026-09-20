@@ -108,6 +108,14 @@ public final class RunLifecycle {
 			throw new IllegalStateException("no server is running");
 		}
 		refuseIfQuarantined();
+		if (!Lobby.exists(server)) {
+			// Asked now, not only at server start. This is the last moment before anything is
+			// destroyed, and a run with nowhere to come back to must not begin: the players would
+			// be evacuated into the very world about to be deleted, and the run that ended would
+			// have no lobby to return them to.
+			throw new IllegalStateException("there is no " + Lobby.LEVEL.identifier()
+					+ " dimension to come back to, so no run may start");
+		}
 
 		long chosen = seed.orElseGet(RunWorlds::randomSeed);
 		// Written down before a single file is touched, so a crash during world creation is found
@@ -115,10 +123,20 @@ public final class RunLifecycle {
 		set(record.beginCreating(chosen, System.currentTimeMillis()));
 		HardcoreRoguelite.LOGGER.info("Starting run {} on seed {}", record.runId(), chosen);
 
-		// Nobody may be standing in a world that is about to be deleted.
+		// Nobody may be standing in a world that is about to be deleted. Checked afterwards as well
+		// as attempted, because "we asked them to leave" and "they left" are different claims and
+		// RunWorlds is entitled to the second one.
 		for (ServerPlayer player : players()) {
 			if (!Lobby.isLobby(player.level())) {
 				Lobby.send(player);
+			}
+		}
+		for (ServerPlayer player : players()) {
+			if (isRunLevel(player.level())) {
+				abandonCreation(new IllegalStateException(player.getGameProfile().name()
+						+ " is still in " + player.level().dimension().identifier()));
+				throw new IllegalStateException("run " + record.runId() + " cannot be built while"
+						+ " somebody is still in a world it would delete");
 			}
 		}
 
@@ -207,6 +225,11 @@ public final class RunLifecycle {
 	 * why every step of it asks the record whether it still needs doing.
 	 */
 	private synchronized void finishEnding() {
+		if (!Lobby.exists(server)) {
+			HardcoreRoguelite.LOGGER.error("Run {} cannot be finished: there is no lobby to return"
+					+ " to. The run stays unfinished and will be tried again.", record.runId());
+			return;
+		}
 		if (record.rewardOutstanding() && !commitReward()) {
 			// Still owed. The run stays in ENDING_RUN, which is the one phase the next server start
 			// finishes on its own, and /mhr run end retries it in the meantime.
@@ -218,6 +241,20 @@ public final class RunLifecycle {
 			revive(inTheLobby);
 			inTheLobby.sendSystemMessage(Component.literal(
 					"Run " + record.runId() + " is over. You are back in the lobby."));
+		}
+
+		// Only now. The record saying the save is between runs has to mean nobody is left standing
+		// in a run world — those worlds are deleted at the next start, and a player still in one
+		// would be deleted along with it.
+		for (ServerPlayer player : players()) {
+			if (isRunLevel(player.level())) {
+				HardcoreRoguelite.LOGGER.error("Run {} cannot be finished: {} is still in {}."
+						+ " The run stays unfinished and will be tried again.", record.runId(),
+						player.getGameProfile().name(), player.level().dimension().identifier());
+				tellEverybody("This run could not be finished — somebody is still in it."
+						+ " It will be tried again.");
+				return;
+			}
 		}
 
 		set(record.returnedToLobby());
@@ -286,6 +323,16 @@ public final class RunLifecycle {
 			HardcoreRoguelite.LOGGER.error("This save's run record cannot be read, so the loop is"
 					+ " stopped: no run will start or end, and nothing will be written over it."
 					+ " Fix or remove {}", storage.file(), unreadable);
+			return;
+		}
+
+		if (!Lobby.exists(started)) {
+			// The same class of fault as an unreadable record, and the same answer. Without the
+			// lobby there is nowhere safe to put anybody, and every move this loop makes assumes
+			// there is: a run start would evacuate players into the world it is about to delete.
+			this.quarantine = "there is no " + Lobby.LEVEL.identifier() + " dimension";
+			HardcoreRoguelite.LOGGER.error("This save has no lobby dimension, so the loop is"
+					+ " stopped: no run will start or end. Is the mod's data pack loaded?");
 			return;
 		}
 

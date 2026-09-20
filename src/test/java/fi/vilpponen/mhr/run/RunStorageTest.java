@@ -161,6 +161,28 @@ class RunStorageTest {
 	}
 
 	@Test
+	@DisplayName("a saved run that says it was already rewarded is refused")
+	void aRunningRecordCannotBeAlreadyRewarded() {
+		// Parse-valid and quietly ruinous: rewardOutstanding would answer false when the run ends,
+		// so its real payout would never be handed over.
+		assertThrows(RunStorage.UnreadableRecord.class, () -> load(
+				"{\"phase\":\"RUNNING\",\"runId\":2,\"seed\":5,\"startedAt\":1,"
+						+ "\"completedRuns\":1,\"rewardedRunId\":2}"));
+
+		assertThrows(RunStorage.UnreadableRecord.class, () -> load(
+				"{\"phase\":\"CREATING_RUN\",\"runId\":2,\"seed\":5,\"startedAt\":1,"
+						+ "\"completedRuns\":1,\"rewardedRunId\":2}"));
+	}
+
+	@Test
+	@DisplayName("more runs completed than ever started is refused")
+	void moreCompletedThanStarted() {
+		assertThrows(RunStorage.UnreadableRecord.class, () -> load(
+				"{\"phase\":\"LOBBY\",\"runId\":1,\"seed\":5,\"startedAt\":1,"
+						+ "\"completedRuns\":4,\"rewardedRunId\":1}"));
+	}
+
+	@Test
 	@DisplayName("a record that contradicts itself is refused")
 	void contradictoryRecord() {
 		// Playing run 0, which never existed.
