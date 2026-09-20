@@ -11,7 +11,7 @@ Namespace `mhr-dev`, one 40 GB volume, three pods:
 | Pod            | Image                    | Job |
 | -------------- | ------------------------ | --- |
 | `mhr-build`    | `gradle:jdk25`           | Sleeps. You exec Gradle in it. Holds the source tree and the Gradle cache. |
-| `mhr-gametest` | `gradle:jdk25` + Xvfb    | Sleeps. Runs the automated gameplay tests, client and all. |
+| `mhr-gametest` | `mhr-gametest` (baked)   | Sleeps. Runs the automated gameplay tests, client and all. |
 | `mhr-server`   | `itzg/minecraft-server`  | A Fabric 26.3 dedicated server with the mod in its `mods/`. |
 
 The volume is laid out as `/workspace` (source), `/gradle` (cache and the Minecraft artifacts),
@@ -56,8 +56,8 @@ scripts/dev.sh logs    # follow the server log
 `go` is the loop. Edit here, run `go`, reconnect. A rebuild after a small change takes seconds;
 the server restart is the slow part, about half a minute.
 
-Other commands: `sync`, `build`, `deploy`, `gametest`, `console`, `rcon`, `shell`, `newworld`,
-`status`, `down`, `nuke`. Run `scripts/dev.sh` with no arguments for the list.
+Other commands: `sync`, `build`, `deploy`, `gametest`, `image`, `console`, `rcon`, `shell`,
+`newworld`, `status`, `down`, `nuke`. Run `scripts/dev.sh` with no arguments for the list.
 
 `sync` copies exactly what a commit would see — tracked files plus untracked ones that are not
 gitignored. It wipes `src/`, `k8s/` and `scripts/` in the pod first so deleted files do not
@@ -84,15 +84,16 @@ check. There is nothing to confirm between iterations: change the code, run it a
 
 ### Where it runs
 
-In a third pod, `mhr-gametest`, not in the build pod and not against the dev server. It is the same
-`gradle:jdk25` image plus `xvfb` and Mesa's software OpenGL driver, apt-installed at startup —
-nothing in the cluster has a GPU, so the client renders with `llvmpipe` into a 1280×720 virtual
-display. That works, and it is slow: a full run is minutes, most of it the client starting.
+In a third pod, `mhr-gametest`, not in the build pod and not against the dev server. It runs an
+image of its own — the same `gradle:jdk25` base with `xvfb` and Mesa's software OpenGL driver
+baked in, see [The gametest image](#the-gametest-image). Nothing in the cluster has a GPU, so the
+client renders with `llvmpipe` into a 1280×720 virtual display. That works, and it is slow: a full
+run is minutes, most of it the client starting.
 
 It has a Gradle cache of its own (`/pvc/gradle-gametest`) and a source tree of its own
 (`/pvc/gametest/workspace`), so it neither waits for nor breaks someone else's `scripts/dev.sh go`.
-The container is root only so that apt-get works; Gradle itself is dropped back to uid 1000, so
-nothing root-owned lands on the volume.
+The container is root so that its startup script can chown the directories it makes on the shared
+volume; Gradle itself is dropped back to uid 1000, so nothing root-owned lands on the volume.
 
 That source tree is shared between people, though, the same way the build pod's is. Two `gametest`
 runs at once overwrite each other's `src/` halfway through, which shows up as *somebody else's*
@@ -113,6 +114,53 @@ Two things had to be arranged for the client to start headless at all, both in `
   spelling was `SDL_VIDEO_X11_FORCE_EGL` and SDL3 ignores it silently, which looks exactly like the
   variable not working.
 - **Xvfb at 24-bit colour**, started once per pod and reused.
+
+### The gametest image
+
+The X and Mesa packages used to be `apt-get`-ed every time the pod started: a dependency on
+Debian's mirrors being up at that moment, and a test environment that was whatever apt resolved
+that day. It also cost about 15 seconds of every pod start — scheduled-to-ready measured 21s
+before and 6s after, so if you came here looking for the minute or two the original issue
+estimated, it is not there. Pinning the environment is the reason that survived. They are baked
+into an image now,
+[`k8s/gametest.Dockerfile`](../k8s/gametest.Dockerfile), and the pod's startup script is down to
+making directories and sleeping.
+
+Building it is the one thing that cannot be done from this machine. The only node is the Mac, it
+is arm64, and this desktop is x86_64 — so the image is built natively on the Mac rather than
+cross-built under qemu here. `scripts/dev.sh image` does not build anything; it prints the command
+to run **on the Mac**, generated from the Dockerfile so the Dockerfile stays the only copy of what
+goes into the image.
+
+```sh
+# 1. bump the tag in k8s/dev.yaml if the Dockerfile changed
+# 2. print the build command and run what it prints, on the Mac
+scripts/dev.sh image
+# 3. put the new tag in the cluster and wait for the pod
+kubectl apply -f k8s/dev.yaml
+kubectl -n mhr-dev rollout status deploy/mhr-gametest --timeout=5m
+```
+
+`apply`, not `rollout restart`. A restart rolls the deployment as the cluster already has it, so
+it would faithfully start the old tag again; the new tag only exists in your local
+`k8s/dev.yaml` until something applies it.
+
+**There is no registry, and that is deliberate.** The command imports the built image straight
+into the node container's containerd (`docker save … | docker exec desktop-control-plane ctr -n
+k8s.io images import -`), which is exactly what `kind load docker-image` does and works because
+this is a kind cluster whose node is a container on the Mac's Docker. An in-cluster registry was
+the other option and is worse here: containerd refuses plain-HTTP registries even on `localhost`,
+unlike the old Docker daemon, so it would need either a TLS certificate or a `hosts.toml` dropped
+on the node — and Docker Desktop tends to reset node-level configuration across restarts. The
+import route leaves no standing infrastructure to keep alive.
+
+Two consequences worth knowing:
+
+- **The tag is pinned in `k8s/dev.yaml`** (`mhr-gametest:1`) and `scripts/dev.sh image` reads it
+  from there. Change the Dockerfile, bump the tag in the manifest, rebuild, apply — otherwise the
+  node keeps the old image under the old name and nothing tells you.
+- **`imagePullPolicy: Never`.** Nothing can pull this image from anywhere. A pod stuck on
+  `ErrImageNeverPull` means the node has never been given the image, not that a pull failed.
 
 ### Test isolation
 
@@ -1003,9 +1051,9 @@ removes both pods but keeps the volume, so bringing it back is fast.
   ```sh
   kubectl -n mhr-dev exec deploy/mhr-gametest -- pkill -f KnotClient
   ```
-- The gametest pod apt-gets its virtual display on every start, so the first `scripts/dev.sh
-  gametest` after a pod restart waits a minute for that, and a run with a cold Gradle cache waits
-  rather longer while it downloads Minecraft again.
+- A `scripts/dev.sh gametest` with a cold Gradle cache waits a long while downloading Minecraft
+  again. The pod start itself is no longer part of that: the virtual display is baked into the
+  image, see [The gametest image](#the-gametest-image).
 - The Gradle `runServer`/`runClient` dev tasks from Loom are not used here; the mod is tested as a
   built jar against a real server, which is closer to how it will ship but slower to iterate.
 - The cluster is a `kind` cluster with no port mappings, hence the port-forward. Exposing 25565 on
