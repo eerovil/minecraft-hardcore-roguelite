@@ -1,6 +1,7 @@
 package fi.vilpponen.mhr.gametest.client;
 
 import fi.vilpponen.mhr.UnlockState;
+import fi.vilpponen.mhr.gametest.mixin.ChatComponentAccessor;
 import fi.vilpponen.mhr.run.Lobby;
 import fi.vilpponen.mhr.run.RunEvents;
 import fi.vilpponen.mhr.run.RunPhase;
@@ -14,6 +15,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
+import net.minecraft.client.multiplayer.chat.GuiMessage;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
@@ -146,6 +148,18 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 				scenario(context, "a-run-cannot-start-without-a-lobby-to-leave-from",
 						() -> noLobbyMeansNoRun(server, connection));
 			}
+
+			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "quitting-inside-a-run-and-returning-to-the-next-one-keeps-nothing",
+					() -> theNextRunDoesNotInheritTheLastOnes(context, server));
+
+			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "reconnecting-to-the-same-run-keeps-everything",
+					() -> theSameRunKeepsWhatYouHad(context, server));
+
+			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "joining-a-server-with-no-lobby-does-not-fault",
+					() -> joiningWithNoLobby(context, server));
 		}
 
 		if (!failures.isEmpty()) {
@@ -564,11 +578,15 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		RunRecord run = TestRuns.record(server);
 
 		FAIL_RUN_END.set(true);
+		int reported;
 		try {
-			TestRuns.end(server);
+			reported = TestRuns.runCommandResult(server, "mhr run end");
 		} finally {
 			FAIL_RUN_END.set(false);
 		}
+
+		check(reported == 0, "a run that could not be finished must not be reported as finished, and"
+				+ " /mhr run end returned " + reported);
 
 		RunRecord stuck = TestRuns.record(server);
 		check(stuck.phase() == RunPhase.ENDING_RUN,
@@ -580,8 +598,9 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 						+ " against " + committedBefore + " before");
 		check(stuck.runId() == run.runId(), "it is still the same run");
 
-		// The retry: the same run, handed over once.
-		TestRuns.end(server);
+		// The retry: the same run, handed over once, and said so this time.
+		int retried = TestRuns.runCommandResult(server, "mhr run end");
+		check(retried == 1, "the retry finished the run and must say so, and it returned " + retried);
 
 		RunRecord done = TestRuns.record(server);
 		check(done.phase() == RunPhase.LOBBY,
@@ -630,6 +649,141 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 				"with the lobby back a run must start again, and the save says "
 						+ TestRuns.record(server).describe());
 		TestRuns.end(server);
+	}
+
+	/**
+	 * Logging out inside a run and coming back to a later one.
+	 *
+	 * <p>The case a dimension key cannot see. This player quits in {@code minecraft:overworld}
+	 * during one run; that run ends and the next replaces the overworld under the same key. On
+	 * their return the saved dimension says overworld and the server says the overworld is a run
+	 * dimension, and nothing in that agreement is a reason to let them keep the last run's things.
+	 */
+	private void theNextRunDoesNotInheritTheLastOnes(
+			ClientGameTestContext context, TestDedicatedServerContext server) {
+		TestRuns.start(server);
+		int leftDuring = TestRuns.record(server).runId();
+
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			settle(context, connection);
+			check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
+					"this scenario needs the player inside the run, and they are in "
+							+ TestRuns.playerDimension(server, connection));
+
+			server.runCommand("give Player0 minecraft:diamond 5");
+			server.runCommand("item replace entity Player0 enderchest.0 with minecraft:emerald 3");
+			server.runCommand("xp set Player0 7 levels");
+			TestRuns.settle(server);
+			check(!TestRuns.runLocalStateOf(server).equals(TestRuns.NOTHING_CARRIED),
+					"this scenario has to start with something to lose");
+		}
+		// Quit inside the run, in the overworld — not the lobby.
+		TestRuns.waitForNobodyConnected(context, server);
+
+		TestRuns.end(server);
+		TestRuns.start(server);
+		int cameBackTo = TestRuns.record(server).runId();
+		check(cameBackTo > leftDuring,
+				"the next run must be a different run: left during " + leftDuring + ", came back to "
+						+ cameBackTo);
+
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			settle(context, connection);
+
+			String carried = TestRuns.runLocalStateOf(server);
+			check(carried.equals(TestRuns.NOTHING_CARRIED),
+					"a player who logged out in run " + leftDuring + " and came back in run "
+							+ cameBackTo + " must arrive with nothing from the old one, and they have "
+							+ carried);
+			check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
+					"and they still belong in the run");
+		}
+	}
+
+	/**
+	 * The other half, and the reason the reset cannot simply always happen: coming back to the run
+	 * you were actually playing has to leave everything alone.
+	 */
+	private void theSameRunKeepsWhatYouHad(
+			ClientGameTestContext context, TestDedicatedServerContext server) {
+		check(TestRuns.phase(server) == RunPhase.RUNNING,
+				"this scenario needs a run in progress, and the save says "
+						+ TestRuns.record(server).describe());
+
+		String before;
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			settle(context, connection);
+			server.runCommand("give Player0 minecraft:diamond 5");
+			server.runCommand("item replace entity Player0 enderchest.0 with minecraft:emerald 3");
+			server.runCommand("xp set Player0 7 levels");
+			TestRuns.settle(server);
+
+			before = TestRuns.runLocalStateOf(server);
+			check(!before.equals(TestRuns.NOTHING_CARRIED), "something to keep");
+		}
+		TestRuns.waitForNobodyConnected(context, server);
+
+		try (TestDedicatedServerConnection returned = server.connect()) {
+			settle(context, returned);
+
+			String after = TestRuns.runLocalStateOf(server);
+			check(after.equals(before), "coming back to the run you were playing must keep what you"
+					+ " had: " + before + " before, " + after + " after");
+		}
+	}
+
+	/**
+	 * Somebody logs in and there is no lobby to put them in.
+	 *
+	 * <p>The join used to ask for the lobby unconditionally, which throws for exactly the reason
+	 * the save is in trouble — so the player's placement faulted and they never heard why. The
+	 * point of this scenario is that joining still works: they stay connected, and they stay where
+	 * they are, which is safe precisely because no run is in progress to delete it.
+	 */
+	private void joiningWithNoLobby(
+			ClientGameTestContext context, TestDedicatedServerContext server) {
+		if (TestRuns.phase(server) != RunPhase.LOBBY) {
+			TestRuns.end(server);
+		}
+		check(TestRuns.phase(server) == RunPhase.LOBBY,
+				"this scenario starts between runs, and the save says "
+						+ TestRuns.record(server).describe());
+
+		TestRuns.withNoLobby(server, () -> {
+			try (TestDedicatedServerConnection connection = server.connect()) {
+				settle(context, connection);
+
+				String where = TestRuns.playerDimension(server, connection);
+				check(!where.equals("nowhere (not connected)"),
+						"joining a server with no lobby must not throw the player out, and they are "
+								+ where);
+				check(TestRuns.phase(server) == RunPhase.LOBBY,
+						"and it must not have moved the loop on: " + TestRuns.record(server).describe());
+
+				// The part that actually distinguishes handling it from faulting on it. Asking for
+				// the missing lobby throws inside the placement task, which is survivable and
+				// silent — the player is left standing there with no idea anything is wrong.
+				check(wasToldOnTheClient(context, "no lobby on this server"),
+						"the player must be told why nothing is happening, and the messages they"
+								+ " have are " + clientMessages(context));
+			}
+		});
+		TestRuns.waitForNobodyConnected(context, server);
+	}
+
+	/** Has the client been shown a message containing this? */
+	private static boolean wasToldOnTheClient(ClientGameTestContext context, String fragment) {
+		return clientMessages(context).contains(fragment);
+	}
+
+	private static String clientMessages(ClientGameTestContext context) {
+		return context.computeOnClient(client -> {
+			StringBuilder said = new StringBuilder();
+			for (GuiMessage message : ((ChatComponentAccessor) client.gui.hud.getChat()).mhr$allMessages()) {
+				said.append(message.content().getString()).append(" | ");
+			}
+			return said.toString();
+		});
 	}
 
 	// --- plumbing --------------------------------------------------------------------------

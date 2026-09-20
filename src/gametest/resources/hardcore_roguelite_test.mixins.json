@@ -6,7 +6,8 @@
 		"GameTestHelperAccessor"
 	],
 	"client": [
-		"ContainerScreenAccessor"
+		"ContainerScreenAccessor",
+		"ChatComponentAccessor"
 	],
 	"injectors": {
 		"defaultRequire": 1

@@ -58,9 +58,13 @@ public final class RunLifecycle {
 	/**
 	 * Why this save is not being played, or null when it is.
 	 *
-	 * <p>Set when the record exists and cannot be believed. Everything that would move the loop on,
-	 * or write over the file, refuses while this is set — the alternative is deciding on the
-	 * player's behalf that whatever run the file described did not happen.
+	 * <p>Set when the save cannot be played safely: the record exists and cannot be believed, or
+	 * the lobby the whole loop is built on is not there. Everything that would move the loop on, or
+	 * write over the file, refuses while this is set — the alternative is deciding on the player's
+	 * behalf that whatever the save was doing did not happen.
+	 *
+	 * <p>Reads as a phrase that finishes "this save is stopped: …", because it is shown to whoever
+	 * has to fix it as often as it is logged.
 	 */
 	private String quarantine;
 
@@ -162,6 +166,7 @@ public final class RunLifecycle {
 			// different one — everything after this has to use it. See Lobby.leaveForRun.
 			ServerPlayer inTheRun = Lobby.leaveForRun(player, overworld, spawn);
 			resetForNewRun(inTheRun);
+			RunAdmission.admit(inTheRun, record.runId());
 			inTheRun.sendSystemMessage(Component.literal("Run " + record.runId() + " begins."));
 		}
 	}
@@ -199,9 +204,12 @@ public final class RunLifecycle {
 	 * <p>Separate from {@link #playerDied} so the dev command can end a run without killing anybody
 	 * and so recovery can finish a run that a crash interrupted.
 	 *
+	 * @return true if the run is finished and the save is back in the lobby. False means it is not
+	 *     — the reward could not be handed over, or somebody could not be got out of the run — and
+	 *     it stays in {@link RunPhase#ENDING_RUN} to be tried again.
 	 * @throws IllegalStateException if no run is in progress
 	 */
-	public synchronized void endRun(String reason) {
+	public synchronized boolean endRun(String reason) {
 		refuseIfQuarantined();
 		if (record.phase() == RunPhase.ENDING_RUN) {
 			// Already over, and stuck: a previous attempt could not commit the reward or could not
@@ -209,13 +217,12 @@ public final class RunLifecycle {
 			// in this state has a way out that is not "restart the server".
 			HardcoreRoguelite.LOGGER.info("Run {} was already ending; trying to finish it again",
 					record.runId());
-			finishEnding();
-			return;
+			return finishEnding();
 		}
 
 		set(record.beginEnding());
 		HardcoreRoguelite.LOGGER.info("Run {} is over: {}", record.runId(), reason);
-		finishEnding();
+		return finishEnding();
 	}
 
 	/**
@@ -223,17 +230,21 @@ public final class RunLifecycle {
 	 *
 	 * <p>Also the recovery path for a save that was loaded in {@link RunPhase#ENDING_RUN}, which is
 	 * why every step of it asks the record whether it still needs doing.
+	 *
+	 * @return true if the save reached the lobby. Every early return here is a run left unfinished
+	 *     on purpose, and callers have to be able to tell that from success — otherwise the command
+	 *     that asked for it reports the opposite of what happened.
 	 */
-	private synchronized void finishEnding() {
+	private synchronized boolean finishEnding() {
 		if (!Lobby.exists(server)) {
 			HardcoreRoguelite.LOGGER.error("Run {} cannot be finished: there is no lobby to return"
 					+ " to. The run stays unfinished and will be tried again.", record.runId());
-			return;
+			return false;
 		}
 		if (record.rewardOutstanding() && !commitReward()) {
 			// Still owed. The run stays in ENDING_RUN, which is the one phase the next server start
 			// finishes on its own, and /mhr run end retries it in the meantime.
-			return;
+			return false;
 		}
 
 		for (ServerPlayer player : players()) {
@@ -253,11 +264,12 @@ public final class RunLifecycle {
 						player.getGameProfile().name(), player.level().dimension().identifier());
 				tellEverybody("This run could not be finished — somebody is still in it."
 						+ " It will be tried again.");
-				return;
+				return false;
 			}
 		}
 
 		set(record.returnedToLobby());
+		return true;
 	}
 
 	/**
@@ -319,7 +331,7 @@ public final class RunLifecycle {
 			// or a run owing a reward, and starting over would throw either away. Nothing moves and
 			// nothing is written until somebody has looked at it.
 			this.record = RunRecord.NEW_SAVE;
-			this.quarantine = unreadable.getMessage();
+			this.quarantine = "its run record cannot be read";
 			HardcoreRoguelite.LOGGER.error("This save's run record cannot be read, so the loop is"
 					+ " stopped: no run will start or end, and nothing will be written over it."
 					+ " Fix or remove {}", storage.file(), unreadable);
@@ -383,27 +395,49 @@ public final class RunLifecycle {
 				record.describe());
 
 		if (quarantine != null) {
-			Lobby.send(player);
+			// Two different faults end up here and they cannot be handled the same way. When the
+			// record is unreadable the lobby is fine and is where the player belongs; when the
+			// lobby itself is what is missing, asking to go there throws for exactly the reason the
+			// save was stopped, and the player would never hear why.
+			if (Lobby.exists(server)) {
+				Lobby.send(player);
+			}
 			player.sendSystemMessage(Component.literal(
-					"This save's run record cannot be read, so the loop is stopped. See the server"
-							+ " log; nothing has been overwritten."));
+					"This save is stopped: " + quarantine + ". See the server log; nothing has been"
+							+ " overwritten."));
 			return;
 		}
 		if (!record.isRunning()) {
+			if (!Lobby.exists(server)) {
+				// The lobby has gone since this server started, so there is nowhere to put them.
+				// Leaving them where they are is the only safe answer — no run is in progress, so
+				// nothing is about to delete the world they are standing in.
+				HardcoreRoguelite.LOGGER.error("{} joined but there is no {} dimension to put them"
+						+ " in. Is the mod's data pack still loaded?",
+						player.getGameProfile().name(), Lobby.LEVEL.identifier());
+				player.sendSystemMessage(Component.literal(
+						"There is no lobby on this server, so the loop is stopped. See the server log."));
+				return;
+			}
 			Lobby.send(player);
 			player.sendSystemMessage(Component.literal(
 					"No run in progress. Start one with /mhr run start."));
 			return;
 		}
-		if (isRunLevel(player.level())) {
+		if (isRunLevel(player.level()) && RunAdmission.isAdmittedTo(player, record.runId())) {
+			// Genuinely back in the run they were playing. Everything they are carrying is theirs.
 			return;
 		}
 
-		// What is left is a player logging in from a saved position in the lobby while a run is
-		// going: they were between runs when they quit and somebody started one. Leaving the lobby
-		// is a respawn — see Lobby.leaveForRun — and a respawn has to wait for the login to finish.
-		// Moving a half-placed player takes them out of the server's list and the rest of the login
-		// then files the original, which nothing ever removes; the slot leaks for the session.
+		// What is left is somebody who has not crossed this run's start boundary. Either they were
+		// in the lobby when it started, or — and this is the one a dimension key cannot see — they
+		// logged out inside the *previous* run, whose overworld has since been replaced by this
+		// one's under the same key. See RunAdmission.
+		//
+		// Leaving the lobby is a respawn — see Lobby.leaveForRun — and a respawn has to wait for
+		// the login to finish. Moving a half-placed player takes them out of the server's list and
+		// the rest of the login then files the original, which nothing ever removes; the slot leaks
+		// for the session.
 		if (!listed(player) && ticksWaited < JOIN_SETTLE_TICKS) {
 			server.execute(() -> placeOnJoin(player, ticksWaited + 1));
 			return;
@@ -420,6 +454,7 @@ public final class RunLifecycle {
 		ServerPlayer inTheRun =
 				Lobby.leaveForRun(player, server.overworld(), server.getRespawnData().pos());
 		resetForNewRun(inTheRun);
+		RunAdmission.admit(inTheRun, record.runId());
 		inTheRun.sendSystemMessage(Component.literal(
 				"Run " + record.runId() + " started while you were away. You have joined it."));
 	}
@@ -431,16 +466,14 @@ public final class RunLifecycle {
 	 */
 	private void refuseIfQuarantined() {
 		if (quarantine != null) {
-			throw new IllegalStateException("this save's run record cannot be read, so nothing may"
-					+ " start, end or be written over it — " + quarantine);
+			throw new IllegalStateException("this save is stopped and nothing may start, end or be"
+					+ " written over it: " + quarantine);
 		}
 	}
 
 	/** What the loop is doing, or why it is not. */
 	public synchronized String describe() {
-		return quarantine == null
-				? record.describe()
-				: "stopped — the run record cannot be read: " + quarantine;
+		return quarantine == null ? record.describe() : "stopped: " + quarantine;
 	}
 
 	/** Is this the very object the server has connected, rather than one that merely matches it? */

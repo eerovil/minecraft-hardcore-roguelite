@@ -156,6 +156,7 @@ public final class Lobby {
 
 		ServerPlayer arrived =
 				server.getPlayerList().respawn(player, true, Entity.RemovalReason.CHANGED_DIMENSION);
+		RunAdmission.carryOver(player, arrived);
 		arrived.connection.player = arrived;
 		arrived.connection.resetPosition();
 		arrived.setHealth(arrived.getMaxHealth());

@@ -58,12 +58,25 @@ public final class RunCommand {
 	}
 
 	private static int end(CommandContext<CommandSourceStack> context) {
+		boolean finished;
 		try {
-			RunLifecycle.get().endRun("ended by " + context.getSource().getTextName());
+			finished = RunLifecycle.get().endRun("ended by " + context.getSource().getTextName());
 		} catch (IllegalStateException e) {
 			context.getSource().sendFailure(Component.literal("Cannot end a run: " + e.getMessage()));
 			return 0;
 		}
+
+		if (!finished) {
+			// The run is over and could not be wound up — the reward would not commit, somebody is
+			// still inside it, or there is no lobby to return to. Saying "back in the lobby" here
+			// would tell the operator the opposite of what the save says.
+			context.getSource().sendFailure(Component.literal(
+					"That run is over but could not be finished: "
+							+ RunLifecycle.get().describe() + ". See the server log; it will be"
+							+ " tried again, and /mhr run end retries it now."));
+			return 0;
+		}
+
 		context.getSource().sendSuccess(() -> Component.literal("Back in the lobby."), true);
 		return 1;
 	}

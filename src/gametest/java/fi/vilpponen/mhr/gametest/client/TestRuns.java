@@ -1,5 +1,6 @@
 package fi.vilpponen.mhr.gametest.client;
 
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import fi.vilpponen.mhr.mixin.MinecraftServerAccessor;
 import fi.vilpponen.mhr.run.Lobby;
 import fi.vilpponen.mhr.run.RunLifecycle;
@@ -57,6 +58,28 @@ final class TestRuns {
 	static void end(TestDedicatedServerContext server) {
 		server.runCommand("mhr run end");
 		settle(server);
+	}
+
+	/**
+	 * Run a command and get back what it actually returned.
+	 *
+	 * <p>{@code runCommand} throws away the result, and the result is the point when a command is
+	 * allowed to fail politely: a run that could not be finished reports zero and says why, and a
+	 * test that only looked at the record would never notice the operator being told the opposite.
+	 *
+	 * @return the command's own return value, or 0 if it reported a failure
+	 */
+	static int runCommandResult(TestDedicatedServerContext server, String command) {
+		int result = server.computeOnServer(minecraftServer -> {
+			try {
+				return minecraftServer.getCommands().getDispatcher()
+						.execute(command, minecraftServer.createCommandSourceStack());
+			} catch (CommandSyntaxException unparseable) {
+				throw new AssertionError("could not run /" + command, unparseable);
+			}
+		});
+		settle(server);
+		return result;
 	}
 
 	/** Where this run's overworld puts an arriving player. */
