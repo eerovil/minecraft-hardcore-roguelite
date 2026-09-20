@@ -6,9 +6,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import fi.vilpponen.mhr.HardcoreRoguelite;
+import fi.vilpponen.mhr.core.AtomicFile;
+import fi.vilpponen.mhr.core.PersistenceException;
 import java.io.IOException;
 import java.io.Reader;
-import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import net.fabricmc.loader.api.FabricLoader;
@@ -83,30 +84,28 @@ public final class Wallet {
 		return price <= balance;
 	}
 
-	/**
-	 * Take currency out, once.
-	 *
-	 * @return false if there was not enough, in which case nothing was taken
-	 */
-	public synchronized boolean spend(int price) {
-		if (price < 0 || price > balance) {
-			return false;
-		}
-		balance -= price;
-		save();
-		return true;
-	}
-
 	/** Put currency in. Negative amounts are not an earning rule, they are a bug, so they throw. */
 	public synchronized void earn(int amount) {
 		if (amount < 0) {
 			throw new IllegalArgumentException("Cannot earn a negative amount: " + amount);
 		}
-		balance += amount;
-		save();
+		set(balance + amount);
 	}
 
-	/** Set the total outright. The dev command's way in; nothing in gameplay does this. */
+	/**
+	 * Set the total outright.
+	 *
+	 * <p>There is deliberately no "spend" beside this. A purchase decides the total it wants while
+	 * holding this object's monitor and then says so, because the total it writes has to be the same
+	 * number it wrote into the journal — see {@link PurchaseJournal}. Two ways to move currency is
+	 * one more than the one the design allows.
+	 *
+	 * <p>The new total is in memory before it is on the disk, so a running game stays consistent
+	 * even when the write fails; what the failure costs is the restart, which is what the journal
+	 * is for.
+	 *
+	 * @throws PersistenceException if the new total did not reach the disk
+	 */
 	public synchronized void set(int amount) {
 		balance = Math.max(0, amount);
 		save();
@@ -132,16 +131,18 @@ public final class Wallet {
 		}
 	}
 
+	/**
+	 * @throws PersistenceException if the total did not reach the disk. It used to be logged and
+	 *     swallowed, which meant a failed write and a successful one were the same answer, and a
+	 *     purchase could be reported as bought on the strength of neither.
+	 */
 	private synchronized void save() {
+		JsonObject root = new JsonObject();
+		root.addProperty(BALANCE_KEY, balance);
 		try {
-			Files.createDirectories(file.getParent());
-			try (Writer writer = Files.newBufferedWriter(file)) {
-				JsonObject root = new JsonObject();
-				root.addProperty(BALANCE_KEY, balance);
-				GSON.toJson(root, writer);
-			}
+			AtomicFile.write(file, GSON.toJson(root));
 		} catch (IOException e) {
-			HardcoreRoguelite.LOGGER.error("Could not write {}", file, e);
+			throw new PersistenceException("Could not write " + file, e);
 		}
 	}
 }

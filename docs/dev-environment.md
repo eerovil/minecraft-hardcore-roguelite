@@ -721,6 +721,16 @@ than asserting one field:
   re-read from disk, which is the nearest a test sharing the server's process gets to quitting.
 - **the-price-charged-is-the-one-in-the-balance-data** — an override, `/mhr reload`, and the next
   purchase charges the new price.
+- **a-finished-purchase-leaves-no-record-behind** — the commit record's ordinary state is not to
+  exist.
+- **a-purchase-the-disk-will-not-take-is-refused-and-costs-nothing** — a directory is put where the
+  commit record has to go, so the write cannot succeed; the purchase is refused, nothing is charged,
+  and the same purchase then goes through once the way is clear.
+- **a-purchase-that-was-cut-off-is-finished-on-the-next-start** — a commit record is left behind the
+  way a crashed session leaves one, both files are re-read, and recovery produces the purchase. Run
+  twice, to prove replay does not charge twice.
+- **a-purchase-cut-off-after-the-currency-landed-is-not-charged-twice** — the other half of the same
+  window.
 
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/ShopClientTest.java` is the half that needs a
 real screen and a real mouse. Nothing in it calls a purchase helper: the cursor lands on the square
@@ -735,6 +745,10 @@ the player would see and the left button goes down.
 - **clicking-an-unaffordable-square-changes-nothing**.
 - **owned-and-part-upgraded-states-reach-the-screen** — owned, part-upgraded, affordable and out of
   reach all established for real and read back off the screen's own copy.
+- **a-square-that-is-not-drawn-cannot-be-bought** — one scroll notch is smaller than a square, so a
+  square can be left undrawn with part of itself still inside the panel. Clicking the whole of where
+  it would have been buys nothing; scrolling back and clicking the same square does, which is the
+  control.
 - **buying-a-border-tier-resizes-the-world** — the only place a border tier is bought, because this
   test has a dedicated server to itself.
 

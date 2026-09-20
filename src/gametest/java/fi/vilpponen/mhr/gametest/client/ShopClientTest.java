@@ -65,6 +65,8 @@ public class ShopClientTest implements FabricClientGameTest {
 						() -> clickingAnUnaffordableSquareChangesNothing(context, player));
 				scenario(context, "owned-and-part-upgraded-states-reach-the-screen",
 						() -> ownedAndPartUpgradedStatesReachTheScreen(context, player));
+				scenario(context, "a-square-that-is-not-drawn-cannot-be-bought",
+						() -> aSquareThatIsNotDrawnCannotBeBought(context, player));
 				scenario(context, "buying-a-border-tier-resizes-the-world",
 						() -> buyingABorderTierResizesTheWorld(context, player));
 			}
@@ -132,18 +134,17 @@ public class ShopClientTest implements FabricClientGameTest {
 		reset(player);
 		openShop(context, player);
 
+		check(isClickable(context, TREES),
+				"a world unlock must be visible without scrolling, and " + TREES + " is not");
 		double[] trees = squareOf(context, TREES);
-		check(trees != null, "a world unlock must be visible without scrolling, and " + TREES + " is not");
-
 		double[] bread = squareOf(context, BREAD);
-		check(bread == null || bread[1] > trees[1],
+		check(bread[1] > trees[1],
 				"Vanilla+ must not be drawn above vanilla restoration: " + TREES + " is at y=" + trees[1]
-						+ " and " + BREAD + " is at y=" + (bread == null ? "off screen" : bread[1]));
+						+ " and " + BREAD + " is at y=" + bread[1]);
 
 		scrollToTheBottom(context);
-		double[] breadBelow = squareOf(context, BREAD);
-		check(breadBelow != null, "scrolling down must reach the Vanilla+ purchases, and " + BREAD
-				+ " is still not on screen");
+		check(isClickable(context, BREAD), "scrolling down must reach the Vanilla+ purchases, and " + BREAD
+				+ " is still not drawn");
 		context.takeScreenshot("shop-vanilla-plus-below");
 	}
 
@@ -247,6 +248,56 @@ public class ShopClientTest implements FabricClientGameTest {
 		reset(player);
 	}
 
+	/**
+	 * A row scrolled half off the panel is not drawn, and must not be buyable either.
+	 *
+	 * <p>A scroll notch is smaller than a square, so a square can end up with part of itself still
+	 * inside the panel while the whole of it is left undrawn. The blank strip that leaves behind used
+	 * to be a live purchase target: nothing to see, and clicking it bought something.
+	 */
+	private void aSquareThatIsNotDrawnCannotBeBought(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		int price = priceOf(player, TREES);
+		player.command("mhr currency set " + (price + 9));
+		openShop(context, player);
+
+		check(isClickable(context, TREES), "setup: " + TREES + " should be drawn before anything scrolls");
+
+		// Scroll a notch at a time until the square stops being drawn. The first notch that does it is
+		// the dangerous one: a notch is smaller than a square, so at that moment most of the square is
+		// still inside the panel with nothing drawn on it.
+		int notches = 0;
+		while (isClickable(context, TREES) && notches < 6) {
+			scroll(context, -1, 1);
+			notches++;
+		}
+		check(!isClickable(context, TREES),
+				"scrolling should have taken " + TREES + " off the panel within " + notches
+						+ " notches, and it is still drawn");
+
+		// Click the whole of where the square would have been, top strip included.
+		double[] centre = squareOf(context, TREES);
+		check(centre != null, "setup: the shop should still know where " + TREES + " is");
+		for (int offset = -8; offset <= 8; offset += 4) {
+			clickAt(context, player, centre[0], centre[1] + offset * guiScale(context));
+		}
+
+		check(!ownedOnServer(player, TREES),
+				"clicking a square that is not drawn must buy nothing, and the server now owns " + TREES);
+		check(balanceOnServer(player) == price + 9,
+				"and it must cost nothing: the purse went from " + (price + 9) + " to " + balanceOnServer(player));
+
+		// The control: the same square, scrolled back into view, is bought by the same click. Without
+		// this the scenario would pass just as well if nothing on the screen were clickable at all.
+		scrollToTheTop(context);
+		check(isClickable(context, TREES), "back at the top the square should be drawn again");
+		clickSquare(context, player, TREES);
+		check(ownedOnServer(player, TREES),
+				"the same click must buy it once the square is drawn, and the server still does not own " + TREES);
+		check(balanceOnServer(player) == 9,
+				"and then charge exactly once: the purse holds " + balanceOnServer(player) + " rather than 9");
+	}
+
 	// --- talking to the shop ------------------------------------------------------------------
 
 	/** Nothing owned, nothing to spend, no screen open — on the server, where it counts. */
@@ -270,14 +321,19 @@ public class ShopClientTest implements FabricClientGameTest {
 		player.settle();
 	}
 
-	/** Where a square is in window pixels, or null when it is scrolled out of view. */
+	/** Whether the screen would act on a click there — the same answer the click itself uses. */
+	private boolean isClickable(ClientGameTestContext context, String unlockId) {
+		return context.computeOnClient(client -> shopScreen(client).isClickable(unlockId));
+	}
+
+	private double guiScale(ClientGameTestContext context) {
+		return context.computeOnClient(client -> client.getWindow().getGuiScale());
+	}
+
+	/** Where a square is in window pixels, whether or not it is drawn there. */
 	private double[] squareOf(ClientGameTestContext context, String unlockId) {
 		return context.computeOnClient(client -> {
-			if (!(client.gui.screen() instanceof ShopScreen shop)) {
-				throw new AssertionError("The shop screen should be open, and the screen is "
-						+ client.gui.screen());
-			}
-			double[] centre = shop.centreOf(unlockId);
+			double[] centre = shopScreen(client).centreOf(unlockId);
 			if (centre == null) {
 				return null;
 			}
@@ -286,11 +342,18 @@ public class ShopClientTest implements FabricClientGameTest {
 		});
 	}
 
+	private static ShopScreen shopScreen(net.minecraft.client.Minecraft client) {
+		if (client.gui.screen() instanceof ShopScreen shop) {
+			return shop;
+		}
+		throw new AssertionError("The shop screen should be open, and the screen is " + client.gui.screen());
+	}
+
 	/** The ids whose squares are on screen right now. */
 	private List<String> visibleIds(ClientGameTestContext context, List<Offer> candidates) {
 		List<String> visible = new ArrayList<>();
 		for (Offer offer : candidates) {
-			if (squareOf(context, offer.id()) != null) {
+			if (isClickable(context, offer.id())) {
 				visible.add(offer.id());
 			}
 		}
@@ -299,8 +362,9 @@ public class ShopClientTest implements FabricClientGameTest {
 
 	private void hover(ClientGameTestContext context, String unlockId) {
 		bringIntoView(context, unlockId);
+		check(isClickable(context, unlockId), "cannot hover " + unlockId + ": it is not drawn anywhere");
 		double[] square = squareOf(context, unlockId);
-		check(square != null, "cannot hover " + unlockId + ": it is not on screen");
+		check(square != null, "cannot hover " + unlockId + ": the shop has no such offer");
 		context.getInput().setCursorPos(square[0], square[1]);
 		context.waitTicks(3);
 	}
@@ -308,6 +372,17 @@ public class ShopClientTest implements FabricClientGameTest {
 	/** Puts the real cursor on a square and presses the real left button. */
 	private void clickSquare(ClientGameTestContext context, TestPlayer player, String unlockId) {
 		hover(context, unlockId);
+		press(context, player);
+	}
+
+	/** The same click, at a window position of the test's own choosing. */
+	private void clickAt(ClientGameTestContext context, TestPlayer player, double x, double y) {
+		context.getInput().setCursorPos(x, y);
+		context.waitTicks(2);
+		press(context, player);
+	}
+
+	private void press(ClientGameTestContext context, TestPlayer player) {
 		// MOUSE_BUTTON_LEFT rather than 0: 26.3 takes its input from SDL, which numbers from one.
 		context.getInput().pressMouse(InputConstants.MOUSE_BUTTON_LEFT);
 		player.settle();
@@ -323,12 +398,12 @@ public class ShopClientTest implements FabricClientGameTest {
 	 * would be clicking something the player cannot.
 	 */
 	private void bringIntoView(ClientGameTestContext context, String unlockId) {
-		if (squareOf(context, unlockId) != null) {
+		if (isClickable(context, unlockId)) {
 			return;
 		}
 		scroll(context, 1, 40);
 		for (int i = 0; i < 40; i++) {
-			if (squareOf(context, unlockId) != null) {
+			if (isClickable(context, unlockId)) {
 				return;
 			}
 			scroll(context, -1, 1);

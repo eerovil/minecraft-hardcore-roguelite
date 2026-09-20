@@ -166,15 +166,45 @@ public final class ShopScreen extends Screen {
 		return Math.max(0, contentHeight - (contentBottom - contentTop));
 	}
 
-	/** The cell under the mouse, or null. Uses the same numbers the layout was built from. */
+	/** Where a square's top-left corner is on screen right now, scrolling included. */
+	private int screenTop(Cell cell) {
+		return cell.y() + contentTop - scroll;
+	}
+
+	/**
+	 * Whether a square is wholly inside the panel, and therefore drawn.
+	 *
+	 * <p>The one predicate three things share: what is drawn, what a click can land on, and what a
+	 * test is allowed to click. They have to be the same, or a row scrolled half off the panel is
+	 * left undrawn while the strip of it still inside the panel goes on buying things — a purchase
+	 * target with nothing visible on it.
+	 *
+	 * <p>Whole rather than partly, because an item model is a deferred element and a clipped icon
+	 * comes back on top of the title bar. Leaving the row out entirely is what stops that, and this
+	 * is what makes the click agree.
+	 */
+	private boolean isDrawn(Cell cell) {
+		int y = screenTop(cell);
+		return y >= contentTop && y + ICON_BOX <= contentBottom;
+	}
+
+	/** The cell under the mouse, or null. Only a drawn cell can be under it. */
 	private Cell cellAt(double mouseX, double mouseY) {
-		if (mouseY < contentTop || mouseY > contentBottom) {
-			return null;
-		}
 		for (Cell cell : cells) {
 			int x = panelLeft + cell.x();
-			int y = cell.y() + contentTop - scroll;
-			if (mouseX >= x && mouseX < x + ICON_BOX && mouseY >= y && mouseY < y + ICON_BOX) {
+			int y = screenTop(cell);
+			if (isDrawn(cell)
+					&& mouseX >= x && mouseX < x + ICON_BOX
+					&& mouseY >= y && mouseY < y + ICON_BOX) {
+				return cell;
+			}
+		}
+		return null;
+	}
+
+	private Cell cellFor(String unlockId) {
+		for (Cell cell : cells) {
+			if (cell.offer().id().equals(unlockId)) {
 				return cell;
 			}
 		}
@@ -182,24 +212,35 @@ public final class ShopScreen extends Screen {
 	}
 
 	/**
-	 * The middle of one offer's square in screen coordinates, or null when it is not on screen.
+	 * The middle of one offer's square in screen coordinates, whether or not it is drawn there, or
+	 * null when the shop has no such offer at all.
 	 *
 	 * <p>Nothing in the game calls this. It exists so the client GameTest can put the real mouse on
 	 * a real square and click it, rather than calling a purchase helper and proving only that the
-	 * helper works — see {@code docs/codebase/gametest.md}. Returning null for a square scrolled out
-	 * of view is the point: a test must not be able to click something a player cannot.
+	 * helper works — see {@code docs/codebase/gametest.md}. It deliberately answers for a square
+	 * that is scrolled half off the panel too, because one of the tests is that clicking exactly
+	 * there does nothing; {@link #isClickable} is what says which case you are in.
 	 */
 	public double[] centreOf(String unlockId) {
 		ensureLayout();
-		for (Cell cell : cells) {
-			if (!cell.offer().id().equals(unlockId)) {
-				continue;
-			}
-			double x = panelLeft + cell.x() + ICON_BOX / 2.0;
-			double y = cell.y() + contentTop - scroll + ICON_BOX / 2.0;
-			return y >= contentTop && y <= contentBottom ? new double[] {x, y} : null;
+		Cell cell = cellFor(unlockId);
+		if (cell == null) {
+			return null;
 		}
-		return null;
+		return new double[] {
+				panelLeft + cell.x() + ICON_BOX / 2.0,
+				screenTop(cell) + ICON_BOX / 2.0,
+		};
+	}
+
+	/**
+	 * Whether a square is drawn where {@link #centreOf} says it is, and so whether clicking there
+	 * buys anything. Also test-facing, and the same answer the click itself uses.
+	 */
+	public boolean isClickable(String unlockId) {
+		ensureLayout();
+		Cell cell = cellFor(unlockId);
+		return cell != null && isDrawn(cell);
 	}
 
 	// --- drawing -----------------------------------------------------------------------------
@@ -225,14 +266,10 @@ public final class ShopScreen extends Screen {
 			}
 		}
 		for (Cell cell : cells) {
-			int y = cell.y() + offset;
-			// A row half-way off the panel is left out rather than clipped. The scissor above holds
-			// for everything drawn here except the item models, which are deferred to after the whole
-			// screen — so a clipped icon would reappear on top of the title bar.
-			if (y < contentTop || y + ICON_BOX > contentBottom) {
+			if (!isDrawn(cell)) {
 				continue;
 			}
-			drawCell(extractor, cell, panelLeft + cell.x(), y, cell == hovered);
+			drawCell(extractor, cell, panelLeft + cell.x(), screenTop(cell), cell == hovered);
 		}
 		drawScrollbar(extractor);
 		extractor.disableScissor();

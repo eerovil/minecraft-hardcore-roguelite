@@ -87,6 +87,8 @@ public final class ShopServer {
 					Component.translatable(ShopText.nameKey(result.id())));
 			case TOO_EXPENSIVE -> Component.translatable("mhr.shop.refused.too_expensive",
 					Component.translatable(ShopText.nameKey(result.id())), result.price(), result.balance());
+			case NOT_SAVED -> Component.translatable("mhr.shop.refused.not_saved",
+					Component.translatable(ShopText.nameKey(result.id())));
 		};
 	}
 }

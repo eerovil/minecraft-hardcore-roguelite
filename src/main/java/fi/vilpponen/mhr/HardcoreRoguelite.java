@@ -8,6 +8,7 @@ import fi.vilpponen.mhr.command.UnlockCommand;
 import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
+import fi.vilpponen.mhr.progression.PurchaseJournal;
 import fi.vilpponen.mhr.progression.Wallet;
 import fi.vilpponen.mhr.shop.ShopServer;
 import fi.vilpponen.mhr.starter.RunStart;
@@ -26,6 +27,10 @@ public class HardcoreRoguelite implements ModInitializer {
 		// should stop the game here with a readable message rather than quietly play at the wrong
 		// numbers. See BalanceManager.
 		Balance balance = BalanceManager.load();
+
+		// Before anything asks what is owned: a purchase the last session committed but did not
+		// finish writing is finished here, so the rest of the game only ever sees a settled answer.
+		PurchaseJournal.recover();
 
 		UnlockState state = UnlockState.get();
 		LOGGER.info("Hardcore Roguelite loaded. Unlocked: {}. Currency: {}."

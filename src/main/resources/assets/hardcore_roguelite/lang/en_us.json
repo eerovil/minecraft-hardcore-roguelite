@@ -26,6 +26,7 @@
 	"mhr.shop.refused.not_for_sale": "Nothing in the shop sells '%s'.",
 	"mhr.shop.refused.maxed": "You already have %s.",
 	"mhr.shop.refused.too_expensive": "%s costs %s and you have %s.",
+	"mhr.shop.refused.not_saved": "Could not buy %s: your progress could not be saved. Nothing was charged. Check the game log.",
 
 	"mhr.shop.unlock.world.trees": "Trees",
 	"mhr.shop.unlock.world.trees.desc": "New worlds grow trees again.",

@@ -6,10 +6,11 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import fi.vilpponen.mhr.core.AtomicFile;
 import fi.vilpponen.mhr.core.BalanceManager;
+import fi.vilpponen.mhr.core.PersistenceException;
 import java.io.IOException;
 import java.io.Reader;
-import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -231,9 +232,14 @@ public final class UnlockState {
 		}
 
 		// Write the current shape and the current names back straight away, so a migration happens
-		// once rather than on every start.
+		// once rather than on every start. This one rewrite is allowed to fail quietly: nothing has
+		// changed about what is owned, so the only cost is doing it again next time.
 		if (migrated) {
-			save();
+			try {
+				save();
+			} catch (PersistenceException e) {
+				HardcoreRoguelite.LOGGER.error("Could not rewrite {} in its current shape", file, e);
+			}
 		}
 	}
 
@@ -300,14 +306,16 @@ public final class UnlockState {
 				|| BalanceManager.get().borderByUnlockId(id).isPresent();
 	}
 
+	/**
+	 * @throws PersistenceException if what is owned did not reach the disk. It used to be logged and
+	 *     swallowed, which made a failed write indistinguishable from a successful one to everything
+	 *     above — including a purchase deciding whether it had happened.
+	 */
 	private synchronized void save() {
 		try {
-			Files.createDirectories(file.getParent());
-			try (Writer writer = Files.newBufferedWriter(file)) {
-				GSON.toJson(sortedById(), writer);
-			}
+			AtomicFile.write(file, GSON.toJson(sortedById()));
 		} catch (IOException e) {
-			HardcoreRoguelite.LOGGER.error("Could not write {}", file, e);
+			throw new PersistenceException("Could not write " + file, e);
 		}
 	}
 }

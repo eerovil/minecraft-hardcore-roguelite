@@ -198,6 +198,7 @@ rather than replacing either:
   section plus the `worldBorder` tiers under their `world.border.*` ids.
 - `Purchase.buy(id)` — the one operation that turns currency into ownership. The shop screen's click
   and `/mhr unlock` both end up here or in `UnlockState` directly; nothing else moves currency.
+- `PurchaseJournal` — the commit point, and the reason a purchase cannot half-happen. See below.
 
 **Currency is still not earned.** Nothing in gameplay pays into the wallet, because how it is earned
 is the blocking open question in `docs/open-questions.md`. `/mhr currency give` is a development
@@ -213,10 +214,40 @@ stand-in. Do not add an earning rule as a side effect of another change.
 6. persist both sides safely;
 7. notify/apply runtime effects where necessary.
 
-The order matters and is deliberate: currency comes out first, because `Wallet.spend` is the one
-call that checks and deducts under the same lock — a separate "can I afford it?" followed by a
-deduction is the shape that lets two clicks pay once. Ownership goes up second, and if it somehow
-does not, the currency goes straight back. The whole thing holds `Purchase`'s monitor.
+## A purchase cannot half-happen
+
+The two halves live in two files, and no ordering of two writes is safe on its own: a crash in
+between leaves either a free unlock or currency spent on nothing. So **neither file write is the
+commit point**.
+
+`PurchaseJournal` is. Before either file is touched it writes one small record —
+`config/hardcore-roguelite-purchase.json`, holding the id, the level to end up owning and the total
+to be left with — atomically, through `core/AtomicFile`: temporary file, fsync, rename, fsync the
+directory. Then:
+
+- **the record did not land** — nothing has moved, the purchase is refused with `NOT_SAVED`, and the
+  player still has their currency;
+- **the record landed** — the purchase is the player's. Both files are then brought up to date, and
+  once they are, the record is deleted. If the game stops first, `PurchaseJournal.recover()` at the
+  next start finishes whichever half is missing.
+
+The record holds the values to arrive at, not the amounts to move. That is what makes replay safe:
+setting a number to what it already is does nothing, so recovery can run twice, or on a purchase
+that had in fact finished, without charging again.
+
+Consequences to keep:
+
+- `Wallet.save()` and `UnlockState.save()` **throw** `PersistenceException` rather than logging and
+  returning. A failed write that reports success is how a purchase ends up claimed but not stored.
+- Both put the new value in memory before writing it, so a running game stays consistent even when
+  the disk does not; the cost of a failed write is paid at the next start, by recovery.
+- `Wallet` has no `spend`. A purchase decides the total it wants while holding the wallet's monitor
+  and then sets it, because the total it writes has to be the same number that went into the record.
+- `PurchaseJournal.recover()` runs in `HardcoreRoguelite.onInitialize` before anything reads what is
+  owned.
+
+Do not add a second writer of either file that skips this, and do not go back to swallowing write
+failures.
 
 That operation is the single path used by the shop. `/mhr unlock` remains a development adapter that
 grants without charging, and is not the model for charging currency.
@@ -283,7 +314,9 @@ Examples:
 - old save shapes/renamed ids migrate without losing ownership;
 - an unknown owned id is preserved;
 - a starter catalogue entry needs no enum constant;
-- currency purchase (once implemented) conserves currency and cannot double-buy on one action;
+- currency purchase conserves currency and cannot double-buy on one action;
+- a purchase whose commit record cannot be written changes nothing;
+- a purchase cut off after the commit record is finished by recovery, exactly once, from either half;
 - deleting/replacing a world does not erase permanent state;
 - a new run sees the permanent purchase again.
 
