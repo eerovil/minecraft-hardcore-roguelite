@@ -1,9 +1,10 @@
 # The image the mhr-gametest pod runs: the build image plus a virtual display and a software
 # OpenGL driver, because the client GameTests start a real Minecraft client.
 #
-# These packages used to be apt-get'd on every pod start. That cost 1-2 minutes per start, needed
-# Debian's mirrors to be up at exactly that moment, and meant the test environment was whatever
-# apt resolved that day. Baking them freezes the environment at image build time instead.
+# These packages used to be apt-get'd on every pod start, which needed Debian's mirrors to be up
+# at exactly that moment and meant the test environment was whatever apt resolved that day.
+# Baking them freezes the environment at image build time instead. It also takes about 15 seconds
+# off a pod start (21s to 6s, measured) — worth having, but much less than it sounds.
 #
 # Build and load it with:
 #   scripts/dev.sh image

@@ -117,9 +117,12 @@ Two things had to be arranged for the client to start headless at all, both in `
 
 ### The gametest image
 
-The X and Mesa packages used to be `apt-get`-ed every time the pod started: a minute or two of
-every start, a dependency on Debian's mirrors being up at that moment, and a test environment that
-was whatever apt resolved that day. They are baked into an image now,
+The X and Mesa packages used to be `apt-get`-ed every time the pod started: a dependency on
+Debian's mirrors being up at that moment, and a test environment that was whatever apt resolved
+that day. It also cost about 15 seconds of every pod start — scheduled-to-ready measured 21s
+before and 6s after, so if you came here looking for the minute or two the original issue
+estimated, it is not there. Pinning the environment is the reason that survived. They are baked
+into an image now,
 [`k8s/gametest.Dockerfile`](../k8s/gametest.Dockerfile), and the pod's startup script is down to
 making directories and sleeping.
 
