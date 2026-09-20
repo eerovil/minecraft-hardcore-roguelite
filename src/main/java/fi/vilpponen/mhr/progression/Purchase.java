@@ -13,6 +13,12 @@ import java.io.IOException;
  * exactly once, advance ownership exactly once, and persist both. That is this method, and the shop
  * screen and the dev command both go through it rather than writing either side themselves.
  *
+ * <p>Only one purchase may be outstanding at a time. There is one commit record, so a second
+ * purchase committed while the first is unfinished would write over the only note of the first —
+ * losing that unlock while keeping both prices. So every purchase settles whatever is outstanding
+ * before it commits anything, and refuses if it cannot: a shop that says no for a moment is better
+ * than a shop that quietly eats a purchase.
+ *
  * <p>The awkward part is that the two halves live in two files, and no ordering of two writes is
  * safe on its own: a crash between them leaves either a free unlock or currency spent on nothing.
  * So neither write is the commit point. {@link PurchaseJournal} is — a third small file holding the
@@ -63,9 +69,21 @@ public final class Purchase {
 
 	/** Buy the next level of one id. See the class comment for the order the two writes happen in. */
 	public static synchronized Result buy(String id) {
+		// Before anything else, including reading the price: settling can change what is owned and
+		// what is left to spend, and an offer read before it would be describing the state the last
+		// purchase was interrupted in.
+		boolean settled = PurchaseJournal.settle();
+
 		Offer offer = Catalogue.offer(id).orElse(null);
 		if (offer == null) {
 			return new Result(Outcome.NOT_FOR_SALE, id, 0, UnlockState.get().level(id), Wallet.get().balance());
+		}
+		if (!settled) {
+			// The record for the earlier purchase is still the only note of it. Committing this one
+			// would replace it, so this one does not happen.
+			HardcoreRoguelite.LOGGER.error(
+					"Refusing to sell '{}': an earlier purchase is still waiting to be written down", id);
+			return result(Outcome.NOT_SAVED, offer);
 		}
 		if (offer.isMaxed()) {
 			return result(Outcome.ALREADY_MAXED, offer);

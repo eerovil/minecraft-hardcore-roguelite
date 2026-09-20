@@ -731,6 +731,13 @@ than asserting one field:
   twice, to prove replay does not charge twice.
 - **a-purchase-cut-off-after-the-currency-landed-is-not-charged-twice** — the other half of the same
   window.
+- **a-second-purchase-cannot-write-over-an-unfinished-one** — the unlock file is blocked so the first
+  purchase commits and cannot finish; a second purchase of a different id is then refused, and once
+  the disk works again the first unlock is there and the second was never charged.
+
+`AtomicFileTest` covers the writer itself in plain JUnit, including a channel that takes one byte per
+call — a real file almost never writes short, which is why a missing loop there cannot be provoked
+through the public method.
 
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/ShopClientTest.java` is the half that needs a
 real screen and a real mouse. Nothing in it calls a purchase helper: the cursor lands on the square

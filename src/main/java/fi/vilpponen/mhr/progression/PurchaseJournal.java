@@ -26,9 +26,15 @@ import net.fabricmc.loader.api.FabricLoader;
  * <p>Before either of them is touched, this writes down the whole of the intended outcome —
  * atomically, so it is either wholly there or wholly absent. That write is the commit point. Once
  * it has landed the purchase has happened, whatever becomes of the next two writes; if the game
- * stops before both of them are on the disk, {@link #recover()} finishes the job the next time it
+ * stops before both of them are on the disk, {@link #settle()} finishes the job the next time it
  * starts. Once both are on the disk the record is deleted, and the ordinary state of this file is
  * not to exist.
+ *
+ * <p>There is room for one record, so there may only ever be one purchase outstanding. A second
+ * purchase committed over an unfinished first would replace the only note of the first, and the
+ * first unlock would be lost while its price stayed spent. That is why {@link Purchase} settles
+ * before it commits, and refuses outright if settling does not work: a record that is still there
+ * is an obligation nothing is allowed to write over.
  *
  * <p>The record holds the levels and totals the purchase is aiming at, not the amounts it is
  * moving. That is what makes recovery safe to run twice, or on a purchase that had in fact already
@@ -99,31 +105,44 @@ public final class PurchaseJournal {
 	}
 
 	/**
-	 * Finish whatever a crash left half-done. Called once when the mod starts, before anything reads
-	 * what the player owns.
+	 * Finish whatever is outstanding, if anything is.
+	 *
+	 * <p>Called when the mod starts, before anything reads what the player owns, and again before
+	 * every purchase — a purchase may not commit while another one is unfinished, because there is
+	 * only one record and committing would write over it.
 	 *
 	 * <p>Safe to call at any time and safe to call twice: the record says what the two numbers
 	 * should be, so applying it again is applying the same numbers again.
+	 *
+	 * @return true when nothing is outstanding any more, false when the disk still will not take it
 	 */
-	public static void recover() {
+	public static boolean settle() {
 		Record record = read();
 		if (record == null) {
-			return;
+			return true;
 		}
 
 		HardcoreRoguelite.LOGGER.warn(
-				"Finishing a purchase of '{}' that the last session did not: level {}, {} left to spend",
+				"Finishing an unfinished purchase of '{}': level {}, {} left to spend",
 				record.id(), record.level(), record.balance());
 		try {
+			// Both of these write unconditionally. What is outstanding is a write, not a value:
+			// whichever half failed last time has memory that already agrees and a file that does
+			// not, so anything that skipped the write when the value matched would report the
+			// obligation as discharged and then delete the record.
 			Wallet.get().set(record.balance());
-			UnlockState.get().setLevel(record.id(), record.level());
+			UnlockState.get().restoreLevel(record.id(), record.level());
 		} catch (PersistenceException e) {
-			// The record stays, so the next start tries again. Nothing is lost by giving up here.
+			// The record stays, so this is tried again — at the next purchase, or the next start.
+			// Nothing is lost by giving up here, and something would be lost by carrying on.
 			HardcoreRoguelite.LOGGER.error("Could not finish the purchase of '{}'; it will be retried",
 					record.id(), e);
-			return;
+			return false;
 		}
+		// Both files now say what the record says, so the obligation is discharged whether or not
+		// the record itself can be removed.
 		done();
+		return true;
 	}
 
 	private static Record read() {

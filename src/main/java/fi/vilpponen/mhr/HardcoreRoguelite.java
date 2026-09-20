@@ -30,7 +30,7 @@ public class HardcoreRoguelite implements ModInitializer {
 
 		// Before anything asks what is owned: a purchase the last session committed but did not
 		// finish writing is finished here, so the rest of the game only ever sees a settled answer.
-		PurchaseJournal.recover();
+		PurchaseJournal.settle();
 
 		UnlockState state = UnlockState.get();
 		LOGGER.info("Hardcore Roguelite loaded. Unlocked: {}. Currency: {}."

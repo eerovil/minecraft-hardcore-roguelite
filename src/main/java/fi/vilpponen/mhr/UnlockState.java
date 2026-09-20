@@ -108,6 +108,11 @@ public final class UnlockState {
 		}
 	}
 
+	/** Where what is owned is stored. Public so a test can get in the way of it on purpose. */
+	public Path file() {
+		return file;
+	}
+
 	public synchronized boolean isOwned(Unlock unlock) {
 		return level(unlock) > 0;
 	}
@@ -159,6 +164,27 @@ public final class UnlockState {
 		}
 		save();
 		return true;
+	}
+
+	/**
+	 * Set a level and write the file, whether or not the value changed.
+	 *
+	 * <p>{@link #setLevel} does nothing when the level is already what it is asked for, which is the
+	 * right answer for a purchase and the wrong one for finishing an unfinished purchase: there,
+	 * memory has already been changed and it is the <em>disk</em> that is behind. Short-circuiting
+	 * on memory would report an obligation as discharged while the file still said nothing was
+	 * bought — and the record would then be deleted on the strength of it.
+	 *
+	 * @throws fi.vilpponen.mhr.core.PersistenceException if it did not reach the disk
+	 */
+	public synchronized void restoreLevel(String id, int level) {
+		int clamped = Math.clamp(level, 0, maxLevelOf(id));
+		if (clamped == 0) {
+			levels.remove(id);
+		} else {
+			levels.put(id, clamped);
+		}
+		save();
 	}
 
 	/**

@@ -49,6 +49,9 @@ public class ShopPurchaseGameTest {
 	/** The one repeatable unlock in the shipped catalogue. */
 	private static final String ENCHANT = "player.craft.enchant";
 
+	/** A second plain unlock, for the scenarios that need two purchases to be told apart. */
+	private static final String VILLAGE = "world.village";
+
 	@GameTest(maxTicks = 400)
 	public void theShopChargesForWhatItGrants(GameTestHelper helper) {
 		List<String> failures = new ArrayList<>();
@@ -78,9 +81,12 @@ public class ShopPurchaseGameTest {
 					this::aPurchaseThatWasCutOffIsFinishedOnTheNextStart);
 			scenario(failures, "a-purchase-cut-off-after-the-currency-landed-is-not-charged-twice",
 					this::aPurchaseCutOffAfterTheCurrencyLandedIsNotChargedTwice);
+			scenario(failures, "a-second-purchase-cannot-write-over-an-unfinished-one",
+					this::aSecondPurchaseCannotWriteOverAnUnfinishedOne);
 		} finally {
 			removeOverride(helper);
 			unblockTheRecord();
+			unblock(UnlockState.get().file());
 			clearTheRecord();
 			reset();
 		}
@@ -317,7 +323,7 @@ public class ShopPurchaseGameTest {
 		check(!owns(TREES), "setup: before recovery the unlock file should still say nothing is owned");
 		check(balance() == price + 6, "setup: and the purse should still be untouched");
 
-		PurchaseJournal.recover();
+		PurchaseJournal.settle();
 
 		check(owns(TREES), "the interrupted purchase must be finished, and " + TREES + " is still not owned");
 		check(balance() == 6,
@@ -328,7 +334,7 @@ public class ShopPurchaseGameTest {
 		// second time — which is what makes the record safe to replay.
 		UnlockState.reloadFromFile();
 		Wallet.reloadFromFile();
-		PurchaseJournal.recover();
+		PurchaseJournal.settle();
 		check(owns(TREES) && balance() == 6,
 				"recovery must be safe to repeat, and afterwards the purse holds " + balance()
 						+ " with " + TREES + (owns(TREES) ? " owned" : " not owned"));
@@ -349,12 +355,62 @@ public class ShopPurchaseGameTest {
 		UnlockState.reloadFromFile();
 		check(!owns(TREES), "setup: the unlock half should be the one still missing");
 
-		PurchaseJournal.recover();
+		PurchaseJournal.settle();
 
 		check(owns(TREES), "the missing half must be filled in, and " + TREES + " is still not owned");
 		check(balance() == 2,
 				"the half that had already landed must not be charged again: the purse holds " + balance()
 						+ " rather than 2");
+	}
+
+	/**
+	 * There is one commit record, so only one purchase may be outstanding at a time.
+	 *
+	 * <p>The dangerous shape: the first purchase commits, its unlock write fails, and the shop is
+	 * still open. A second purchase committing over that record would replace the only note of the
+	 * first — and the first unlock would be gone while both prices stayed spent. So the second one
+	 * is refused until the first is finished.
+	 */
+	private void aSecondPurchaseCannotWriteOverAnUnfinishedOne() {
+		reset();
+		int treesPrice = priceOf(TREES);
+		int villagePrice = priceOf(VILLAGE);
+		int before = treesPrice + villagePrice + 5;
+		Wallet.get().set(before);
+
+		Path unlockFile = UnlockState.get().file();
+		block(unlockFile);
+		try {
+			// Commits, takes the currency, and cannot write the unlock: exactly the state that leaves
+			// a record outstanding while the game carries on.
+			Purchase.Result first = Purchase.buy(TREES);
+			check(first.bought(), "setup: the first purchase should be reported as bought, and it was "
+					+ first.outcome());
+			check(PurchaseJournal.isPending(),
+					"setup: with the unlock file blocked the first purchase should still be outstanding");
+
+			Purchase.Result second = Purchase.buy(VILLAGE);
+
+			check(second.outcome() == Purchase.Outcome.NOT_SAVED,
+					"a second purchase must be refused while the first is unfinished, and the answer was "
+							+ second.outcome());
+			check(balance() == before - treesPrice,
+					"the refused second purchase must not be charged: the purse holds " + balance()
+							+ " rather than " + (before - treesPrice));
+		} finally {
+			unblock(unlockFile);
+		}
+
+		// The disk works again. What is outstanding is the first purchase, and only the first.
+		Wallet.reloadFromFile();
+		UnlockState.reloadFromFile();
+		check(PurchaseJournal.settle(), "with the disk working again the outstanding purchase should finish");
+
+		check(owns(TREES), TREES + " was bought first and must survive, and it is not owned");
+		check(!owns(VILLAGE), VILLAGE + " was refused and must not be owned");
+		check(balance() == before - treesPrice,
+				"exactly one price should have been charged: the purse went from " + before + " to "
+						+ balance());
 	}
 
 	// --- plumbing --------------------------------------------------------------------------
@@ -377,36 +433,44 @@ public class ShopPurchaseGameTest {
 	}
 
 	/**
-	 * Make the commit point fail, by putting a directory where the record has to go.
+	 * Make a write to this path fail, by putting a directory in its way.
 	 *
 	 * <p>A non-empty one, because renaming a file over an empty directory is allowed on some
 	 * filesystems and the point is that the write cannot succeed.
 	 */
-	private static void blockTheRecord() {
-		clearTheRecord();
+	private static void block(Path path) {
 		try {
-			Path blocker = PurchaseJournal.file();
-			Files.createDirectories(blocker);
-			Files.writeString(blocker.resolve("in-the-way"), "", StandardCharsets.UTF_8);
+			Files.deleteIfExists(path);
+			Files.createDirectories(path);
+			Files.writeString(path.resolve("in-the-way"), "", StandardCharsets.UTF_8);
 		} catch (IOException e) {
-			throw new UncheckedIOException("Could not block the purchase record", e);
+			throw new UncheckedIOException("Could not block " + path, e);
 		}
 	}
 
-	private static void unblockTheRecord() {
-		Path blocker = PurchaseJournal.file();
+	private static void unblock(Path path) {
 		try {
-			if (Files.isDirectory(blocker)) {
-				try (var entries = Files.list(blocker)) {
-					for (Path entry : entries.toList()) {
-						Files.deleteIfExists(entry);
-					}
-				}
-				Files.deleteIfExists(blocker);
+			if (!Files.isDirectory(path)) {
+				return;
 			}
+			try (var entries = Files.list(path)) {
+				for (Path entry : entries.toList()) {
+					Files.deleteIfExists(entry);
+				}
+			}
+			Files.deleteIfExists(path);
 		} catch (IOException e) {
-			throw new UncheckedIOException("Could not unblock the purchase record", e);
+			throw new UncheckedIOException("Could not unblock " + path, e);
 		}
+	}
+
+	private static void blockTheRecord() {
+		clearTheRecord();
+		block(PurchaseJournal.file());
+	}
+
+	private static void unblockTheRecord() {
+		unblock(PurchaseJournal.file());
 	}
 
 	/** Nothing owned, nothing to spend. Every scenario starts here. */

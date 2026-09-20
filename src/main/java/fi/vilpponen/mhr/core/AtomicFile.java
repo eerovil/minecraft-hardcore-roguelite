@@ -1,7 +1,9 @@
 package fi.vilpponen.mhr.core;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -42,7 +44,7 @@ public final class AtomicFile {
 		try {
 			try (FileChannel channel = FileChannel.open(temporary,
 					StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-				channel.write(StandardCharsets.UTF_8.encode(contents));
+				writeFully(channel, StandardCharsets.UTF_8.encode(contents));
 				channel.force(true);
 			}
 			move(temporary, file);
@@ -56,6 +58,29 @@ public final class AtomicFile {
 				// Nothing useful to do about it, and the real failure is the one being thrown.
 			}
 			throw e;
+		}
+	}
+
+	/**
+	 * Empty the buffer into the channel.
+	 *
+	 * <p>{@link FileChannel#write(ByteBuffer)} says how many bytes it took, and is allowed to take
+	 * fewer than it was offered. One call and no loop is the bug that turns a long-enough file into
+	 * a shorter one — which would then be forced to the disk and renamed over the real one, so the
+	 * truncation would be the permanent state rather than a failure.
+	 *
+	 * <p>A channel that takes nothing at all cannot make progress, and looping on it would hang the
+	 * game rather than report anything, so that is an error.
+	 *
+	 * <p>Takes the interface rather than {@link FileChannel} so that a test can hand it a channel
+	 * that takes one byte at a time. A real file rarely writes short, which is exactly why the
+	 * missing loop survived review: it cannot be provoked through the public method.
+	 */
+	static void writeFully(WritableByteChannel channel, ByteBuffer buffer) throws IOException {
+		while (buffer.hasRemaining()) {
+			if (channel.write(buffer) <= 0) {
+				throw new IOException("Wrote nothing with " + buffer.remaining() + " byte(s) left to write");
+			}
 		}
 	}
 

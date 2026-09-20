@@ -228,8 +228,14 @@ directory. Then:
 - **the record did not land** — nothing has moved, the purchase is refused with `NOT_SAVED`, and the
   player still has their currency;
 - **the record landed** — the purchase is the player's. Both files are then brought up to date, and
-  once they are, the record is deleted. If the game stops first, `PurchaseJournal.recover()` at the
-  next start finishes whichever half is missing.
+  once they are, the record is deleted. If the game stops first, `PurchaseJournal.settle()` finishes
+  whichever half is missing.
+
+**There is room for one record, so only one purchase may be outstanding at a time.** A second
+purchase committed over an unfinished first would replace the only note of the first, losing that
+unlock while keeping both prices. So every purchase calls `settle()` before it commits anything and
+refuses with `NOT_SAVED` if settling does not work. A record that is still there is an obligation,
+and nothing is allowed to write over it.
 
 The record holds the values to arrive at, not the amounts to move. That is what makes replay safe:
 setting a number to what it already is does nothing, so recovery can run twice, or on a purchase
@@ -243,8 +249,16 @@ Consequences to keep:
   the disk does not; the cost of a failed write is paid at the next start, by recovery.
 - `Wallet` has no `spend`. A purchase decides the total it wants while holding the wallet's monitor
   and then sets it, because the total it writes has to be the same number that went into the record.
-- `PurchaseJournal.recover()` runs in `HardcoreRoguelite.onInitialize` before anything reads what is
-  owned.
+- `PurchaseJournal.settle()` runs in `HardcoreRoguelite.onInitialize` before anything reads what is
+  owned, and again at the start of every purchase.
+- Settling writes both files **unconditionally**, through `Wallet.set` and `UnlockState.restoreLevel`.
+  What is outstanding is a write, not a value: the half that failed has memory that already agrees
+  and a file that does not, so `setLevel`'s "nothing changed, nothing to do" would report the
+  obligation as discharged and delete the record on the strength of it. `restoreLevel` exists for
+  exactly that and nothing else.
+- `core/AtomicFile.writeFully` loops until the buffer is drained. `FileChannel.write` is allowed to
+  take fewer bytes than it is offered, and one unchecked call would force and rename a truncated
+  file as the permanent state.
 
 Do not add a second writer of either file that skips this, and do not go back to swallowing write
 failures.
