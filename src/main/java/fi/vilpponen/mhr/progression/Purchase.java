@@ -17,12 +17,10 @@ import fi.vilpponen.mhr.core.PersistenceException;
  * needs it without first arranging the currency for it. Anything that is supposed to cost something
  * goes through this method; if a second caller ever appears that does, it comes here too.
  *
- * <p>Currency and ownership are persisted together, as one snapshot, by {@link Progress}. That is
- * what makes this simple: a purchase works out what the whole of progression should look like
- * afterwards and asks for it in one write. Either the write lands and the purchase happened, or it
- * does not and nothing happened — not on the disk, not in memory, and not in what the running game
- * believes. There is no ordering to get right, nothing half-applied to notice, and nothing to
- * recover.
+ * <p>What makes that simple is that {@link Progress} persists currency and ownership together: this
+ * works out what the whole of progression should look like afterwards and asks for it in one write,
+ * which either lands or does not. There is no ordering to get right here and nothing half-applied
+ * to recover from — see {@link Progress} for why.
  *
  * <p>The method holds this class's monitor and {@link Progress} holds its own, so two purchases
  * cannot interleave and neither can a purchase and a dev command.

@@ -9,10 +9,10 @@ import java.util.Set;
 /**
  * Which unlocks the player owns, and how far each repeatable one has been taken.
  *
- * <p>A view, not a store. What is owned lives in {@link Progress}, in one file with the currency,
- * because a purchase moves both and there is no such thing as half of one. This is the name the
- * rest of the mod asks by, and the place the rules about unlock ids live: what an id's ceiling is,
- * and what counts as an id this build can act on.
+ * <p>A view over {@link Progress}, which owns everything permanent; how and where it stores it is
+ * its own business and {@code docs/codebase/progression.md}'s. What lives here is the name the rest
+ * of the mod asks by, and the rules about unlock ids: what an id's ceiling is, and what counts as
+ * an id this build can act on.
  *
  * <p>What is owned is keyed by id, not by enum constant. Most ids have an {@link Unlock} behind
  * them, because some Java asks whether they are owned. Some have none: a starter item is nothing

@@ -5,16 +5,10 @@ import fi.vilpponen.mhr.core.PersistenceException;
 /**
  * How much currency the player has to spend in the shop.
  *
- * <p>A view, not a store. The total lives in {@link Progress}, in one file with what is owned,
- * because a purchase moves both and a state where one moved and the other did not is not a state
- * the game should be in.
+ * <p>A view over {@link Progress}, which owns everything permanent. What this adds is the two
+ * questions currency gets asked — how much is there, and is it enough — and the one way it is set.
  *
- * <p><b>What this deliberately does not do is earn anything.</b> How currency is paid out — what it
- * is paid for, whether a run that ends badly pays, whether the total is visible during a run — is
- * still the biggest open design question in {@code docs/open-questions.md}, and the balance file's
- * {@code currency.advancements} table is a price list waiting for the rule rather than the rule
- * itself. Until that is decided, the only things that move this number are the shop spending it and
- * the dev command granting it.
+ * <p><b>Nothing here earns it.</b> See {@link Progress} for why that is still open.
  */
 public final class Wallet {
 	private static final Wallet INSTANCE = new Wallet();

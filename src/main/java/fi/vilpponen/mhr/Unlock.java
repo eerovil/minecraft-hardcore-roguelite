@@ -14,12 +14,16 @@ import fi.vilpponen.mhr.core.BalanceManager;
  * is the item stack in the balance file. Those live under {@code starter.} in the catalogue and
  * are owned by id alone — see {@code fi.vilpponen.mhr.starter} and {@link UnlockState}.
  *
- * <p>The id is one string used everywhere: it is the key in {@code default-balance.json}, the value
- * written under {@code unlocks} in the progression snapshot, and what the dev command takes. It is namespaced — {@code world.}
- * for things missing from the world, {@code player.} for things missing from the player — so the
- * shop can group the catalogue without a second table saying which is which. See
- * {@code docs/balance.md}. Renaming one is a save migration, so pick it once: {@link UnlockState}
- * carries the list of old names that still have to be understood.
+ * <p>The id is one string used everywhere: the key in {@code default-balance.json}, what is
+ * recorded when the unlock is bought, and what the dev command takes. It is namespaced —
+ * {@code world.} for things missing from the world, {@code player.} for things missing from the
+ * player — so the shop can group the catalogue without a second table saying which is which. See
+ * {@code docs/balance.md}.
+ *
+ * <p>Renaming one is a save migration rather than a refactor, so pick it once. Where progression is
+ * stored and how a renamed id is carried across is
+ * {@link fi.vilpponen.mhr.progression.Progress}'s, and the rules are in
+ * {@code docs/codebase/progression.md}.
  *
  * <p>Most unlocks are simply owned or not. A repeatable one can be bought several times and gets
  * stronger each time; {@link UnlockState} remembers how far the player has taken it, and how far
