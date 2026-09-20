@@ -99,6 +99,8 @@ public class ShopPurchaseGameTest {
 					this::anIdRenamedSinceTheSaveWasWrittenIsCarriedOver);
 			scenario(failures, "an-unreadable-snapshot-stops-rather-than-starting-empty",
 					this::anUnreadableSnapshotStopsRatherThanStartingEmpty);
+			scenario(failures, "a-snapshot-missing-a-field-is-damaged-rather-than-empty",
+					this::aSnapshotMissingAFieldIsDamagedRatherThanEmpty);
 			scenario(failures, "an-unreadable-legacy-unlock-file-stops-the-migration",
 					this::anUnreadableLegacyUnlockFileStopsTheMigration);
 			scenario(failures, "an-unreadable-legacy-currency-file-stops-it-too",
@@ -486,6 +488,42 @@ public class ShopPurchaseGameTest {
 				"and must leave the file exactly as it found it, so it can still be repaired");
 
 		startFromNothing();
+	}
+
+	/**
+	 * Readable JSON is not the same as a snapshot.
+	 *
+	 * <p>{@code {"currency": 100}} parses perfectly and used to load as a player who owns nothing —
+	 * at which point the next purchase wrote that invented emptiness over a file that still had the
+	 * unlocks in it. What a snapshot is gets decided in one place, where it is read, and a file that
+	 * is not one is damaged rather than empty.
+	 */
+	private void aSnapshotMissingAFieldIsDamagedRatherThanEmpty() {
+		refusesAndKeeps("no unlocks at all", "{\"currency\": 100}");
+		refusesAndKeeps("no currency at all", "{\"unlocks\": {\"" + TREES + "\": 1}}");
+		refusesAndKeeps("unlocks that are not an object", "{\"currency\": 100, \"unlocks\": []}");
+		refusesAndKeeps("currency that is not a number", "{\"currency\": \"lots\", \"unlocks\": {}}");
+		refusesAndKeeps("a currency that is not whole", "{\"currency\": 1.5, \"unlocks\": {}}");
+
+		// And the shape that is right is still accepted, or the four above would pass just as well
+		// with everything refused.
+		startFromNothing();
+		write(Progress.file(), "{\"currency\": 7, \"unlocks\": {\"" + TREES + "\": 1}}");
+		Progress.reloadFromFile();
+		check(owns(TREES) && balance() == 7,
+				"a well-formed snapshot must still load, and it came back with " + balance()
+						+ " and " + TREES + (owns(TREES) ? " owned" : " not owned"));
+
+		startFromNothing();
+	}
+
+	private void refusesAndKeeps(String what, String contents) {
+		startFromNothing();
+		write(Progress.file(), contents);
+
+		check(refusesToLoad(), "a snapshot with " + what + " must refuse to load, and it loaded");
+		check(contents.equals(read(Progress.file())),
+				"and must leave the file exactly as it found it, so it can still be repaired");
 	}
 
 	/**

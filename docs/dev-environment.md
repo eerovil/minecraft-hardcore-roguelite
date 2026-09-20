@@ -671,6 +671,10 @@ needs, and each is named in the log the way the client scenarios are:
 - **the-end-is-widened-only-when-the-tier-is-narrower-than-its-floor** — the floor itself, on a fixture that
   cannot drift: one tier retuned to a quarter of the minimum and another to four times it. The
   narrow one is widened in the end and left alone in the overworld, the wide one keeps its size.
+- **a-balance-that-turns-the-ladder-upside-down-is-refused** — the tiers are a ladder and two things
+  read it differently: a run walks the constants, the shop compares sizes. A balance making Medium
+  bigger than Large is refused outright and the sizes in effect are left alone, so the two can never
+  disagree; a ladder that goes up is still accepted.
 - **a-reloaded-override-resizes-the-tier-on-its-next-application** — writing a `worldBorder.medium.size`
   into the config override and running `mhr reload` leaves the border the run is already inside
   exactly as it was, which is what the reload command promises: a world is never resized under the
@@ -739,6 +743,10 @@ than asserting one field:
 - **an-unreadable-snapshot-stops-rather-than-starting-empty** — a damaged snapshot refuses to load
   and is left exactly as it was found, so it can still be repaired. Starting empty is the one
   mistake that cannot be undone: the next purchase writes the empty profile over the real one.
+- **a-snapshot-missing-a-field-is-damaged-rather-than-empty** — `{"currency": 100}` parses fine and
+  is not a snapshot. Missing `unlocks`, missing `currency`, `unlocks` that are not an object, and a
+  currency that is not a whole number each refuse and leave the file untouched; a well-formed one
+  still loads, so the five refusals are not just "everything is refused".
 - **an-unreadable-legacy-unlock-file-stops-the-migration** — and writes no snapshot at all, because a
   half-read migration committed *is* the loss.
 - **an-unreadable-legacy-currency-file-stops-it-too** — the same rule for the other source.

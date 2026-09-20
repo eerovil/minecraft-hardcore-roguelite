@@ -142,6 +142,8 @@ public final class WorldBorderGameTest {
 				() -> theEndIsWidenedOnlyWhenTheTierIsNarrowerThanItsFloor(server));
 		scenario(failures, "a-reloaded-override-resizes-the-tier-on-its-next-application",
 				() -> aReloadedOverrideResizesTheTierOnItsNextApplication(server));
+		scenario(failures, "a-balance-that-turns-the-ladder-upside-down-is-refused",
+				() -> aBalanceThatTurnsTheLadderUpsideDownIsRefused(server));
 
 		// The journeys move state the whole server shares — the run's spawn and the border in every
 		// dimension — and they hold it across ticks while a traveller is on its way. A traveller
@@ -618,6 +620,48 @@ public final class WorldBorderGameTest {
 		}
 		netherTraveller = null;
 		endTraveller = null;
+	}
+
+	/**
+	 * The tiers are a ladder and two different things read it: a run takes the largest tier owned by
+	 * walking the constants, and the shop stops selling a tier once a bigger one is owned by
+	 * comparing sizes. Those agree only while the data does.
+	 *
+	 * <p>So a balance that makes a lower tier bigger than the one above it is refused outright,
+	 * which is what stops the disagreement from ever reaching the shop — there is no state in which
+	 * a tier could be charged for while leaving the world on a tier the ladder calls bigger.
+	 */
+	private void aBalanceThatTurnsTheLadderUpsideDownIsRefused(MinecraftServer server) {
+		Path override = BalanceManager.overrideFile();
+		double medium = BorderTier.MEDIUM.balance(BalanceManager.get()).size().orElseThrow();
+		double large = BorderTier.LARGE.balance(BalanceManager.get()).size().orElseThrow();
+		check(medium < large, "setup: the shipped ladder should go up, and medium is " + (long) medium
+				+ " against large's " + (long) large);
+
+		try {
+			// Medium bigger than Large: the shop would compare sizes and call Medium the bigger of
+			// the two, while a run walking the constants would still finish on Large.
+			write(override, "{\"worldBorder\": {\"medium\": {\"size\": 4096}, \"large\": {\"size\": 2048}}}");
+			runCommand(server, "mhr reload");
+
+			check(BorderTier.MEDIUM.balance(BalanceManager.get()).size().orElseThrow() == medium,
+					"an upside-down ladder must be refused and the balance left alone, and medium is now "
+							+ (long) BorderTier.MEDIUM.balance(BalanceManager.get()).size().orElseThrow());
+			check(BorderTier.LARGE.balance(BalanceManager.get()).size().orElseThrow() == large,
+					"large likewise, and it is now "
+							+ (long) BorderTier.LARGE.balance(BalanceManager.get()).size().orElseThrow());
+
+			// A ladder that goes up is still accepted, or the check above would pass with every
+			// reload refused.
+			write(override, "{\"worldBorder\": {\"medium\": {\"size\": " + RETUNED_MEDIUM_SIZE + "}}}");
+			runCommand(server, "mhr reload");
+			check(BorderTier.MEDIUM.balance(BalanceManager.get()).size().orElseThrow() == RETUNED_MEDIUM_SIZE,
+					"a ladder that goes up must still be accepted, and medium is "
+							+ (long) BorderTier.MEDIUM.balance(BalanceManager.get()).size().orElseThrow());
+		} finally {
+			delete(override);
+			runCommand(server, "mhr reload");
+		}
 	}
 
 	// --- plumbing ----------------------------------------------------------------------------------

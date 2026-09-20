@@ -99,6 +99,10 @@ public final class Catalogue {
 	 * in, or the {@code BorderTier} constants, which are the border feature's business and not the
 	 * catalogue's. An unbounded tier is bigger than everything.
 	 *
+	 * <p>Comparing sizes is the same ordering the run itself uses, which walks the tier constants,
+	 * because the border feature refuses a balance whose tiers do not get bigger going up. Without
+	 * that the two would be free to disagree and a tier that changes nothing would go back on sale.
+	 *
 	 * <p>False for every id that is not a border tier, which is all of them but four.
 	 */
 	private static boolean satisfiedByABiggerTier(String id, UnlockState state) {

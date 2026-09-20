@@ -4,6 +4,7 @@ import fi.vilpponen.mhr.HardcoreRoguelite;
 import fi.vilpponen.mhr.UnlockEffects;
 import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.core.Balance;
+import fi.vilpponen.mhr.core.BalanceException;
 import fi.vilpponen.mhr.core.BalanceManager;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.minecraft.core.BlockPos;
@@ -71,6 +72,57 @@ public final class WorldBorders {
 		// A border tier bought in the shop is the size of the world from that moment on, the same
 		// way the dev command's has always been.
 		UnlockEffects.onChange(server -> selectOwnedTier());
+
+		BalanceManager.addCheck(WorldBorders::checkTheTiersGoUp);
+		// The balance in effect was loaded before that could be registered, so nothing has looked at
+		// its tiers yet. A bundled or override file with the ladder the wrong way up stops the game
+		// here, rather than waiting for somebody to reload.
+		checkTheTiersGoUp(BalanceManager.get());
+	}
+
+	/**
+	 * The tiers are a ladder, so their sizes have to go up it.
+	 *
+	 * <p>Two things read that ladder and they read it differently. A run takes the largest tier
+	 * owned by walking {@link BorderTier} in order. The shop stops selling a tier once a bigger one
+	 * is owned, by comparing the sizes in the balance file. Those are the same ordering only while
+	 * the data says they are: make Medium bigger than Large and the two disagree about which is
+	 * bigger, and a tier that cannot change the world goes back on sale.
+	 *
+	 * <p>The answer is to require the data to agree rather than teach two readers to cope with data
+	 * that does not. Sizes may repeat — two tiers the same size satisfy each other, and neither
+	 * changes anything the other did not — but they may never go down, and nothing bounded may
+	 * follow something unbounded.
+	 *
+	 * @throws BalanceException naming the tier, so the message says which line to fix
+	 */
+	private static void checkTheTiersGoUp(Balance candidate) {
+		double previous = 0;
+		BorderTier below = null;
+		boolean unbounded = false;
+
+		for (BorderTier tier : BorderTier.values()) {
+			Balance.BorderBalance balance = tier.balance(candidate);
+			if (unbounded) {
+				throw new BalanceException("Border tier '" + tier.id() + "' has a size, and '" + below.id()
+						+ "' before it has none. The tiers have to get bigger going up, and nothing is"
+						+ " bigger than unbounded.");
+			}
+			if (balance.isUnbounded()) {
+				unbounded = true;
+				below = tier;
+				continue;
+			}
+
+			double size = balance.size().getAsDouble();
+			if (below != null && size < previous) {
+				throw new BalanceException("Border tier '" + tier.id() + "' is " + (long) size
+						+ " blocks across and '" + below.id() + "' below it is " + (long) previous
+						+ ". The tiers have to get bigger going up, never smaller.");
+			}
+			previous = size;
+			below = tier;
+		}
 	}
 
 	/**

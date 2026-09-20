@@ -271,7 +271,10 @@ Rules to keep:
   - `AtomicFile` does not fall back. A filesystem that will not promise an atomic rename gets an
     error rather than a quiet plain replace, because a caller told "written" would sell something on
     the strength of a guarantee that was never made.
-  - Reading invents nothing. No file is a new player and starts from nothing; a file that is there
+  - Reading invents nothing. What a snapshot is — both fields, in the right shape — is decided once,
+    where it is read. `{"currency": 100}` parses perfectly and is a damaged file, not a player who
+    owns nothing; loading it as empty is how the next purchase writes that emptiness over something
+    repairable. No file is a new player and starts from nothing; a file that is there
     and cannot be read stops the game with the path named. Starting empty is the one mistake that
     cannot be undone, because the next purchase writes the empty profile over the real one.
   - A migration commits only once **every** legacy file that is present has been read whole. A
@@ -292,7 +295,9 @@ There is no border-specific save file, and there must not be one. The tier is de
 The tiers are steps, so the catalogue sells them as steps too: owning one satisfies every tier no
 bigger than it, and `Catalogue` reports those as owned rather than offering a purchase that cannot
 change anything. Bigger is by size, from the `worldBorder` data the catalogue already reads — not
-the `BorderTier` constants, which are the border feature's business. Nothing extra is written to the
+the `BorderTier` constants, which are the border feature's business. Those two are the same ordering
+because the border feature refuses a balance whose tiers do not get bigger going up; without that
+rule they would be free to disagree. Nothing extra is written to the
 snapshot for it; what the player bought stays what is recorded.
 
 `/mhr border <tier>` still overrides it by hand, and once it has, purchases stop deciding the size

@@ -6,6 +6,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import fi.vilpponen.mhr.HardcoreRoguelite;
 import fi.vilpponen.mhr.Unlock;
 import fi.vilpponen.mhr.core.AtomicFile;
@@ -238,20 +239,53 @@ public final class Progress {
 		try (Reader reader = Files.newBufferedReader(file)) {
 			JsonElement root = JsonParser.parseReader(reader);
 			if (root == null || !root.isJsonObject()) {
-				throw new PersistenceException("Progression in " + file + " is not an object", null);
+				throw malformed("it is not an object");
 			}
 			JsonObject json = root.getAsJsonObject();
-			JsonElement total = json.get(CURRENCY);
-			currency = total == null ? 0 : Math.max(0, total.getAsInt());
 
-			JsonElement unlocks = json.get(UNLOCKS);
-			Map<String, Integer> read = unlocks != null && unlocks.isJsonObject()
-					? levelsIn(unlocks.getAsJsonObject())
-					: new TreeMap<>();
-			levels = Collections.unmodifiableMap(read);
+			// Both fields are required, both are checked here, and this is the only place that says
+			// what a snapshot is. A file missing one of them is a damaged file, not a player who
+			// happens to own nothing: reading it as an empty profile is how the next purchase writes
+			// that emptiness over something that could have been repaired.
+			currency = Math.max(0, wholeNumber(json, CURRENCY));
+			levels = Collections.unmodifiableMap(levelsIn(object(json, UNLOCKS)));
 		} catch (IOException | RuntimeException e) {
 			throw failedToRead(file, e);
 		}
+	}
+
+	/** @throws PersistenceException unless the field is there and holds a whole number. */
+	private int wholeNumber(JsonObject json, String field) {
+		JsonElement value = json.get(field);
+		if (value == null) {
+			throw malformed("it has no '" + field + "'");
+		}
+		if (!(value instanceof JsonPrimitive primitive) || !primitive.isNumber()) {
+			throw malformed("'" + field + "' should be a whole number and is " + value);
+		}
+		double raw = primitive.getAsDouble();
+		if (!Double.isFinite(raw) || raw != Math.rint(raw) || Math.abs(raw) > Integer.MAX_VALUE) {
+			throw malformed("'" + field + "' should be a whole number and is " + value);
+		}
+		return (int) raw;
+	}
+
+	/** @throws PersistenceException unless the field is there and holds an object. */
+	private JsonObject object(JsonObject json, String field) {
+		JsonElement value = json.get(field);
+		if (value == null) {
+			throw malformed("it has no '" + field + "'");
+		}
+		if (!value.isJsonObject()) {
+			throw malformed("'" + field + "' should be an object and is " + value);
+		}
+		return value.getAsJsonObject();
+	}
+
+	private PersistenceException malformed(String what) {
+		return new PersistenceException("Progression in " + file + " is damaged: " + what
+				+ ". The game is stopping rather than starting as though nothing had ever been bought."
+				+ " Fix or move the file and start again.", null);
 	}
 
 	/**
