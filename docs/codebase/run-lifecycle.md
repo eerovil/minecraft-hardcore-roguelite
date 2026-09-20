@@ -82,8 +82,21 @@ What a reload makes of each phase (`RunRecord.recovered()`):
 | `RUNNING` | the player quit mid-run | the run continues. **Quitting is not dying.** |
 | `ENDING_RUN` | crashed while finishing a run | `RunLifecycle` finishes it: commits the reward if `rewardedRunId != runId`, then returns to the lobby |
 
-An unreadable file is reported loudly and read as a save nobody has played. That loses at most one
-run and never any permanent progression, which is stored elsewhere.
+A **missing** file is a save nobody has played. A file that exists and cannot be read is not, and is
+refused: `RunStorage.load` throws, `RunLifecycle` quarantines the save, and no run starts, no run
+ends and nothing is written over the file until somebody has looked at it. The unreadable record is
+copied to `hardcore-roguelite-run.json.unreadable` first, because it is the only evidence of what
+that save was doing.
+
+Reading it as a new save instead would be worse than it sounds. A `RUNNING` record is somebody's run
+in progress, and starting over deletes its worlds. An `ENDING_RUN` record is a run owing a reward,
+and a new save skips the recovery that hands it over — the payout is gone for good. Neither may be
+guessed at.
+
+Parsing is strict for the same reason: every field is required, the phase has to be one this build
+knows, and a record that contradicts itself (playing run zero, rewarded for a run that never
+started) is refused. Filling a gap in produces a plausible state that never existed, which is
+harder to notice than a refusal.
 
 ## Once-only boundaries
 

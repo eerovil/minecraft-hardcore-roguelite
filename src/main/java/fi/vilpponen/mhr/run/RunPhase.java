@@ -22,13 +22,19 @@ public enum RunPhase {
 	/** The run is over. Its reward may or may not have been committed yet; the record says which. */
 	ENDING_RUN;
 
-	/** @return the phase with this name, or {@link #LOBBY} for anything unrecognisable. */
+	/**
+	 * @return the phase with this name, or null if no phase has it.
+	 *
+	 * <p>Null rather than a plausible default on purpose. A saved record whose phase this build
+	 * cannot read is a record that cannot be acted on at all — guessing "lobby" would throw away
+	 * whatever run it was describing.
+	 */
 	public static RunPhase byName(String name) {
 		for (RunPhase phase : values()) {
 			if (phase.name().equalsIgnoreCase(name)) {
 				return phase;
 			}
 		}
-		return LOBBY;
+		return null;
 	}
 }

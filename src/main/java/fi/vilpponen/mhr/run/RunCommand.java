@@ -39,8 +39,8 @@ public final class RunCommand {
 	}
 
 	private static int status(CommandContext<CommandSourceStack> context) {
-		RunRecord record = RunLifecycle.get().record();
-		context.getSource().sendSuccess(() -> Component.literal("Run lifecycle: " + record.describe()), false);
+		String described = RunLifecycle.get().describe();
+		context.getSource().sendSuccess(() -> Component.literal("Run lifecycle: " + described), false);
 		return 1;
 	}
 

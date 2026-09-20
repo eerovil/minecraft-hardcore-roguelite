@@ -55,6 +55,15 @@ public final class RunLifecycle {
 	private RunStorage storage;
 	private RunRecord record = RunRecord.NEW_SAVE;
 
+	/**
+	 * Why this save is not being played, or null when it is.
+	 *
+	 * <p>Set when the record exists and cannot be believed. Everything that would move the loop on,
+	 * or write over the file, refuses while this is set — the alternative is deciding on the
+	 * player's behalf that whatever run the file described did not happen.
+	 */
+	private String quarantine;
+
 	private RunLifecycle() {
 	}
 
@@ -98,6 +107,7 @@ public final class RunLifecycle {
 		if (server == null) {
 			throw new IllegalStateException("no server is running");
 		}
+		refuseIfQuarantined();
 
 		long chosen = seed.orElseGet(RunWorlds::randomSeed);
 		// Written down before a single file is touched, so a crash during world creation is found
@@ -174,6 +184,7 @@ public final class RunLifecycle {
 	 * @throws IllegalStateException if no run is in progress
 	 */
 	public synchronized void endRun(String reason) {
+		refuseIfQuarantined();
 		if (record.phase() == RunPhase.ENDING_RUN) {
 			// Already over, and stuck: a previous attempt could not commit the reward or could not
 			// write the record. Retry the part that did not finish rather than refusing, so a save
@@ -262,7 +273,22 @@ public final class RunLifecycle {
 	private synchronized void serverStarted(MinecraftServer started) {
 		this.server = started;
 		this.storage = new RunStorage(started.getWorldPath(LevelResource.ROOT));
-		this.record = storage.load();
+		this.quarantine = null;
+
+		try {
+			this.record = storage.load();
+		} catch (RunStorage.UnreadableRecord unreadable) {
+			// Not a new save. A save whose record cannot be read might have had a run in progress,
+			// or a run owing a reward, and starting over would throw either away. Nothing moves and
+			// nothing is written until somebody has looked at it.
+			this.record = RunRecord.NEW_SAVE;
+			this.quarantine = unreadable.getMessage();
+			HardcoreRoguelite.LOGGER.error("This save's run record cannot be read, so the loop is"
+					+ " stopped: no run will start or end, and nothing will be written over it."
+					+ " Fix or remove {}", storage.file(), unreadable);
+			return;
+		}
+
 		HardcoreRoguelite.LOGGER.info("Run lifecycle: {}", record.describe());
 
 		// load() has already recovered CREATING_RUN back to the lobby. ENDING_RUN is the one phase
@@ -280,6 +306,7 @@ public final class RunLifecycle {
 		this.server = null;
 		this.storage = null;
 		this.record = RunRecord.NEW_SAVE;
+		this.quarantine = null;
 	}
 
 	/**
@@ -308,6 +335,13 @@ public final class RunLifecycle {
 				player.getGameProfile().name(), player.level().dimension().identifier(),
 				record.describe());
 
+		if (quarantine != null) {
+			Lobby.send(player);
+			player.sendSystemMessage(Component.literal(
+					"This save's run record cannot be read, so the loop is stopped. See the server"
+							+ " log; nothing has been overwritten."));
+			return;
+		}
 		if (!record.isRunning()) {
 			Lobby.send(player);
 			player.sendSystemMessage(Component.literal(
@@ -341,6 +375,25 @@ public final class RunLifecycle {
 		resetForNewRun(inTheRun);
 		inTheRun.sendSystemMessage(Component.literal(
 				"Run " + record.runId() + " started while you were away. You have joined it."));
+	}
+
+	/**
+	 * Stop, if this save's record could not be read.
+	 *
+	 * @throws IllegalStateException always, when the save is quarantined
+	 */
+	private void refuseIfQuarantined() {
+		if (quarantine != null) {
+			throw new IllegalStateException("this save's run record cannot be read, so nothing may"
+					+ " start, end or be written over it — " + quarantine);
+		}
+	}
+
+	/** What the loop is doing, or why it is not. */
+	public synchronized String describe() {
+		return quarantine == null
+				? record.describe()
+				: "stopped — the run record cannot be read: " + quarantine;
 	}
 
 	/** Is this the very object the server has connected, rather than one that merely matches it? */
@@ -436,6 +489,7 @@ public final class RunLifecycle {
 	 * @throws IllegalStateException if the record could not be written
 	 */
 	private void set(RunRecord next) {
+		refuseIfQuarantined();
 		if (storage != null && !storage.save(next)) {
 			throw new IllegalStateException("could not write the run record to " + storage.file());
 		}

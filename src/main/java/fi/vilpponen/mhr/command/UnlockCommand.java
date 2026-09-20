@@ -92,7 +92,7 @@ public final class UnlockCommand {
 					.append(state.isOwned(id) ? "[owned] " : "[locked] ")
 					.append(id);
 		}
-		lines.append("\nRun lifecycle: ").append(RunLifecycle.get().record().describe());
+		lines.append("\nRun lifecycle: ").append(RunLifecycle.get().describe());
 		String message = lines.toString();
 		context.getSource().sendSuccess(() -> Component.literal(message), false);
 		return Unlock.values().length + StarterItems.ids().size();

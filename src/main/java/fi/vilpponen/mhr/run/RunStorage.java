@@ -24,7 +24,8 @@ import java.nio.file.StandardCopyOption;
  * to one save rather than to the installation — two saves are two separate loops.
  *
  * <p>Written whole, to a temporary file, then moved into place. Half a record is worse than none:
- * the reward-exactly-once rule is built on being able to believe what the file says.
+ * everything the loop promises is built on being able to believe what the file says — which is also
+ * why a record that cannot be believed is refused rather than quietly replaced with a fresh one.
  *
  * <p>Plain Java on a {@link Path}, with no Minecraft in it, so the reload and recovery behaviour is
  * testable without a game.
@@ -47,15 +48,22 @@ public final class RunStorage {
 	/**
 	 * Read the record, already {@linkplain RunRecord#recovered() recovered}.
 	 *
-	 * <p>A missing file is a save that has never been played and reads as {@link
-	 * RunRecord#NEW_SAVE}. An unreadable one is reported loudly and also reads as a new save: the
-	 * permanent progression lives elsewhere and is not at risk, so the worst case is one lost run,
-	 * which is better than refusing to start or acting on numbers we cannot trust.
+	 * <p>A missing file is a save nobody has played and reads as {@link RunRecord#NEW_SAVE}. A file
+	 * that exists and cannot be believed is something else entirely, and is refused.
+	 *
+	 * <p>That distinction is the whole of this method. Treating an unreadable record as a new save
+	 * quietly throws away whatever it was describing — and the two states worth most are exactly
+	 * the ones that would be lost: a {@code RUNNING} record is somebody's run in progress, and an
+	 * {@code ENDING_RUN} record is a run owing a reward that the next start is supposed to hand
+	 * over. Neither may be guessed at.
+	 *
+	 * @throws UnreadableRecord if a record exists and cannot be parsed or believed
 	 */
 	public RunRecord load() {
 		if (!Files.isRegularFile(file)) {
 			return RunRecord.NEW_SAVE;
 		}
+
 		try (Reader reader = Files.newBufferedReader(file)) {
 			JsonElement root = JsonParser.parseReader(reader);
 			if (root == null || !root.isJsonObject()) {
@@ -63,11 +71,39 @@ public final class RunStorage {
 			}
 			return read(root.getAsJsonObject()).recovered();
 		} catch (IOException | RuntimeException e) {
-			HardcoreRoguelite.LOGGER.error(
-					"Could not read {}. Treating this save as one that has never been played:"
-							+ " permanent progression is not stored here and is unaffected.",
-					file, e);
-			return RunRecord.NEW_SAVE;
+			throw new UnreadableRecord(keepForInspection() + ": " + e.getMessage(), e);
+		}
+	}
+
+	/**
+	 * Put the unreadable record somewhere it will not be written over.
+	 *
+	 * <p>Whatever is wrong with it, it is the only evidence of what this save was doing, and the
+	 * next thing to touch the save would otherwise overwrite it.
+	 *
+	 * @return a description of where it ended up, for the message somebody will have to read
+	 */
+	private String keepForInspection() {
+		Path kept = file.resolveSibling(FILE_NAME + ".unreadable");
+		if (Files.exists(kept)) {
+			// The first one is the interesting one. Later attempts leave it alone.
+			return file + " (an earlier copy is already at " + kept + ")";
+		}
+		try {
+			Files.copy(file, kept);
+			return file + " (copied to " + kept + ")";
+		} catch (IOException e) {
+			HardcoreRoguelite.LOGGER.error("Could not keep a copy of {}", file, e);
+			return file.toString();
+		}
+	}
+
+	/** A record that exists but cannot be acted on. */
+	public static final class UnreadableRecord extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+
+		UnreadableRecord(String message, Throwable cause) {
+			super(message, cause);
 		}
 	}
 
@@ -103,23 +139,64 @@ public final class RunStorage {
 		}
 	}
 
+	/**
+	 * Turn the file's JSON into a record, or refuse.
+	 *
+	 * <p>Every field is required and nothing is defaulted. A record missing its run id is not a
+	 * record with run id zero — it is a record this build cannot tell the truth about, and filling
+	 * the gap in would produce a plausible-looking state that never existed.
+	 */
 	private static RunRecord read(JsonObject json) {
-		return new RunRecord(
-				RunPhase.byName(string(json, "phase")),
-				(int) number(json, "runId"),
-				number(json, "seed"),
-				number(json, "startedAt"),
-				(int) number(json, "completedRuns"),
-				(int) number(json, "rewardedRunId"));
+		RunPhase phase = RunPhase.byName(required(json, "phase").getAsString());
+		if (phase == null) {
+			throw new IllegalStateException(
+					"no such phase: " + required(json, "phase").getAsString());
+		}
+
+		// Read in the order the file writes them, so the first thing reported missing is the first
+		// thing missing rather than whichever happened to be asked for first.
+		int runId = wholeNumber(json, "runId");
+		long seed = number(json, "seed");
+		long startedAt = number(json, "startedAt");
+		int completedRuns = wholeNumber(json, "completedRuns");
+		int rewardedRunId = wholeNumber(json, "rewardedRunId");
+		RunRecord record =
+				new RunRecord(phase, runId, seed, startedAt, completedRuns, rewardedRunId);
+
+		if (runId < 0 || completedRuns < 0 || rewardedRunId < 0) {
+			throw new IllegalStateException("negative counts in " + record.describe());
+		}
+		if (phase != RunPhase.LOBBY && runId < 1) {
+			throw new IllegalStateException(phase + " needs a run, and the run id is " + runId);
+		}
+		if (rewardedRunId > runId) {
+			throw new IllegalStateException(
+					"run " + rewardedRunId + " was rewarded but only " + runId + " runs have started");
+		}
+		return record;
 	}
 
-	private static String string(JsonObject json, String key) {
+	private static JsonElement required(JsonObject json, String key) {
 		JsonElement value = json.get(key);
-		return value == null || value.isJsonNull() ? "" : value.getAsString();
+		if (value == null || value.isJsonNull()) {
+			throw new IllegalStateException("no " + key);
+		}
+		return value;
 	}
 
 	private static long number(JsonObject json, String key) {
-		JsonElement value = json.get(key);
-		return value == null || value.isJsonNull() ? 0L : value.getAsLong();
+		JsonElement value = required(json, key);
+		if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+			throw new IllegalStateException(key + " is not a number: " + value);
+		}
+		return value.getAsLong();
+	}
+
+	private static int wholeNumber(JsonObject json, String key) {
+		long value = number(json, key);
+		if (value != (int) value) {
+			throw new IllegalStateException(key + " does not fit in a run count: " + value);
+		}
+		return (int) value;
 	}
 }

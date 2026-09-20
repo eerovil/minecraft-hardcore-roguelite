@@ -2,12 +2,14 @@ package fi.vilpponen.mhr.run;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -17,8 +19,9 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p>The interesting cases are all failure ones: a save nobody has played, a file somebody edited
  * into nonsense, and a process that died between the two writes that bracket a reward. The record
- * has to come back meaning the same thing, and it must never come back meaning that a run is owed
- * a second payout.
+ * has to come back meaning the same thing, it must never come back meaning that a run is owed a
+ * second payout, and a record that cannot be read must not come back as a save that was never
+ * played — that would throw away a run in progress, or a reward still owed.
  */
 class RunStorageTest {
 	@TempDir
@@ -108,31 +111,121 @@ class RunStorageTest {
 	}
 
 	@Test
-	@DisplayName("nonsense in the file is reported and treated as an unplayed save")
+	@DisplayName("nonsense in the file is refused rather than read as an unplayed save")
 	void corruptFile() throws IOException {
 		Files.writeString(save.resolve(RunStorage.FILE_NAME), "{ this is not json");
 
-		assertEquals(RunRecord.NEW_SAVE, new RunStorage(save).load());
+		assertThrows(RunStorage.UnreadableRecord.class, () -> new RunStorage(save).load());
 	}
 
 	@Test
-	@DisplayName("missing fields fall back rather than throwing")
+	@DisplayName("a missing field is refused rather than filled in")
 	void partialFile() throws IOException {
 		Files.writeString(save.resolve(RunStorage.FILE_NAME), "{\"phase\":\"RUNNING\",\"runId\":4}");
 
-		RunRecord loaded = new RunStorage(save).load();
-
-		assertEquals(RunPhase.RUNNING, loaded.phase());
-		assertEquals(4, loaded.runId());
-		assertEquals(0, loaded.completedRuns());
+		RunStorage.UnreadableRecord thrown =
+				assertThrows(RunStorage.UnreadableRecord.class, () -> new RunStorage(save).load());
+		assertTrue(thrown.getMessage().contains("seed"), thrown.getMessage());
 	}
 
 	@Test
-	@DisplayName("a phase this build does not know reads as the lobby")
-	void unknownPhase() throws IOException {
-		Files.writeString(save.resolve(RunStorage.FILE_NAME), "{\"phase\":\"SHOPPING\",\"runId\":4}");
+	@DisplayName("every field is required")
+	void eachFieldIsRequired() throws IOException {
+		String complete = "{\"phase\":\"RUNNING\",\"runId\":2,\"seed\":5,\"startedAt\":1,"
+				+ "\"completedRuns\":1,\"rewardedRunId\":1}";
+		assertEquals(RunPhase.RUNNING, load(complete).phase(), "the complete record must read");
 
-		assertEquals(RunPhase.LOBBY, new RunStorage(save).load().phase());
+		for (String field : List.of("phase", "runId", "seed", "startedAt", "completedRuns",
+				"rewardedRunId")) {
+			String without = removeField(complete, field);
+			assertThrows(RunStorage.UnreadableRecord.class, () -> load(without),
+					"a record with no " + field + " must be refused");
+		}
+	}
+
+	@Test
+	@DisplayName("a field that is not a number is refused")
+	void nonNumericField() {
+		assertThrows(RunStorage.UnreadableRecord.class, () -> load(
+				"{\"phase\":\"LOBBY\",\"runId\":\"two\",\"seed\":5,\"startedAt\":1,"
+						+ "\"completedRuns\":1,\"rewardedRunId\":1}"));
+	}
+
+	@Test
+	@DisplayName("a phase this build does not know is refused rather than read as the lobby")
+	void unknownPhase() {
+		RunStorage.UnreadableRecord thrown = assertThrows(RunStorage.UnreadableRecord.class,
+				() -> load("{\"phase\":\"SHOPPING\",\"runId\":1,\"seed\":5,\"startedAt\":1,"
+						+ "\"completedRuns\":0,\"rewardedRunId\":0}"));
+		assertTrue(thrown.getMessage().contains("SHOPPING"), thrown.getMessage());
+	}
+
+	@Test
+	@DisplayName("a record that contradicts itself is refused")
+	void contradictoryRecord() {
+		// Playing run 0, which never existed.
+		assertThrows(RunStorage.UnreadableRecord.class, () -> load(
+				"{\"phase\":\"RUNNING\",\"runId\":0,\"seed\":5,\"startedAt\":1,"
+						+ "\"completedRuns\":0,\"rewardedRunId\":0}"));
+
+		// Rewarded for a run that has not started.
+		assertThrows(RunStorage.UnreadableRecord.class, () -> load(
+				"{\"phase\":\"LOBBY\",\"runId\":1,\"seed\":5,\"startedAt\":1,"
+						+ "\"completedRuns\":1,\"rewardedRunId\":4}"));
+
+		// Counts that cannot be counts.
+		assertThrows(RunStorage.UnreadableRecord.class, () -> load(
+				"{\"phase\":\"LOBBY\",\"runId\":-2,\"seed\":5,\"startedAt\":1,"
+						+ "\"completedRuns\":0,\"rewardedRunId\":0}"));
+	}
+
+	@Test
+	@DisplayName("a corrupt record does not erase a run in progress")
+	void corruptionCannotEraseARunningRun() throws IOException {
+		// The file said RUNNING and then went bad. Nothing may decide the run did not happen: that
+		// is somebody's run in progress, and a fresh save would delete its worlds on the next start.
+		new RunStorage(save).save(new RunRecord(RunPhase.RUNNING, 3, 11L, 1L, 2, 2));
+		corrupt();
+
+		assertThrows(RunStorage.UnreadableRecord.class, () -> new RunStorage(save).load());
+	}
+
+	@Test
+	@DisplayName("a corrupt record does not erase a run that still owes its reward")
+	void corruptionCannotEraseAnUnrewardedEnding() throws IOException {
+		// Worse than losing a run: reading this as a new save skips the recovery that hands the
+		// reward over, and the payout is gone for good.
+		new RunStorage(save).save(new RunRecord(RunPhase.ENDING_RUN, 3, 11L, 1L, 2, 2));
+		corrupt();
+
+		assertThrows(RunStorage.UnreadableRecord.class, () -> new RunStorage(save).load());
+	}
+
+	@Test
+	@DisplayName("the unreadable record is kept rather than written over")
+	void theUnreadableRecordIsKept() throws IOException {
+		Files.writeString(save.resolve(RunStorage.FILE_NAME), "{ not json");
+
+		assertThrows(RunStorage.UnreadableRecord.class, () -> new RunStorage(save).load());
+
+		Path kept = save.resolve(RunStorage.FILE_NAME + ".unreadable");
+		assertTrue(Files.isRegularFile(kept), "the only evidence of what the save was doing");
+		assertEquals("{ not json", Files.readString(kept));
+	}
+
+	private RunRecord load(String json) throws IOException {
+		Files.writeString(save.resolve(RunStorage.FILE_NAME), json);
+		return new RunStorage(save).load();
+	}
+
+	private void corrupt() throws IOException {
+		Path record = save.resolve(RunStorage.FILE_NAME);
+		Files.writeString(record, Files.readString(record).replace('{', '['));
+	}
+
+	private static String removeField(String json, String field) {
+		return json.replaceAll(",?\\s*\"" + field + "\"\\s*:\\s*(\"[^\"]*\"|-?\\d+)", "")
+				.replace("{,", "{");
 	}
 
 	@Test
