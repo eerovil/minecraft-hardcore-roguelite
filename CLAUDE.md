@@ -7,7 +7,7 @@ starting game is deliberately missing pieces of vanilla Minecraft, and the playe
 back. After vanilla is restored, more expensive Vanilla+ unlocks can push the run beyond vanilla.
 
 This file is the repo-wide map and the rules that apply to every agent session. Detailed operational
-guidance lives in `docs/agent-workflow.md` and `docs/dev-environment.md`.
+guidance lives in `docs/agent-workflow.md`, `docs/dev-environment.md` and `docs/codebase/`.
 
 ## Product rules that should shape implementation
 
@@ -30,6 +30,7 @@ the issue first.
 | --- | --- |
 | Mod entry point and registration | `src/main/java/fi/vilpponen/mhr/HardcoreRoguelite.java` |
 | Balance/config loading | `src/main/java/fi/vilpponen/mhr/core/`, `src/main/resources/default-balance.json` |
+| Permanent progression / unlock ownership | `src/main/java/fi/vilpponen/mhr/Unlock.java`, `UnlockState.java` |
 | Development commands | `src/main/java/fi/vilpponen/mhr/command/` |
 | Equipment-slot locks and client sync | `src/main/java/fi/vilpponen/mhr/equipment/` |
 | Crafted-item Vanilla+ enchant | `src/main/java/fi/vilpponen/mhr/enchant/` |
@@ -43,6 +44,7 @@ the issue first.
 | Server + client gameplay tests | `src/gametest/` |
 | Kubernetes dev environment | `k8s/dev.yaml` |
 | Dev/build/test driver | `scripts/dev.sh` |
+| Codebase architecture notes | `docs/codebase/` |
 
 Prefer extending the existing feature seam over creating a second path that owns the same rule.
 
@@ -57,6 +59,14 @@ Prefer extending the existing feature seam over creating a second path that owns
 - [dev environment](docs/dev-environment.md) — read before building, testing, changing GameTests,
   or touching Kubernetes.
 - [agent workflow](docs/agent-workflow.md) — read before implementing or reviewing a GitHub issue.
+- [progression](docs/codebase/progression.md) — read before touching unlock persistence, currency,
+  purchases, repeatable upgrades or the future shop's progression model.
+- [run lifecycle](docs/codebase/run-lifecycle.md) — read before death handling, run reset/new-world
+  creation, first-join logic or deciding whether state is permanent versus per-run.
+- [Minecraft hooks](docs/codebase/minecraft-hooks.md) — read before adding/changing mixins, Fabric
+  hooks, datapack membership or client/server authority boundaries.
+- [GameTest authoring](docs/codebase/gametest.md) — read before adding/changing gameplay tests or
+  client interaction helpers.
 
 ## What will catch you out
 
