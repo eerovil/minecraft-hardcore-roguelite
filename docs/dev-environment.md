@@ -76,14 +76,33 @@ takes the gametest pod's, and each holds it for the whole command. The two locks
 build and a gametest still run at the same time. When somebody else has the pod you just wait:
 
 ```
-Another run is using the gametest pod (eero@Eero-bazzite, started 09:12:40). Waiting up to 2700s...
+Another run is using the gametest pod (eero@Eero-bazzite, started 09:12:40).
+Waiting up to 2700s...
 Got the gametest pod after 314s.
 ```
 
-`MHR_LOCK_WAIT` (seconds, default 45 minutes) bounds the wait. Nothing needs unlocking by hand: the
-lock is an `flock` held open by the `kubectl exec` your command is running, so if your command
-exits, crashes, is killed or loses its connection to the cluster, the kernel drops the lock within
-a second. A worker that dies mid-run cannot leave the pod locked.
+`MHR_LOCK_WAIT` (seconds, default 45 minutes) bounds the wait.
+
+The lock is an `flock` in the pod, and the shell that takes it is the shell that does the work:
+`scripts/dev.sh` writes the whole protected part of a command as a script, streams it into one
+`kubectl exec`, and that remote shell takes the lock and runs it. The source tarball goes in before
+the lock is taken and the test artifacts come back out after it is gone, because neither touches
+anything shared.
+
+Nothing on your machine holds the lock, which is the point. The work runs as a child of the shell
+holding it, so it inherits the lock's file descriptor, and the kernel only drops an `flock` when
+the last descriptor on it closes. The lock is held for exactly as long as anything it protects is
+alive. There is no moment where the lock is free and the work is not finished, so nothing can slip
+into the pod during a handover — there is no handover.
+
+That also means killing `dev.sh` does not release the pod. Your terminal comes back, but gradle and
+the client JVM carry on in the pod and keep the lock until they are done, and the next run waits
+for them. That is the honest answer: they are still using it. If something is stuck there forever,
+kill it in the pod and the lock goes with it:
+
+```sh
+kubectl -n mhr-dev exec deploy/mhr-gametest -- pkill -f KnotClient
+```
 
 `shell`, `gametest-shell`, `console`, `logs` and `rcon` deliberately take no lock — a shell left
 open would block everybody. Don't sync or build from inside one while someone else holds the lock.
@@ -111,9 +130,10 @@ live client gametest, running from a branch older than the lock. Until the lock 
 every branch in flight carries it, a JVM in that pod is as likely to be somebody working as it is
 to be rubbish. Once nothing can run without the lock, this default can flip to killing.
 
-Either way, nothing is ever assumed: if the check itself cannot run — the pod unreachable, `kubectl`
-failing — the command stops. A check that did not happen is not the same as a pod that is clear,
-and treating it as one is how you end up back at `Address already in use`.
+The check runs in the pod, inside the critical section, so there is no network between the question
+and the answer. Either way, nothing is assumed: if the check cannot run, the command stops. A check
+that did not happen is not the same as a pod that is clear, and treating it as one is how you end
+up back at `Address already in use`.
 
 ## Automated gameplay tests
 
