@@ -96,17 +96,24 @@ waits `MHR_STRAY_GRACE` (default 10 minutes): a real run finishes, debris does n
 idle this costs nothing.
 
 Waiting narrows the ambiguity but cannot remove it — a run can simply be slower than the grace
-period. Whatever is still there when the grace runs out is treated as debris and killed, and the
-run only continues once a fresh look at the pod confirms it is clear. Ten minutes of the pod being
-occupied while the lock sits in somebody else's hands is a dead run far more often than a live one.
-
-If you know you are the one running without the lock, hold the killing off:
+period. So if something is still there when the grace runs out, the command stops and tells you
+what it found rather than guessing. Killing is your decision:
 
 ```sh
-MHR_KILL_STRAYS=0 scripts/dev.sh gametest
+MHR_KILL_STRAYS=1 scripts/dev.sh gametest
 ```
 
-The run then stops at the end of the grace period and tells you what it found instead.
+It then kills what it found and checks the pod is actually clear before the run goes on.
+
+That default is deliberately the cautious one, and it is not hypothetical caution: while this was
+being written, a session testing the kill path took a JVM for debris and it was another worker's
+live client gametest, running from a branch older than the lock. Until the lock is on main and
+every branch in flight carries it, a JVM in that pod is as likely to be somebody working as it is
+to be rubbish. Once nothing can run without the lock, this default can flip to killing.
+
+Either way, nothing is ever assumed: if the check itself cannot run — the pod unreachable, `kubectl`
+failing — the command stops. A check that did not happen is not the same as a pod that is clear,
+and treating it as one is how you end up back at `Address already in use`.
 
 ## Automated gameplay tests
 
@@ -1087,10 +1094,16 @@ removes both pods but keeps the volume, so bringing it back is fast.
   inside that JVM, so the port stays taken and the *next* run would die early with `FAILED TO BIND
   TO PORT` and a `TimeoutException` out of `createServer` — which looks like a broken test and is
   not. The giveaway is that it fails before any scenario is named. `gametest` looks for a leftover
-  JVM once it holds the lock, waits `MHR_STRAY_GRACE` for it to finish in case it is a live run, and
-  then kills it and confirms the pod is clear before going on — so this should not reach you. See
-  [The run lock](#the-run-lock). If it does, the harness is at fault rather than the product code.
-  By hand:
+  JVM once it holds the lock, so what you should normally see instead is the command waiting out
+  `MHR_STRAY_GRACE` and then stopping to tell you what it found — it does not kill anything unless
+  you say so, because from outside it cannot tell debris from somebody running without the lock.
+  See [The run lock](#the-run-lock). Once you are sure it is debris, either rerun as
+
+  ```sh
+  MHR_KILL_STRAYS=1 scripts/dev.sh gametest
+  ```
+
+  or clear it by hand:
 
   ```sh
   kubectl -n mhr-dev exec deploy/mhr-gametest -- pkill -f KnotClient

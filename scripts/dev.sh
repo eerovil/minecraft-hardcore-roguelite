@@ -448,12 +448,19 @@ gametest_kill_jvms() {
 #     or a `gradle` typed into `gametest-shell`.
 #
 # Killing the first is required and killing the second destroys somebody's work, and they look
-# identical from here. So wait first: a real run finishes, debris never does. When the grace runs
-# out we kill, which is what #40 asks for — by then the pod has been idle-but-occupied for ten
-# minutes with the lock in our hands, and debris is much the likelier of the two. Somebody who
-# knows they are running without the lock can hold the run off with MHR_KILL_STRAYS=0.
+# identical from here. So wait first: a real run finishes, debris never does. But waiting only
+# narrows the ambiguity, it does not remove it — a run can simply be slower than the grace period.
+# So when the grace runs out we stop and say what we found rather than guessing, and killing is a
+# decision the person at the keyboard makes with MHR_KILL_STRAYS=1.
+#
+# This is not theoretical caution. While #40 was being written, a session testing this very code
+# killed what it took for debris and it was another worker's live client gametest, started from a
+# branch that predates the lock. Until the lock is on main and every branch in flight carries it,
+# a JVM in that pod with the lock free is at least as likely to be somebody working as it is to be
+# rubbish. When that stops being true the default can flip, and #40's "killed automatically"
+# criterion is met by MHR_KILL_STRAYS=1 rather than by the default.
 MHR_STRAY_GRACE="${MHR_STRAY_GRACE:-600}"
-MHR_KILL_STRAYS="${MHR_KILL_STRAYS:-1}"
+MHR_KILL_STRAYS="${MHR_KILL_STRAYS:-0}"
 
 gametest_clear_strays() {
 	local pod="$1" n
@@ -481,11 +488,11 @@ gametest_clear_strays() {
 
 	if [[ "$MHR_KILL_STRAYS" != "1" ]]; then
 		cat >&2 <<EOF
-Still there after ${MHR_STRAY_GRACE}s, and MHR_KILL_STRAYS is not 1, so this run stops here.
-Running anyway would fail on port 25565 for somebody else's reason.
+Still there after ${MHR_STRAY_GRACE}s. Stopping rather than guessing: running now would fail on
+port 25565 anyway, and killing it might destroy somebody's run.
 
   Somebody is working without the lock  -> wait, or ask them.
-  It is debris from a run that died     -> rerun without MHR_KILL_STRAYS=0, or clear it by hand:
+  It is debris from a run that died     -> rerun with MHR_KILL_STRAYS=1, or clear it by hand:
                                            kubectl -n $NS exec deploy/mhr-gametest -- pkill -f KnotClient
 
 To look first:
@@ -494,7 +501,7 @@ EOF
 		exit 1
 	fi
 
-	echo "Still there after ${MHR_STRAY_GRACE}s. Treating it as debris from a dead run and killing it."
+	echo "Still there after ${MHR_STRAY_GRACE}s and MHR_KILL_STRAYS=1, so killing it."
 	if ! gametest_kill_jvms "$pod"; then
 		echo "Could not kill the leftover JVMs in the gametest pod. Stopping." >&2
 		exit 1

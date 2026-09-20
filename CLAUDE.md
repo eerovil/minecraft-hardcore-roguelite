@@ -91,9 +91,10 @@ These have already cost implementation/debugging time.
   helpers instead of re-discovering them.
 - **A failed Client GameTest can leave a JVM holding port 25565.** If a run fails before any named
   scenario starts, diagnose the harness/port state before changing product code. `gametest` finds
-  such a JVM once it holds the lock, waits `MHR_STRAY_GRACE` in case it is a live run, then kills it
-  and checks the pod is clear, so this should no longer reach you. `MHR_KILL_STRAYS=0` holds the
-  killing off when you know you are the one running without the lock.
+  such a JVM once it holds the lock, but it waits and then stops rather than killing it — branches
+  older than the lock still run without it, and their runs look exactly like debris from here.
+  Rerun with `MHR_KILL_STRAYS=1` once you know it is debris. See
+  `docs/dev-environment.md#the-run-lock`.
 - **The cluster is shared, so runs queue.** `scripts/dev.sh` takes a lock on the pod it uses and
   waits when another worker holds it. Waiting is the expected behaviour; do not route around it.
   See `docs/dev-environment.md#the-run-lock`.
