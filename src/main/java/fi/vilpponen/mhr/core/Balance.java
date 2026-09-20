@@ -28,6 +28,16 @@ import java.util.Set;
  * @see BalanceManager for where these come from and how the override merge works
  */
 public final class Balance {
+	/**
+	 * What a border tier's unlock id starts with, e.g. {@code world.border.medium}.
+	 *
+	 * <p>A tier's price and size live under {@code worldBorder} rather than {@code unlocks}, so a
+	 * tier's two numbers stay next to each other. This is the one string that turns the short tier
+	 * id in that section into the id the shop sells and the save file records, and it lives here so
+	 * that nothing outside {@code core} has to know how the two are spelled.
+	 */
+	public static final String BORDER_UNLOCK_PREFIX = "world.border.";
+
 	private final Map<String, Integer> advancementRewards;
 	private final Map<String, UnlockBalance> unlocks;
 	private final Map<String, BorderBalance> worldBorder;
@@ -127,6 +137,17 @@ public final class Balance {
 	 */
 	public Optional<BorderBalance> border(String tierId) {
 		return Optional.ofNullable(worldBorder.get(tierId));
+	}
+
+	/**
+	 * The same tier, looked up by the id the shop and the save file use rather than the short one.
+	 *
+	 * <p>Empty for any other id, so this doubles as "is this string a border tier at all?".
+	 */
+	public Optional<BorderBalance> borderByUnlockId(String unlockId) {
+		return unlockId.startsWith(BORDER_UNLOCK_PREFIX)
+				? border(unlockId.substring(BORDER_UNLOCK_PREFIX.length()))
+				: Optional.empty();
 	}
 
 	/** Every border tier, smallest first if the file lists them that way. */

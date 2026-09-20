@@ -6,13 +6,18 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import fi.vilpponen.mhr.Unlock;
+import fi.vilpponen.mhr.UnlockEffects;
 import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.animal.AnimalSpecies;
 import fi.vilpponen.mhr.equipment.EquipmentLocks;
-import fi.vilpponen.mhr.equipment.EquipmentSlots;
+import fi.vilpponen.mhr.progression.Catalogue;
+import fi.vilpponen.mhr.progression.Offer;
+import fi.vilpponen.mhr.progression.Wallet;
 import fi.vilpponen.mhr.starter.RunStart;
 import fi.vilpponen.mhr.starter.StarterChest;
 import fi.vilpponen.mhr.starter.StarterItems;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
@@ -22,7 +27,12 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 
 /**
- * A developer command standing in for the shop, which does not exist yet.
+ * The developer way in to progression: grants and takes away without charging for anything.
+ *
+ * <p>Not a stand-in for the shop — the shop exists, at {@code /mhr shop}, and every purchase made
+ * there goes through {@link fi.vilpponen.mhr.progression.Purchase} and costs currency. This writes
+ * ownership directly, which is what makes it useful: a scenario, or a playtest, can put progression
+ * exactly where it wants it without first arranging the currency to buy it.
  *
  * <p>{@code /mhr list}, {@code /mhr unlock <id> [level]}, {@code /mhr lock <id>}, and
  * {@code /mhr starterchest [pos]} to place this run's chest again without making a new world.
@@ -60,11 +70,10 @@ public final class UnlockCommand {
 	private static RequiredArgumentBuilder<CommandSourceStack, String> idArgument() {
 		return Commands.argument("id", StringArgumentType.word())
 				.suggests((context, builder) -> {
-					for (Unlock unlock : Unlock.values()) {
-						builder.suggest(unlock.id());
-					}
-					for (String id : StarterItems.ids()) {
-						builder.suggest(id);
+					// The catalogue is the product list, so it already holds every id a constant is
+					// named after as well as the ones nothing is named after.
+					for (Offer offer : Catalogue.offers()) {
+						builder.suggest(offer.id());
 					}
 					return builder.buildFuture();
 				});
@@ -82,20 +91,29 @@ public final class UnlockCommand {
 				lines.append(" (level ").append(level).append('/').append(unlock.maxLevel()).append(')');
 			}
 		}
-		lines.append("\nStarter items:");
-		if (StarterItems.ids().isEmpty()) {
-			lines.append("\n  (none in the balance catalogue)");
+		// Everything else the catalogue sells: starter items and border tiers today, whatever is
+		// added to default-balance.json tomorrow.
+		List<Offer> catalogueOnly = new ArrayList<>();
+		for (Offer offer : Catalogue.offers()) {
+			if (Unlock.byId(offer.id()) == null) {
+				catalogueOnly.add(offer);
+			}
 		}
-		for (String id : StarterItems.ids()) {
+		lines.append("\nCatalogue only:");
+		if (catalogueOnly.isEmpty()) {
+			lines.append("\n  (nothing in the balance catalogue)");
+		}
+		for (Offer offer : catalogueOnly) {
 			lines.append("\n  ")
-					.append(state.isOwned(id) ? "[owned] " : "[locked] ")
-					.append(id);
+					.append(offer.isOwned() ? "[owned] " : "[locked] ")
+					.append(offer.id());
 		}
+		lines.append("\nCurrency: ").append(Wallet.get().balance());
 		lines.append("\nThis run's starter chest: ")
 				.append(RunStart.alreadyGranted(context.getSource().getLevel()) ? "already given" : "not given yet");
 		String message = lines.toString();
 		context.getSource().sendSuccess(() -> Component.literal(message), false);
-		return Unlock.values().length + StarterItems.ids().size();
+		return Unlock.values().length + catalogueOnly.size();
 	}
 
 	/**
@@ -142,13 +160,14 @@ public final class UnlockCommand {
 		String id = StringArgumentType.getString(context, "id");
 		Unlock unlock = Unlock.byId(id);
 		if (unlock == null) {
-			return applyToStarterItem(context, id, level);
+			return applyToCatalogueId(context, id, level);
 		}
 
 		boolean changed = UnlockState.get().setLevel(unlock, level);
 		if (changed) {
-			// Tell the clients, and re-apply the slot rule to anyone already wearing something.
-			EquipmentSlots.onUnlocksChanged(context.getSource().getServer());
+			// Tell the clients, re-apply the slot rule to anyone already wearing something, and
+			// resize the world if a border tier was what changed.
+			UnlockEffects.applyAll(context.getSource().getServer());
 		}
 		int owned = UnlockState.get().level(unlock);
 		String verb = owned > 0 ? "Unlocked " : "Locked ";
@@ -173,18 +192,22 @@ public final class UnlockCommand {
 	}
 
 	/** The same thing for an id the catalogue sells and no constant is named after. */
-	private static int applyToStarterItem(CommandContext<CommandSourceStack> context, String id, int level) {
-		if (!StarterItems.isStarterItem(id)) {
+	private static int applyToCatalogueId(CommandContext<CommandSourceStack> context, String id, int level) {
+		if (!Catalogue.sells(id)) {
 			context.getSource().sendFailure(Component.literal("No such unlock: " + id));
 			return 0;
 		}
 
 		boolean changed = UnlockState.get().setLevel(id, level);
+		if (changed) {
+			UnlockEffects.applyAll(context.getSource().getServer());
+		}
 		String verb = UnlockState.get().isOwned(id) ? "Unlocked " : "Locked ";
 		String note = changed ? "" : " (no change)";
-		context.getSource().sendSuccess(
-				() -> Component.literal(verb + id + note + " — it lands in the chest at the start of the next run."),
-				true);
+		String suffix = StarterItems.isStarterItem(id)
+				? " — it lands in the chest at the start of the next run."
+				: ".";
+		context.getSource().sendSuccess(() -> Component.literal(verb + id + note + suffix), true);
 		return changed ? 1 : 0;
 	}
 }

@@ -3,7 +3,7 @@ package fi.vilpponen.mhr.equipment;
 /**
  * What a server last told this client about the five slots — a client-side cache, nothing more.
  *
- * <p>It exists because a connected client cannot read the server's unlock file but still has to
+ * <p>It exists because a connected client cannot read the server's progression snapshot but still has to
  * draw the padlocks. It is written only by the client's payload handler and read only by
  * {@link EquipmentLocks#isUnlockedForDisplay}, which consults it only when it is asked about an
  * entity on the logical client.

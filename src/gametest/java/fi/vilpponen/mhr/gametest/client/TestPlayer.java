@@ -4,6 +4,7 @@ import fi.vilpponen.mhr.gametest.mixin.ContainerScreenAccessor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.fabric.api.client.gametest.v1.TestInput;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
@@ -378,6 +379,13 @@ final class TestPlayer {
 			}
 			return ItemStack.EMPTY;
 		});
+	}
+
+	/** Asks the server something on its own thread, and waits for both sides to catch up. */
+	<T> T onServerComputing(Function<MinecraftServer, T> question) {
+		T answer = server.computeOnServer(question::apply);
+		settle();
+		return answer;
 	}
 
 	/** Runs something on the server thread and waits for both sides to catch up. */

@@ -87,7 +87,7 @@ public final class EquipmentLocks {
 
 	/**
 	 * The same question asked for drawing and for letting vanilla decline politely, which has to
-	 * work on a client that has no unlock file. For anything on the logical client that is the set
+	 * work on a client that has no progression snapshot. For anything on the logical client that is the set
 	 * the server last sent; everywhere else it is {@link #isUnlocked}.
 	 */
 	public static boolean isUnlockedForDisplay(Entity viewer, EquipmentSlot slot) {

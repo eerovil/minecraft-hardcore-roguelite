@@ -30,7 +30,9 @@ the issue first.
 | --- | --- |
 | Mod entry point and registration | `src/main/java/fi/vilpponen/mhr/HardcoreRoguelite.java` |
 | Balance/config loading | `src/main/java/fi/vilpponen/mhr/core/`, `src/main/resources/default-balance.json` |
-| Permanent progression / unlock ownership | `src/main/java/fi/vilpponen/mhr/Unlock.java`, `UnlockState.java` |
+| Permanent progression: what is owned, the currency, and buying it | `src/main/java/fi/vilpponen/mhr/progression/` — and [progression](docs/codebase/progression.md) before changing how any of it is stored |
+| Unlock ids, and the views feature code asks | `src/main/java/fi/vilpponen/mhr/Unlock.java`, `UnlockState.java` |
+| Shop screen, its networking and its layout data | `src/main/java/fi/vilpponen/mhr/shop/`, `src/main/resources/shop-layout.json` |
 | Development commands | `src/main/java/fi/vilpponen/mhr/command/` |
 | Equipment-slot locks and client sync | `src/main/java/fi/vilpponen/mhr/equipment/` |
 | Crafted-item Vanilla+ enchant | `src/main/java/fi/vilpponen/mhr/enchant/` |
@@ -59,8 +61,8 @@ Prefer extending the existing feature seam over creating a second path that owns
 - [dev environment](docs/dev-environment.md) — read before building, testing, changing GameTests,
   or touching Kubernetes.
 - [agent workflow](docs/agent-workflow.md) — read before implementing or reviewing a GitHub issue.
-- [progression](docs/codebase/progression.md) — read before touching unlock persistence, currency,
-  purchases, repeatable upgrades or the future shop's progression model.
+- [progression](docs/codebase/progression.md) — read before touching permanent state, currency,
+  purchases or repeatable upgrades. `Progress` owns the one snapshot all of it lives in.
 - [run lifecycle](docs/codebase/run-lifecycle.md) — read before death handling, run reset/new-world
   creation, first-join logic or deciding whether state is permanent versus per-run.
 - [Minecraft hooks](docs/codebase/minecraft-hooks.md) — read before adding/changing mixins, Fabric

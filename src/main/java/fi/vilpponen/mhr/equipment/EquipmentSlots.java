@@ -1,5 +1,6 @@
 package fi.vilpponen.mhr.equipment;
 
+import fi.vilpponen.mhr.UnlockEffects;
 import net.minecraft.server.MinecraftServer;
 
 /**
@@ -17,6 +18,7 @@ public final class EquipmentSlots {
 	public static void register() {
 		EquipmentUnlockSync.register();
 		EquipmentSlotRule.register();
+		UnlockEffects.onChange(EquipmentSlots::onUnlocksChanged);
 	}
 
 	/** Call after the owned unlocks change: clients are told, and occupied slots are re-checked. */

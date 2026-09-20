@@ -143,6 +143,22 @@ public final class StarterItems {
 	}
 
 	/**
+	 * The stack one unlock puts in the chest, as the balance in effect says right now.
+	 *
+	 * <p>The shop asks this so that what it shows is what {@link #ownedStacks} will hand over.
+	 * Describing the reward from anywhere else — an icon file, a line in the language file — is a
+	 * second copy of a number the override file is allowed to change.
+	 *
+	 * @return empty for an unlock that is not a starter item
+	 */
+	public static ItemStack stackFor(String id, HolderLookup.Provider registries) {
+		return BalanceManager.get().unlock(id)
+				.flatMap(Balance.UnlockBalance::item)
+				.map(json -> decodeOrThrow(RegistryOps.create(JsonOps.INSTANCE, registries), id, json))
+				.orElse(ItemStack.EMPTY);
+	}
+
+	/**
 	 * The stacks the player has actually bought, in catalogue order.
 	 *
 	 * @param registries the server's, needed to decode an item's data components

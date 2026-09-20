@@ -5,6 +5,12 @@ matching part of the mod can be built.
 
 ## Currency — how is it earned? (blocking)
 
+**Still open.** The spending half is built — there is a permanent purse in
+`fi.vilpponen.mhr.progression.Wallet`, and the shop takes currency out of it through one purchase
+operation — but nothing in gameplay puts any in. `/mhr currency give` is a development stand-in, not
+an answer, and `currency.advancements` in the balance file is a price list waiting for the rule
+rather than the rule itself.
+
 The whole economy in section 13 of the design doc assumes a currency, but nothing says where it
 comes from. This is the biggest gap: prices, the "about five runs to get back to vanilla" target,
 and the 10–50× vanilla+ multiplier are all meaningless until the earning rate exists.
@@ -35,11 +41,18 @@ Settled since:
 
 - Armor slots are four separate unlocks, not one. Offhand is a fifth. Implemented in
   `fi.vilpponen.mhr.equipment`.
+- How the shop is presented: one scrolling page with no category navigation, vanilla restoration
+  above Vanilla+, an icon and a price per entry and the wordier explanation on hover. Implemented in
+  `fi.vilpponen.mhr.shop`, arranged by `src/main/resources/shop-layout.json`.
+- Where border progression lives: the tier is whichever `world.border.*` unlock the player owns
+  furthest along, read at the start of every run. `/mhr border` still overrides it by hand for the
+  world it is run in.
 
 ## Technical, once coding starts
 
 - How permanent unlocks are stored across worlds, and where that file lives.
-- How the shop UI is presented after death.
+- What opens the shop in normal play. It is `/mhr shop` today; the design's own entry point is the
+  death screen, which waits on run/death handling.
 - How removed content (trees, ores, animals, villages) is actually suppressed in worldgen
   and spawning, per unlock.
 - Whether unlock state is meant to be shareable or resettable by the player.

@@ -41,7 +41,14 @@ public enum BorderTier {
 	 * price stay next to each other; this is the string that names the purchase everywhere else.
 	 */
 	public String unlockId() {
-		return "world.border." + id;
+		return Balance.BORDER_UNLOCK_PREFIX + id;
+	}
+
+	/** The tier this unlock id names, or null for an id that is not a border tier. */
+	public static BorderTier byUnlockId(String unlockId) {
+		return unlockId.startsWith(Balance.BORDER_UNLOCK_PREFIX)
+				? byId(unlockId.substring(Balance.BORDER_UNLOCK_PREFIX.length()))
+				: null;
 	}
 
 	/**
