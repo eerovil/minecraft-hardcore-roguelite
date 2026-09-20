@@ -3,6 +3,7 @@ package fi.vilpponen.mhr.gametest.client;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import fi.vilpponen.mhr.mixin.MinecraftServerAccessor;
 import fi.vilpponen.mhr.run.Lobby;
+import fi.vilpponen.mhr.run.RunAdmission;
 import fi.vilpponen.mhr.run.RunLifecycle;
 import fi.vilpponen.mhr.run.RunPhase;
 import fi.vilpponen.mhr.run.RunRecord;
@@ -83,6 +84,19 @@ final class TestRuns {
 		});
 		settle(server);
 		return result;
+	}
+
+	/**
+	 * Which run this connection's player is marked as having been let into, or -1 if nobody is on.
+	 *
+	 * <p>This is what run membership actually is. Standing in {@code minecraft:overworld} only says
+	 * the run's world is underfoot; the mark says the player crossed this run's start boundary.
+	 */
+	static int admittedRunOf(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer -> {
+			ServerPlayer live = livePlayer(minecraftServer);
+			return live == null ? -1 : RunAdmission.of(live);
+		});
 	}
 
 	/** Where this run's overworld puts an arriving player. */

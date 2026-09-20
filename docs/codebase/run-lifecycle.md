@@ -319,10 +319,30 @@ entity managers to tidy the dead one.
 vanilla's hardcore game-over never becomes part of the loop — there is no spectator mode, no
 "delete world" button and no respawn screen in the roguelite.
 
-- dying in a run dimension during a `RUNNING` save ends the run;
+- dying in a run dimension during a `RUNNING` save **while admitted to that run** ends the run;
+- dying in a run dimension any other way is revived and ends nothing;
 - dying in the lobby is revived and logged as a warning, because nothing there should be able to
   kill anybody and a game-over between runs would be the loop breaking;
 - anything else is left to vanilla.
+
+### Being in the run's world is not being in the run
+
+The first rule used to stop at the dimension, and the two are different questions.
+`minecraft:overworld` says the run's world is underfoot. `RunAdmission.isAdmittedTo` says this
+player crossed *this* run's start boundary, was reset for it and was given what it owes them.
+
+Anyone can be in the first position without the second: an entry that threw part-way, an operator
+who teleported in, a player still being got back out after a failed join. Letting a death there end
+the run means somebody who never joined it can finish a shared run for everybody else, with the
+reward paid and the worlds deleted. So admission is the single authority on membership, and a
+death without it is that player's own business — revived, nothing else touched.
+
+The other half of the same rule is that nobody is left in that position on purpose. A late join
+whose `PLAYER_ENTERED_RUN` listener throws has already moved the player and reset them, so the
+catch takes them back out to the lobby, and disconnects them if even that fails. They stay
+un-admitted either way, so rejoining runs the whole entry again. Note that the catch has to look
+the player up by id: leaving the lobby is a respawn, so the object it is holding may be the
+destroyed one and moving that moves nobody.
 
 The phase moves to `ENDING_RUN` inside the event, so nothing else can end the same run, but the
 rest of it — committing the reward, moving the players — is queued for the next tick. Teleporting a

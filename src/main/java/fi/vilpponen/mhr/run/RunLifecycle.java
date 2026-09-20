@@ -5,6 +5,7 @@ import fi.vilpponen.mhr.mixin.FoodDataAccessor;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.UUID;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -583,13 +584,44 @@ public final class RunLifecycle {
 					"Run " + record.runId() + " started while you were away. You have joined it.");
 		} catch (RuntimeException failed) {
 			// Unlike a run start, this run is already going and shared. One player's entry failing
-			// is not a reason to end everybody's run, so it is reported rather than propagated —
-			// and they stay un-admitted, so joining again tries the whole thing over.
+			// is not a reason to end everybody's run, so it is reported rather than propagated.
 			HardcoreRoguelite.LOGGER.error("{} could not be put into run {}",
 					player.getGameProfile().name(), record.runId(), failed);
-			player.sendSystemMessage(Component.literal(
-					"Something went wrong joining this run. See the server log; rejoining will try"
-							+ " again."));
+			takeBackOut(player.getUUID());
+		}
+	}
+
+	/**
+	 * Undo a half-finished entry: get this player back out of the run they did not manage to join.
+	 *
+	 * <p>Leaving them there used to look survivable. It is not. {@code enterRun} can fail after the
+	 * move and the reset and before the admission, which leaves somebody standing in the live run
+	 * world with none of what the run owes them — playing a run that was never started for them,
+	 * and, until admission became the authority on membership, able to end everybody else's by
+	 * dying in it.
+	 *
+	 * <p>Looked up by id rather than taken from the caller's variable, because leaving the lobby is
+	 * a respawn: the object the {@code catch} is holding may be the destroyed one, and moving that
+	 * moves nobody. If getting them out fails as well, they are disconnected — a player who cannot
+	 * be put anywhere safe must not be left in the one place that is unsafe.
+	 */
+	private void takeBackOut(UUID id) {
+		ServerPlayer live = server.getPlayerList().getPlayer(id);
+		if (live == null || !isRunLevel(live.level())) {
+			return;
+		}
+		try {
+			ServerPlayer inTheLobby = Lobby.returnFromRun(live);
+			inTheLobby.sendSystemMessage(Component.literal(
+					"Something went wrong joining this run, so you have not joined it. See the"
+							+ " server log; rejoining will try again."));
+		} catch (RuntimeException alsoFailed) {
+			HardcoreRoguelite.LOGGER.error("{} could not be got back out of run {} either;"
+					+ " disconnecting them rather than leaving them in it",
+					live.getGameProfile().name(), record.runId(), alsoFailed);
+			live.connection.disconnect(Component.literal(
+					"Something went wrong joining this run and you could not be put back in the"
+							+ " lobby. See the server log; rejoining will try again."));
 		}
 	}
 
@@ -640,6 +672,14 @@ public final class RunLifecycle {
 	/**
 	 * A player has run out of health.
 	 *
+	 * <p>Whether a death ends the run is decided by {@link RunAdmission}, not by which dimension
+	 * the player is standing in. Those two used to be treated as the same question and they are
+	 * not: being in {@code minecraft:overworld} says the run's world is underfoot, while being
+	 * admitted says this player crossed this run's start boundary and is actually playing it.
+	 * Anyone else in there — an entry that failed part-way, an operator who teleported in — has a
+	 * death that is theirs alone, and ending a shared run on it would let somebody who never joined
+	 * it finish it for everybody.
+	 *
 	 * @return true if this mod has taken the death over, meaning vanilla must not carry on with it.
 	 */
 	private synchronized boolean playerDied(ServerPlayer player) {
@@ -649,7 +689,8 @@ public final class RunLifecycle {
 			revive(player);
 			return true;
 		}
-		if (record.isRunning() && isRunLevel(player.level())) {
+		if (record.isRunning() && isRunLevel(player.level())
+				&& RunAdmission.isAdmittedTo(player, record.runId())) {
 			revive(player);
 			// The phase moves now, so nothing else can end this run. The rest waits for the next
 			// tick: vanilla is in the middle of the damage that would have killed this player, and
@@ -673,14 +714,15 @@ public final class RunLifecycle {
 			return true;
 		}
 		if (isRunLevel(player.level())) {
-			// In a run world while the save says no run is being played. The honest cases are a
-			// start that could not be finished or rolled back, and a save stopped part-way through
-			// one — and in every one of them the loop is already in trouble. Handing the player a
-			// hardcore game-over screen on top of that would turn a recoverable fault into a lost
-			// world, which is the one thing this mod exists to stop. There is no run to end, so the
-			// death is simply taken and they stay where they fell.
-			HardcoreRoguelite.LOGGER.warn("{} died in {} while the save is {}; reviving them rather"
-					+ " than letting vanilla end the world", player.getGameProfile().name(),
+			// In a run world, and this death is not the current run ending. Either no run is being
+			// played — a start that could not be finished or rolled back, a save stopped part-way
+			// through one — or one is and this player never joined it. Both leave the death with no
+			// run to end, and in neither is a hardcore game-over screen the right answer: the first
+			// would turn a recoverable fault into a lost world, and the second would hand somebody
+			// a game over for a run they are not in.
+			HardcoreRoguelite.LOGGER.warn("{} died in {} without being admitted to the run in"
+					+ " progress; the save is {}. Reviving them rather than ending anything",
+					player.getGameProfile().name(),
 					player.level().dimension().identifier(), describe());
 			revive(player);
 			return true;

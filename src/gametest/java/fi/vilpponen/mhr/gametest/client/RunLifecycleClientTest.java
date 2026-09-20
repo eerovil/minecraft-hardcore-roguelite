@@ -194,6 +194,10 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 					() -> theSameRunKeepsWhatYouHad(context, server));
 
 			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "a-late-join-that-fails-leaves-nobody-in-the-run",
+					() -> aFailedLateJoinLeavesNobodyInTheRun(context, server));
+
+			TestRuns.waitForNobodyConnected(context, server);
 			scenario(context, "joining-a-server-with-no-lobby-does-not-fault",
 					() -> joiningWithNoLobby(context, server));
 
@@ -922,6 +926,92 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 			check(after.equals(before), "coming back to the run you were playing must keep what you"
 					+ " had: " + before + " before, " + after + " after");
 		}
+	}
+
+	/**
+	 * A late join that fails leaves nobody in the run, and nobody who can end it.
+	 *
+	 * <p>Two claims, and the second is what makes the first safe. {@code enterRun} can fail after
+	 * the move and the reset and before the admission — a purchased effect that cannot be applied
+	 * is the shop's own version of this — which leaves a live player standing in a run world having
+	 * got none of what the run owes them. They have to be taken back out.
+	 *
+	 * <p>And being in the run's overworld must stop meaning "is playing this run". Only admission
+	 * says that. Otherwise anybody who reaches those coordinates without crossing the boundary can
+	 * end everybody else's run by dying in it, which is a shared run finished by somebody who was
+	 * never in it. The second half of this scenario puts a player there deliberately, with a
+	 * teleport, and requires their death to be their own business.
+	 */
+	private void aFailedLateJoinLeavesNobodyInTheRun(
+			ClientGameTestContext context, TestDedicatedServerContext server) {
+		// A run the absent player has never been in. Without this they are admitted to the run
+		// already going, which makes their join a reconnect — and a reconnect does not cross the
+		// entry boundary at all, so the hook this scenario is about never fires.
+		if (TestRuns.phase(server) == RunPhase.RUNNING) {
+			TestRuns.end(server);
+		}
+		TestRuns.start(server);
+		check(TestRuns.phase(server) == RunPhase.RUNNING,
+				"this scenario needs a run in progress to join late, and the save says "
+						+ TestRuns.record(server).describe());
+		int runId = TestRuns.record(server).runId();
+		BlockPos spawn = TestRuns.runSpawn(server);
+
+		FAIL_PLAYER_ENTRY.set(true);
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			try {
+				TestRuns.waitForPlayerInTheLobby(context, server, connection);
+			} finally {
+				FAIL_PLAYER_ENTRY.set(false);
+			}
+
+			String where = TestRuns.playerDimension(server, connection);
+			check(where.equals(Lobby.LEVEL.identifier().toString()),
+					"a late join whose player hook failed must not leave the player standing in the"
+							+ " run, and they are in " + where);
+			check(TestRuns.phase(server) == RunPhase.RUNNING,
+					"and one player's failed entry must not end everybody's run, which the save now"
+							+ " describes as " + TestRuns.record(server).describe());
+			check(TestRuns.admittedRunOf(server) != runId,
+					"they never finished joining run " + runId + ", so they must not be marked as"
+							+ " admitted to it, and they are marked " + TestRuns.admittedRunOf(server));
+
+			// Now the rule itself, asked directly: in the run's overworld without having joined it.
+			server.runCommand("execute in minecraft:overworld run tp Player0 "
+					+ spawn.getX() + " " + spawn.getY() + " " + spawn.getZ());
+			TestRuns.settle(server);
+			check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
+					"setup: this half needs them standing in the run's overworld, and they are in "
+							+ TestRuns.playerDimension(server, connection));
+			check(TestRuns.admittedRunOf(server) != runId,
+					"setup: and still not admitted to it");
+
+			server.runCommand("kill Player0");
+			TestRuns.settle(server);
+			context.waitTicks(10);
+
+			check(TestRuns.phase(server) == RunPhase.RUNNING,
+					"a death by somebody who never joined this run must not end it, and the save says "
+							+ TestRuns.record(server).describe());
+			check(TestRuns.record(server).runId() == runId,
+					"and it must still be the same run");
+			check(TestRuns.playerHealth(server, connection) > 0.0F,
+					"and they must be alive rather than on a hardcore game-over screen, and they have "
+							+ TestRuns.playerHealth(server, connection) + " health");
+		}
+		TestRuns.waitForNobodyConnected(context, server);
+
+		// And rejoining works, so the refusal was the failed hook rather than something now broken.
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			settle(context, connection);
+			check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
+					"rejoining after a failed entry must put them into the run properly, and they are"
+							+ " in " + TestRuns.playerDimension(server, connection));
+			check(TestRuns.admittedRunOf(server) == runId,
+					"and admit them to run " + runId + " this time, and they are marked "
+							+ TestRuns.admittedRunOf(server));
+		}
+		TestRuns.waitForNobodyConnected(context, server);
 	}
 
 	/**
