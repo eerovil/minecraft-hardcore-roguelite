@@ -63,6 +63,39 @@ Other commands: `sync`, `build`, `deploy`, `gametest`, `console`, `rcon`, `shell
 gitignored. It wipes `src/`, `k8s/` and `scripts/` in the pod first so deleted files do not
 linger, and leaves `build/` and `.gradle/` alone so rebuilds stay fast.
 
+## The run lock
+
+The cluster is shared and there is one of each pod, so two people working at once used to break
+each other's runs. `sync` wipes the source tree before copying it again, which pulls the ground out
+from under a build already running; and the gametest pod has a single network namespace, so the
+second dedicated test server to start cannot bind port 25565 and dies with `Address already in use`.
+Both look like your code failing, and neither is.
+
+So runs are serialized. `sync`, `build`, `deploy` and `go` take the build pod's lock, `gametest`
+takes the gametest pod's, and each holds it for the whole command. The two locks are separate, so a
+build and a gametest still run at the same time. When somebody else has the pod you just wait:
+
+```
+Another run is using the gametest pod (eero@Eero-bazzite, started 09:12:40). Waiting up to 2700s...
+Got the gametest pod after 314s.
+```
+
+`MHR_LOCK_WAIT` (seconds, default 45 minutes) bounds the wait. Nothing needs unlocking by hand: the
+lock is an `flock` held open by the `kubectl exec` your command is running, so if your command
+exits, crashes, is killed or loses its connection to the cluster, the kernel drops the lock within
+a second. A worker that dies mid-run cannot leave the pod locked.
+
+`shell`, `gametest-shell`, `console`, `logs` and `rcon` deliberately take no lock — a shell left
+open would block everybody. Don't sync or build from inside one while someone else holds the lock.
+
+Once the gametest lock is held, a JVM still running in that pod is either debris from a run that
+died — usually a client still holding 25565, which would fail your run for somebody else's reason —
+or somebody running without the lock, from an old checkout of the script or from
+`gametest-shell`. Those look identical from outside, and they want opposite treatment, so
+`gametest` waits: a real run finishes, debris does not. Whatever is still alive after
+`MHR_STRAY_GRACE` (default 10 minutes) is killed. When the pod is genuinely idle this costs
+nothing.
+
 ## Automated gameplay tests
 
 One command, no human in a Minecraft client:
@@ -94,16 +127,16 @@ It has a Gradle cache of its own (`/pvc/gradle-gametest`) and a source tree of i
 The container is root only so that apt-get works; Gradle itself is dropped back to uid 1000, so
 nothing root-owned lands on the volume.
 
-That source tree is shared between people, though, the same way the build pod's is. Two `gametest`
-runs at once overwrite each other's `src/` halfway through, which shows up as *somebody else's*
-tests failing in your output — a scenario name you have never heard of is the giveaway. Give
-yourself a tree of your own to stay out of the way:
+That source tree is shared between people, though, the same way the build pod's is — so `gametest`
+takes the pod's lock and holds it for the whole run. A second run waits instead of overwriting the
+first one's `src/` halfway through. See [The run lock](#the-run-lock).
+
+The Gradle cache stays shared either way, which is the part worth sharing. A tree of your own is
+still available when you want one, for instance to keep a half-finished experiment around:
 
 ```sh
 MHR_GAMETEST_WORKSPACE=/pvc/gametest/workspace-mine scripts/dev.sh gametest
 ```
-
-The Gradle cache stays shared either way, which is the part worth sharing.
 
 Two things had to be arranged for the client to start headless at all, both in `scripts/dev.sh`:
 
@@ -124,17 +157,11 @@ lock all five slots and empty the player, the tree ones set `world.trees` to wha
 clear their own patch of ground, the animal ones lock all six species — so one scenario cannot make
 the next one pass, and the order they run in does not matter.
 
-The *pod*, on the other hand, is shared, and two runs at once do collide in two ways: they overwrite
-each other's `src/` halfway through, and the second one's dedicated server cannot bind port 25565
-and dies with `Address already in use`. Neither is a failure of the thing being tested. Stay out of
-the way with a source tree of your own:
-
-```sh
-MHR_GAMETEST_WORKSPACE=/pvc/gametest/workspace-mine scripts/dev.sh gametest
-```
-
-The Gradle cache stays shared either way, which is the expensive part. The port is not shareable, so
-a client run still has to wait for whichever one is in flight.
+The *pod* is shared, and two runs at once used to collide in two ways: they overwrite each other's
+`src/` halfway through, and the second one's dedicated server cannot bind port 25565 and dies with
+`Address already in use`. Neither is a failure of the thing being tested, and a source tree of your
+own only fixes the first — one pod means one network namespace, and only one process can hold 25565.
+So runs are serialized instead: see [The run lock](#the-run-lock).
 
 The ore scans go further, because worldgen only answers once per chunk: each of them builds a world
 of its own from a fixed seed, sets all seven ore unlocks explicitly before a single chunk of the
@@ -858,8 +885,10 @@ throwaway world. `rcon-cli` also reads commands from stdin, which is much faster
 `scripts/dev.sh rcon` per command when you are counting fourteen ore blocks across several chunks.
 
 Note that the cluster is shared: if someone else runs `scripts/dev.sh go` while you are testing,
-the server restarts under you with their jar. The build pod's `/pvc/workspace` is shared too, so a
-deploy can ship someone else's build. For a test that has to be left alone, copy your tree to a
+the server restarts under you with their jar. The [run lock](#the-run-lock) stops two builds
+trampling each other, but it cannot stop a finished deploy replacing the jar you were looking at,
+and the build pod's `/pvc/workspace` is still one tree. For a test that has to be left alone, copy
+your tree to a
 directory of your own under `/pvc`, build there, and run a second server deployment against its own
 `subPath` — then delete it when you are done.
 
@@ -994,11 +1023,12 @@ removes both pods but keeps the volume, so bringing it back is fast.
   clicking is an ordinary click, silently. `TestPlayer.shiftClickSlot` puts the button in through
   `MouseHandler.onButton` instead, which is the door the operating system's own mouse callback comes
   through, carrying the modifier a real shift-click carries.
-- The port-25565 clash in [Test isolation](#test-isolation) has a second cause that no amount of
-  waiting clears: a run that ends red sometimes leaves its client JVM alive in the pod. The dedicated
-  server lives inside that JVM, so the port stays taken and the *next* run dies early with `FAILED TO
-  BIND TO PORT` and a `TimeoutException` out of `createServer` — which looks like a broken test and
-  is not. The giveaway is that it fails before any scenario is named. Clear it before rerunning:
+- A run that ends red sometimes leaves its client JVM alive in the pod. The dedicated server lives
+  inside that JVM, so the port stays taken and the *next* run would die early with `FAILED TO BIND
+  TO PORT` and a `TimeoutException` out of `createServer` — which looks like a broken test and is
+  not. The giveaway is that it fails before any scenario is named. `gametest` now kills leftover
+  JVMs itself once it holds the lock, so this should not reach you; if you see it anyway, the
+  harness is at fault rather than the product code. By hand:
 
   ```sh
   kubectl -n mhr-dev exec deploy/mhr-gametest -- pkill -f KnotClient

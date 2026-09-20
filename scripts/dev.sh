@@ -12,6 +12,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 #   MHR_WORKSPACE=/pvc/workspace-mine scripts/dev.sh build
 WORKSPACE="${MHR_WORKSPACE:-/pvc/workspace}"
 
+# How long a command waits for a pod that somebody else is using before giving up.
+MHR_LOCK_WAIT="${MHR_LOCK_WAIT:-2700}"
+
 usage() {
 	cat <<'EOF'
 Usage: scripts/dev.sh <command>
@@ -32,7 +35,109 @@ Usage: scripts/dev.sh <command>
   status        What is running and how far along it is
   down          Delete the deployments but keep the volume
   nuke          Delete everything including the volume
+
+The cluster is shared. Commands that use a pod's workspace take that pod's lock and wait for it
+rather than running on top of each other; MHR_LOCK_WAIT (seconds) bounds the wait. `shell`,
+`gametest-shell`, `console`, `logs` and `rcon` take no lock — a shell you leave open would block
+everybody else.
 EOF
+}
+
+# --- the shared-cluster run lock ----------------------------------------------------------
+#
+# There is one build pod and one gametest pod, and each holds state a second concurrent run
+# destroys: sync_to wipes the source tree before copying it again, and the gametest pod has one
+# network namespace, so only one dedicated test server can ever hold port 25565. A command that
+# uses a pod therefore takes that pod's lock and holds it for the whole command. The two locks are
+# separate, so a build and a gametest still run at the same time.
+#
+# The lock is an flock held by a `kubectl exec` sitting on a pipe this script keeps open. That is
+# the whole reason it cannot go stale: if this script exits, crashes, is killed or loses its
+# connection, the pipe closes, the shell in the pod exits and the kernel drops the lock. There is
+# nothing to clean up after a dead worker and no unlock command to remember.
+LOCK_TMP=""
+LOCK_PID=""
+LOCK_FD=""
+
+release_lock() {
+	[[ -n "$LOCK_PID" ]] || return 0
+	# Close our end first: the holder's `cat` sees EOF and releases the lock on its own, which is
+	# tidier than killing the connection and letting the kubelet reap the process.
+	[[ -n "$LOCK_FD" ]] && exec {LOCK_FD}>&- && LOCK_FD=""
+	local spun=0
+	while kill -0 "$LOCK_PID" 2>/dev/null && ((spun < 25)); do
+		sleep 0.2
+		spun=$((spun + 1))
+	done
+	kill "$LOCK_PID" 2>/dev/null || true
+	wait "$LOCK_PID" 2>/dev/null || true
+	LOCK_PID=""
+	[[ -n "$LOCK_TMP" ]] && rm -rf "$LOCK_TMP"
+	LOCK_TMP=""
+}
+
+# take_lock <pod> <name>. Blocks until the lock is ours or MHR_LOCK_WAIT runs out.
+take_lock() {
+	local pod="$1" name="$2"
+	local lock="/pvc/.mhr-lock-$name"
+	local owner="${USER:-someone}@$(hostname -s 2>/dev/null || echo unknown), started $(date '+%H:%M:%S')"
+
+	LOCK_TMP="$(mktemp -d)"
+	mkfifo "$LOCK_TMP/hold"
+	# Opened read-write so the pipe has a writer for as long as this script lives and the holder
+	# never sees a premature EOF.
+	exec {LOCK_FD}<>"$LOCK_TMP/hold"
+
+	kubectl -n "$NS" exec -i "$pod" -- bash -c "
+		exec 200>>'$lock'
+		if ! flock -w '$MHR_LOCK_WAIT' 200; then
+			echo \"BUSY \$(cat '$lock.owner' 2>/dev/null)\"
+			exit 1
+		fi
+		echo '$owner' >'$lock.owner'
+		echo HELD
+		cat >/dev/null
+	" <"$LOCK_TMP/hold" >"$LOCK_TMP/out" 2>&1 &
+	LOCK_PID=$!
+	trap release_lock EXIT
+	# Bash does not run an EXIT trap when the shell dies of an untrapped signal, and a Ctrl-C that
+	# reached us but not the holder would otherwise leave it orphaned and the lock held.
+	trap 'exit 130' INT TERM HUP
+
+	local waited=0
+	while true; do
+		if grep -q '^HELD' "$LOCK_TMP/out" 2>/dev/null; then
+			# A second or two is just the exec starting up, not a queue worth reporting.
+			((waited >= 3)) && echo "Got the $name pod after ${waited}s."
+			return 0
+		fi
+		if ! kill -0 "$LOCK_PID" 2>/dev/null; then
+			echo "Gave up waiting for the $name pod after ${MHR_LOCK_WAIT}s." >&2
+			sed 's/^BUSY /  held by: /;s/^  held by: $/  held by: someone who left no name/' \
+				"$LOCK_TMP/out" >&2
+			echo "  Raise MHR_LOCK_WAIT to wait longer." >&2
+			release_lock
+			exit 1
+		fi
+		if ((waited == 5)); then
+			local who
+			who="$(kubectl -n "$NS" exec "$pod" -- cat "$lock.owner" 2>/dev/null || true)"
+			echo "Another run is using the $name pod${who:+ ($who)}. Waiting up to ${MHR_LOCK_WAIT}s..."
+		fi
+		sleep 1
+		waited=$((waited + 1))
+	done
+}
+
+# Run the given steps with the build pod's lock held across all of them, so nobody can sync on top
+# of a build that is already under way.
+build_locked() {
+	take_lock "$(require_build_pod)" build
+	local step
+	for step in "$@"; do
+		"$step"
+	done
+	release_lock
 }
 
 build_pod() {
@@ -186,9 +291,66 @@ gradle --no-daemon --console=plain $*
 EOF
 }
 
+# Counting, then killing, the java processes in the pod. /proc rather than pkill, because the image
+# has no procps.
+gametest_jvms() {
+	kubectl -n "$NS" exec "$1" -- bash -c '
+		n=0
+		for p in /proc/[0-9]*; do
+			[ -r "$p/cmdline" ] || continue
+			case "$(tr "\0" " " <"$p/cmdline")" in *java*) n=$((n + 1)) ;; esac
+		done
+		echo "$n"
+	' 2>/dev/null || echo 0
+}
+
+gametest_kill_jvms() {
+	kubectl -n "$NS" exec "$1" -- bash -c '
+		for p in /proc/[0-9]*; do
+			[ -r "$p/cmdline" ] || continue
+			case "$(tr "\0" " " <"$p/cmdline")" in *java*) kill -9 "${p#/proc/}" 2>/dev/null || true ;; esac
+		done
+	' >/dev/null 2>&1 || true
+}
+
+# We hold the lock, so nothing that respects the lock is running. A JVM alive in the pod anyway is
+# one of two things, and they need opposite treatment:
+#
+#   - debris from a run that died, typically a client JVM still holding port 25565, which would
+#     fail this run with `FAILED TO BIND TO PORT` for somebody else's reason;
+#   - a live run started by someone who is not taking the lock — an older checkout of this script,
+#     or a `gradle` typed into `gametest-shell`.
+#
+# Killing the first is required and killing the second is rude, and they look identical from here.
+# So wait first: a real run finishes, debris never does. Whatever is still alive after the grace
+# period is treated as debris.
+MHR_STRAY_GRACE="${MHR_STRAY_GRACE:-600}"
+
+gametest_clear_strays() {
+	local pod="$1"
+	[[ "$(gametest_jvms "$pod")" == "0" ]] && return 0
+
+	echo "A JVM is still running in the gametest pod even though we hold the lock."
+	echo "Giving it up to ${MHR_STRAY_GRACE}s to finish in case somebody is running without the lock..."
+	local waited=0
+	while ((waited < MHR_STRAY_GRACE)); do
+		sleep 10
+		waited=$((waited + 10))
+		if [[ "$(gametest_jvms "$pod")" == "0" ]]; then
+			echo "It finished after ${waited}s. Carrying on."
+			return 0
+		fi
+	done
+
+	echo "Still there after ${MHR_STRAY_GRACE}s — treating it as debris from a dead run and killing it."
+	gametest_kill_jvms "$pod"
+}
+
 cmd_gametest() {
 	local pod
 	pod="$(require_gametest_pod)"
+	take_lock "$pod" gametest
+	gametest_clear_strays "$pod"
 	sync_to "$pod" "$GAMETEST_WORKSPACE" "$GAMETEST_AS_USER"
 
 	local status=0
@@ -197,6 +359,7 @@ cmd_gametest() {
 		<<<"$(gametest_runner "${@:-test runGameTest runClientGameTest}")" || status=$?
 
 	gametest_fetch "$pod"
+	release_lock
 
 	if [[ $status -eq 0 ]]; then
 		echo "PASS — gameplay verification green. Artifacts: $GAMETEST_ARTIFACTS"
@@ -277,10 +440,10 @@ cmd_nuke() {
 
 case "${1:-}" in
 	up) cmd_up ;;
-	sync) cmd_sync ;;
-	build) cmd_sync && cmd_build ;;
-	deploy) cmd_deploy ;;
-	go) cmd_sync && cmd_build && cmd_deploy ;;
+	sync) build_locked cmd_sync ;;
+	build) build_locked cmd_sync cmd_build ;;
+	deploy) build_locked cmd_deploy ;;
+	go) build_locked cmd_sync cmd_build cmd_deploy ;;
 	gametest) shift; cmd_gametest "$@" ;;
 	gametest-shell) cmd_gametest_shell ;;
 	logs) cmd_logs ;;
