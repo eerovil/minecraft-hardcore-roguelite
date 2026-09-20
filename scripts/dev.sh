@@ -89,102 +89,124 @@ stage_in_pod() {
 		"f=\$(mktemp /pvc/.mhr-XXXXXXXX$suffix) && cat >\"\$f\" && echo \"\$f\""
 }
 
-# The runner, as the pod sees it: take the lock, run the work under it, and watch for us going away.
+# The supervisor, as the pod sees it, and the only thing in the pod that decides anything.
+#
+# It is the shell the exec starts, and it does three things in this order and no other: hold the
+# lock descriptor, watch the owner's stream, and run everything else as one session underneath
+# itself. "Everything else" means the wait for the lock, the work, and the rollout hold — the whole
+# life of the run, whatever phase it happens to be in.
+#
+# That ordering is the rule. The watch is running before the lock is so much as reached for, so an
+# owner that dies while its run is still queued is noticed while it is still queued: the session is
+# killed where it stands and the flock it was waiting for is never taken. There is no phase this
+# invocation can be in where losing the owner leaves it able to enter the critical section later.
+#
+# The lock descriptor belongs to the supervisor and not to the session, which is what keeps the
+# release last: the session (the work, and the flock it acquired on this shared descriptor) dies
+# first, and the lock goes when the supervisor exits after it. The flock itself is only exclusion.
 lock_runner() {
 	printf 'lock=%q\nname=%q\nowner=%q\nwork=%q\nas=%q\nhold=%q\nwait_secs=%q\nbusy=%q\n' \
 		"$1" "$2" "$3" "$4" "$5" "$6" "$MHR_LOCK_WAIT" "$LOCK_BUSY_STATUS"
 	cat <<'EOF'
 set -uo pipefail
+go="$work.go"
+pgid_file="$work.pgid"
 
-# Stopping this run, and only this run. The work gets a session of its own below, so it can be
-# named as a whole — everything it forked, whether or not that kept the lock descriptor — without
-# naming anything else. Identity comes from that session; the lock file is only a lock.
+# --- the session: the run itself, from queuing to the last thing it does ---------------------
 #
-# It used to come from the lock file: kill whatever has it open. That is wrong, and not in a way a
-# special case would fix. A run queued behind this one has the same file open on fd 200 the whole
-# time it sits in flock, so "everything holding the lock" meant "everyone waiting their turn" too,
-# and one owner dying took the queue with it.
-#
-# Order still matters: the work first, then this runner, which is the last thing with the lock and
-# so the thing whose death releases it. The lock is never free while the work is still alive.
-me=$$
+# Reached by the supervisor re-running this file, so that it is one file and one set of values.
+if [ "${1:-}" = --session ]; then
+	if ! flock -n 200; then
+		echo "Another run is using the $name pod ($(cat "$lock.owner" 2>/dev/null || echo 'no name left'))."
+		echo "Waiting up to ${wait_secs}s..."
+		began=$SECONDS
+		if ! flock -w "$wait_secs" 200; then
+			{
+				echo "Gave up waiting for the $name pod after ${wait_secs}s."
+				echo "  held by: $(cat "$lock.owner" 2>/dev/null || echo 'someone who left no name')"
+				echo "  Raise MHR_LOCK_WAIT to wait longer."
+			} >&2
+			exit "$busy"
+		fi
+		echo "Got the $name pod after $((SECONDS - began))s."
+	fi
+	echo "$owner" >"$lock.owner"
 
-stop_everything() {
-	pgid=$(cat "$pgid_file" 2>/dev/null || true)
-	[ -n "$pgid" ] && kill -9 -"$pgid" 2>/dev/null
-	kill -9 "$me" 2>/dev/null
-}
+	bash "$work" </dev/null
+	status=$?
+
+	# Some commands have a step on the other end that belongs inside this section — a deploy's
+	# server rollout. Hold the lock while that runs.
+	#
+	# Only when the work went well, though. The step is the second half of something whose first
+	# half has just failed: a deploy whose jar never got copied has nothing to restart the server
+	# for, and restarting it anyway would put the previous jar back into service and report a
+	# failure at the same time.
+	if [ -n "$hold" ] && [ "$status" -eq 0 ]; then
+		echo MHR-CONTROL-HOLD
+		while [ ! -e "$go" ]; do sleep 1; done
+	fi
+	exit "$status"
+fi
+
+# --- the supervisor --------------------------------------------------------------------------
+
+# A copy of the owner's stream. Bash points an asynchronous command's stdin at /dev/null when job
+# control is off, which is always here, and the session below must not be able to read it either:
+# it is ours to watch and gradle reads whatever stdin it is given.
+exec 9<&0
 
 if ! exec 200>>"$lock"; then
 	echo "Cannot open $lock in the pod, so this run cannot take the $name lock." >&2
 	exit 1
 fi
 
-# Contention is whatever this non-blocking attempt says it is. Asking after a fixed number of
-# seconds instead would say nothing at all about a queue that cleared in fewer.
-if ! flock -n 200; then
-	echo "Another run is using the $name pod ($(cat "$lock.owner" 2>/dev/null || echo 'no name left'))."
-	echo "Waiting up to ${wait_secs}s..."
-	began=$SECONDS
-	if ! flock -w "$wait_secs" 200; then
-		{
-			echo "Gave up waiting for the $name pod after ${wait_secs}s."
-			echo "  held by: $(cat "$lock.owner" 2>/dev/null || echo 'someone who left no name')"
-			echo "  Raise MHR_LOCK_WAIT to wait longer."
-		} >&2
-		exit "$busy"
-	fi
-	echo "Got the $name pod after $((SECONDS - began))s."
-fi
-echo "$owner" >"$lock.owner"
+rm -f "$go" "$pgid_file"
 
-go="$work.go"
-rm -f "$go"
+# The session. Its leader writes down its own pid, because setsid forks and so will not tell us
+# what it made; `--wait` because the exit status of the run is the exit status of this exec.
+$as setsid --wait bash -c 'echo $$ >"$1"; exec bash "$2" --session' _ "$pgid_file" "$0" </dev/null &
+session=$!
 
-# A copy of our stdin for the watcher. Bash points an asynchronous command's stdin at /dev/null
-# when job control is off, which is always here — so a watcher reading plain stdin would see EOF
-# the instant it started and take the whole run down with it.
-exec 9<&0
-
-# The work. A child of this shell, so it holds this shell's lock descriptor; in a session of its
-# own, so it can be stopped as one thing; stdin closed, because this shell's stdin is the line the
-# other end talks to us on and gradle reads whatever stdin it is given.
-#
-# `setsid --wait` because we need the exit status back, and the session leader writes down its own
-# pid because setsid forks and so does not tell us what it made. Until that file exists there is
-# nothing to kill but also nothing worth killing.
-pgid_file="$work.pgid"
-rm -f "$pgid_file"
-$as setsid --wait bash -c 'echo $$ >"$0.pgid"; exec bash "$0"' "$work" </dev/null &
-work_pid=$!
-
-# The watcher, with no lock descriptor of its own so that it outlives the killing below. Reading
-# our stdin is how we notice the other end has gone: EOF there means the exec stream is over.
-(
-	exec 200>&-
-	while IFS= read -r line <&9; do
-		[ "$line" = MHR-GO ] && : >"$go"
+# Whatever is left of this invocation, stopped as one thing. Twice, a moment apart, because the
+# session leader writes its pid down a hair after it starts and this can be called in that gap.
+stop_session() {
+	local try pgid
+	for try in 1 2; do
+		pgid=$(cat "$pgid_file" 2>/dev/null || true)
+		[ -n "$pgid" ] && kill -9 -"$pgid" 2>/dev/null
+		kill -9 "$session" 2>/dev/null
+		sleep 0.2
 	done
-	stop_everything
-) &
-watcher=$!
+}
 
-wait "$work_pid"
-status=$?
+# Alive, dead, or a zombie this shell has not reaped yet — `kill -0` cannot tell the last two
+# apart, and a zombie is how a finished session looks until we wait for it.
+session_finished() {
+	local stat
+	stat=$(cat /proc/"$session"/stat 2>/dev/null) || return 0
+	stat=${stat#*) }
+	case "$stat" in Z*) return 0 ;; *) return 1 ;; esac
+}
 
-# Some commands have a step on the other end that belongs inside this section — a deploy's server
-# rollout. Hold the lock while that runs; the watcher still has us covered if they die during it.
-#
-# Only when the work went well, though. The step is the second half of something whose first half
-# has just failed: a deploy whose jar never got copied has nothing to restart the server for, and
-# restarting it anyway would put the previous jar back into service and report a failure at the
-# same time.
-if [ -n "$hold" ] && [ "$status" -eq 0 ]; then
-	echo MHR-CONTROL-HOLD
-	while [ ! -e "$go" ]; do sleep 1; done
-fi
+status=0
+while :; do
+	if IFS= read -r -t 1 line <&9; then
+		[ "$line" = MHR-GO ] && : >"$go"
+	elif [ $? -le 128 ]; then
+		# End of the owner's stream: they are gone, whether they were killed, crashed or lost the
+		# connection. Stop the run wherever it is — queued, working, or holding — and leave.
+		stop_session
+		rm -f "$work" "$go" "$pgid_file" "$0"
+		exit 1
+	fi
+	if session_finished; then
+		wait "$session"
+		status=$?
+		break
+	fi
+done
 
-kill "$watcher" 2>/dev/null || true
 rm -f "$work" "$go" "$pgid_file" "$0"
 exit "$status"
 EOF
