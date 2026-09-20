@@ -15,7 +15,10 @@ import fi.vilpponen.mhr.progression.Offer;
 import fi.vilpponen.mhr.progression.Wallet;
 import fi.vilpponen.mhr.shop.ShopServer;
 import fi.vilpponen.mhr.shop.client.ShopScreen;
+import fi.vilpponen.mhr.shop.Reward;
 import fi.vilpponen.mhr.shop.client.SyncedShop;
+import fi.vilpponen.mhr.starter.StarterItems;
+import net.minecraft.world.item.ItemStack;
 import java.util.ArrayList;
 import java.util.List;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
@@ -71,6 +74,10 @@ public class ShopClientTest implements FabricClientGameTest {
 						() -> clickingAnUnaffordableSquareChangesNothing(context, player));
 				scenario(context, "owned-and-part-upgraded-states-reach-the-screen",
 						() -> ownedAndPartUpgradedStatesReachTheScreen(context, player));
+				scenario(context, "a-retuned-starter-item-is-shown-as-what-it-will-grant",
+						() -> aRetunedStarterItemIsShownAsWhatItWillGrant(context, player));
+				scenario(context, "an-unrelated-purchase-does-not-resize-the-run",
+						() -> anUnrelatedPurchaseDoesNotResizeTheRun(context, player));
 				scenario(context, "a-balance-reload-reaches-an-open-shop",
 						() -> aBalanceReloadReachesAnOpenShop(context, player));
 				scenario(context, "a-square-that-is-not-drawn-cannot-be-bought",
@@ -386,6 +393,91 @@ public class ShopClientTest implements FabricClientGameTest {
 		reset(player);
 	}
 
+	/**
+	 * What the shop shows a starter item as, and what the chest will hold, are the same fact.
+	 *
+	 * <p>A starter item's whole effect is a stack in the balance catalogue, and the override file is
+	 * allowed to replace it. The shop used to describe it from an icon file and a line in the
+	 * language file, so retuning the count left the screen promising sixteen bread while
+	 * {@code ownedStacks} built sixty-four.
+	 */
+	private void aRetunedStarterItemIsShownAsWhatItWillGrant(
+			ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		openShop(context, player);
+
+		int shipped = grantedCount(player, BREAD);
+		check(shipped > 1, "setup: the shipped bread should be more than one, and it is " + shipped);
+		check(rewardCount(context, BREAD) == shipped,
+				"the screen should start by showing what the chest will hold, " + shipped
+						+ ", and it shows " + rewardCount(context, BREAD));
+
+		try {
+			writeOverride(player, "{\"unlocks\": {\"" + BREAD
+					+ "\": {\"item\": {\"id\": \"minecraft:cooked_beef\", \"count\": 64}}}}");
+
+			check(grantedCount(player, BREAD) == 64,
+					"setup: the retuned catalogue should grant 64, and it grants " + grantedCount(player, BREAD));
+			check(rewardCount(context, BREAD) == 64,
+					"the open screen must follow it: it should show 64 and it shows "
+							+ rewardCount(context, BREAD));
+			check(rewardIs(context, BREAD, "minecraft:cooked_beef"),
+					"and must show the item the chest will actually hold, not the one it used to");
+		} finally {
+			removeOverride(player);
+		}
+
+		check(rewardCount(context, BREAD) == shipped,
+				"taking the override away must put the shipped reward back, and the screen shows "
+						+ rewardCount(context, BREAD));
+	}
+
+	/**
+	 * A reload does not resize a run, and neither does anything that happens afterwards.
+	 *
+	 * <p>Every purchase asks the border to look at the unlocks again. It used to re-apply whatever
+	 * it found, and applying a tier reads its size out of the balance in effect — so buying a tree
+	 * an hour after a reload would quietly hand the run the new size. {@code /mhr reload} promises
+	 * the opposite.
+	 */
+	private void anUnrelatedPurchaseDoesNotResizeTheRun(ClientGameTestContext context, TestPlayer player) {
+		reset(player);
+		int mediumPrice = priceOf(player, MEDIUM_BORDER);
+		int largePrice = priceOf(player, LARGE_BORDER);
+		player.command("mhr currency set " + (mediumPrice + largePrice + priceOf(player, TREES) + 5));
+		openShop(context, player);
+
+		clickSquare(context, player, MEDIUM_BORDER);
+		double started = borderSize(player);
+		check(ownedOnServer(player, MEDIUM_BORDER), "setup: the medium tier should have been bought");
+
+		try {
+			// A size a run in progress must not be given, because it is already inside the old one.
+			writeOverride(player, "{\"worldBorder\": {\"medium\": {\"size\": 256}}}");
+			check(Math.abs(borderSize(player) - started) < 1.0,
+					"setup: the reload itself must leave the live border alone, and it is now "
+							+ borderSize(player));
+
+			clickSquare(context, player, TREES);
+
+			check(ownedOnServer(player, TREES), "setup: the unrelated purchase should have gone through");
+			check(Math.abs(borderSize(player) - started) < 1.0,
+					"buying something that is not a border must not resize the run: it was " + started
+							+ " across and is now " + borderSize(player));
+
+			// The control: a tier that really is a change still changes it, so this is not "the
+			// border never moves again".
+			clickSquare(context, player, LARGE_BORDER);
+			check(borderSize(player) > started,
+					"buying a bigger tier must still resize the run, and it is " + borderSize(player)
+							+ " across against " + started);
+		} finally {
+			removeOverride(player);
+		}
+
+		reset(player);
+	}
+
 	// --- talking to the shop ------------------------------------------------------------------
 
 	/** Nothing owned, nothing to spend, no screen open — on the server, where it counts. */
@@ -539,6 +631,28 @@ public class ShopClientTest implements FabricClientGameTest {
 				}
 			}
 			return -1;
+		});
+	}
+
+	/** How many the screen says the chest will hold. */
+	private int rewardCount(ClientGameTestContext context, String unlockId) {
+		return context.computeOnClient(client -> SyncedShop.reward(unlockId).count());
+	}
+
+	/** Whether the screen is drawing the item the chest will actually hold. */
+	private boolean rewardIs(ClientGameTestContext context, String unlockId, String itemId) {
+		return context.computeOnClient(client -> {
+			Reward reward = SyncedShop.reward(unlockId);
+			return reward.isSomething()
+					&& reward.item().getItem().builtInRegistryHolder().key().identifier().toString().equals(itemId);
+		});
+	}
+
+	/** How many the chest will actually hold, from the server's own catalogue. */
+	private int grantedCount(TestPlayer player, String unlockId) {
+		return player.onServerComputing(server -> {
+			ItemStack stack = StarterItems.stackFor(unlockId, server.registryAccess());
+			return stack.getCount();
 		});
 	}
 

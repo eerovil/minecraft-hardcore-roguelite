@@ -328,6 +328,9 @@ features/    gameplay mechanics only — no balance numbers of their own
 file order, plus the `worldBorder` tiers under their `world.border.*` ids. Nothing else enumerates
 what is for sale.
 
+A starter item is the exception to that last point: its icon, count and name in the shop come from
+this file, because this file is what the chest will hold. Everything else is presentation.
+
 Note what is *not* in the balance file: which row of the shop an unlock is drawn in, what icon it
 has and what it is called. Those are presentation, not tuning, and they live in
 `src/main/resources/shop-layout.json` and the language file. A balance edit changes what something

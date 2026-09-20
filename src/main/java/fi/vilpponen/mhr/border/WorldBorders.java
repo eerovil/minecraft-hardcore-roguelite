@@ -144,6 +144,14 @@ public final class WorldBorders {
 				owned = tier;
 			}
 		}
+		if (owned == selectedTier) {
+			// Nothing about the border has changed, so nothing is put on the world. This is asked
+			// after *every* purchase, and applying a tier reads its size out of the balance in
+			// effect — so re-applying the tier already in force would hand a run the size a reload
+			// set while it was being played, which is the one thing {@code /mhr reload} promises it
+			// will not do. A run keeps the border it started with until the tier itself changes.
+			return;
+		}
 		set(owned);
 	}
 

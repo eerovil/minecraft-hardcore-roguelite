@@ -768,6 +768,12 @@ the player would see and the left button goes down.
 - **clicking-an-unaffordable-square-changes-nothing**.
 - **owned-and-part-upgraded-states-reach-the-screen** — owned, part-upgraded, affordable and out of
   reach all established for real and read back off the screen's own copy.
+- **a-retuned-starter-item-is-shown-as-what-it-will-grant** — a starter item is retuned to a
+  different item and count, and the open screen follows it, because the reward it draws is the stack
+  the server will actually put in the chest rather than a second copy in an icon or language file.
+- **an-unrelated-purchase-does-not-resize-the-run** — a border size is reloaded and then something
+  that is not a border is bought; the live border must not move. The control is that buying a bigger
+  tier still moves it.
 - **a-balance-reload-reaches-an-open-shop** — a price is retuned and `/mhr reload` run while the
   shop is open; the screen shows the new price without being reopened, and the click then charges
   what the screen was showing.

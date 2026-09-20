@@ -162,10 +162,13 @@ class ShopLayoutTest {
 	}
 
 	@Test
-	void everyShippedEntryHasAnIconAndAName() {
+	void everyEntryWhoseEffectIsCodeHasAnIconAndAName() {
 		JsonObject lang = readJson("/assets/hardcore_roguelite/lang/en_us.json");
 
 		for (Offer offer : shippedOffers()) {
+			if (handsOverAnItem(offer.id())) {
+				continue;
+			}
 			assertTrue(ShopLayout.hasIcon(offer.id()),
 					"shop-layout.json has no icon for '" + offer.id() + "', so it would draw as the default");
 			assertTrue(lang.has(ShopText.nameKey(offer.id())),
@@ -173,6 +176,42 @@ class ShopLayoutTest {
 			assertTrue(lang.has(ShopText.descriptionKey(offer.id())),
 					"en_us.json has no description for '" + offer.id() + "', so hovering would explain nothing");
 		}
+	}
+
+	/**
+	 * The other half of the same rule, and the one that stops the duplication coming back.
+	 *
+	 * <p>What a starter item gives is a stack in the balance catalogue, which an override may
+	 * replace. The shop is told it by the server and draws it from there. An icon or a name written
+	 * down here as well would be a second copy of a number somebody is allowed to change, and the
+	 * two drifted the moment anyone retuned a count.
+	 */
+	@Test
+	void anEntryThatHandsOverAnItemDescribesItselfFromTheCatalogue() {
+		JsonObject lang = readJson("/assets/hardcore_roguelite/lang/en_us.json");
+		int checked = 0;
+
+		for (Offer offer : shippedOffers()) {
+			if (!handsOverAnItem(offer.id())) {
+				continue;
+			}
+			checked++;
+			assertFalse(ShopLayout.hasIcon(offer.id()),
+					"shop-layout.json names an icon for '" + offer.id() + "', which the balance file already"
+							+ " decides. The server sends the real stack; this copy can only go stale.");
+			assertFalse(lang.has(ShopText.nameKey(offer.id())),
+					"en_us.json names '" + offer.id() + "', which the item itself already does");
+			assertFalse(lang.has(ShopText.descriptionKey(offer.id())),
+					"en_us.json describes '" + offer.id() + "', counts and all, which is exactly what the"
+							+ " override file is allowed to change");
+		}
+		assertTrue(checked > 0, "the shipped catalogue should have at least one entry that gives an item");
+	}
+
+	/** Whether the shipped catalogue says this unlock's whole effect is a stack. */
+	private static boolean handsOverAnItem(String id) {
+		JsonObject unlocks = readJson("/default-balance.json").getAsJsonObject("unlocks");
+		return unlocks.has(id) && unlocks.getAsJsonObject(id).has("item");
 	}
 
 	@Test

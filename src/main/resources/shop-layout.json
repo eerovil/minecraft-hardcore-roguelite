@@ -54,12 +54,6 @@
 		"player.slot.boots": "minecraft:iron_boots",
 		"player.slot.offhand": "minecraft:shield",
 
-		"starter.bread": "minecraft:bread",
-		"starter.logs": "minecraft:oak_log",
-		"starter.torches": "minecraft:torch",
-		"starter.stone_pickaxe": "minecraft:stone_pickaxe",
-		"starter.iron_sword": "minecraft:iron_sword",
-		"starter.efficient_pickaxe": "minecraft:diamond_pickaxe",
 
 		"player.craft.enchant": "minecraft:enchanting_table"
 	}

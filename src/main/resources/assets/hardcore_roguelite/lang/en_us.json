@@ -22,6 +22,9 @@
 	"mhr.shop.state.buy": "Click to buy",
 	"mhr.shop.state.short": "You need %s more",
 
+	"mhr.shop.reward.name": "%s× %s",
+	"mhr.shop.reward.desc": "In every run's starting chest.",
+
 	"mhr.shop.bought": "Bought %s for %s. %s left.",
 	"mhr.shop.refused.not_for_sale": "Nothing in the shop sells '%s'.",
 	"mhr.shop.refused.maxed": "You already have %s.",
@@ -80,19 +83,6 @@
 	"mhr.shop.unlock.player.slot.boots.desc": "Lets you wear boots.",
 	"mhr.shop.unlock.player.slot.offhand": "Offhand slot",
 	"mhr.shop.unlock.player.slot.offhand.desc": "Lets you hold a shield or a torch in your left hand.",
-
-	"mhr.shop.unlock.starter.bread": "Bread",
-	"mhr.shop.unlock.starter.bread.desc": "16 bread in every run's starting chest.",
-	"mhr.shop.unlock.starter.logs": "Logs",
-	"mhr.shop.unlock.starter.logs.desc": "32 oak logs in every run's starting chest.",
-	"mhr.shop.unlock.starter.torches": "Torches",
-	"mhr.shop.unlock.starter.torches.desc": "32 torches in every run's starting chest.",
-	"mhr.shop.unlock.starter.stone_pickaxe": "Stone pickaxe",
-	"mhr.shop.unlock.starter.stone_pickaxe.desc": "A stone pickaxe in every run's starting chest.",
-	"mhr.shop.unlock.starter.iron_sword": "Iron sword",
-	"mhr.shop.unlock.starter.iron_sword.desc": "An iron sword in every run's starting chest.",
-	"mhr.shop.unlock.starter.efficient_pickaxe": "Efficiency III pickaxe",
-	"mhr.shop.unlock.starter.efficient_pickaxe.desc": "An enchanted diamond pickaxe in every run's starting chest.",
 
 	"mhr.shop.unlock.player.craft.enchant": "Crafted tools come enchanted",
 	"mhr.shop.unlock.player.craft.enchant.desc": "Every tool and sword you craft is enchanted. Stronger at each level."

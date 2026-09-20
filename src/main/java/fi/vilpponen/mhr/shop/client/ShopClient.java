@@ -16,7 +16,7 @@ public final class ShopClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		ClientPlayNetworking.registerGlobalReceiver(ShopStatePayload.TYPE, (payload, context) -> {
-			SyncedShop.accept(payload.currency(), payload.offers());
+			SyncedShop.accept(payload.currency(), payload.offers(), payload.rewards());
 			if (payload.open()) {
 				context.client().setScreenAndShow(new ShopScreen());
 			}

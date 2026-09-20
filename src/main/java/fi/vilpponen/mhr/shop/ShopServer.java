@@ -3,11 +3,18 @@ package fi.vilpponen.mhr.shop;
 import fi.vilpponen.mhr.UnlockEffects;
 import fi.vilpponen.mhr.progression.Catalogue;
 import fi.vilpponen.mhr.progression.Purchase;
+import fi.vilpponen.mhr.progression.Offer;
 import fi.vilpponen.mhr.progression.Wallet;
+import fi.vilpponen.mhr.starter.StarterItems;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.ItemStack;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
@@ -46,10 +53,47 @@ public final class ShopServer {
 	}
 
 	public static void sendTo(ServerPlayer player, boolean open) {
-		if (ServerPlayNetworking.canSend(player, ShopStatePayload.TYPE)) {
-			ServerPlayNetworking.send(player,
-					new ShopStatePayload(open, Wallet.get().balance(), Catalogue.offers()));
+		if (!ServerPlayNetworking.canSend(player, ShopStatePayload.TYPE)) {
+			return;
 		}
+		List<Offer> offers = Catalogue.offers();
+		ServerPlayNetworking.send(player, new ShopStatePayload(
+				open, Wallet.get().balance(), offers, rewardsFor(offers, player.level().registryAccess())));
+	}
+
+	/**
+	 * What each offer will actually hand over, for the ones that hand over an item.
+	 *
+	 * <p>Read from the balance in effect every time, like the price beside it, so a retuned starter
+	 * item is described by the shop the moment {@code /mhr reload} takes — and described as the
+	 * thing the chest is going to hold, rather than as whatever an icon file once said.
+	 */
+	private static Map<String, Reward> rewardsFor(List<Offer> offers, HolderLookup.Provider registries) {
+		Map<String, Reward> rewards = new LinkedHashMap<>();
+		for (Offer offer : offers) {
+			ItemStack stack = StarterItems.stackFor(offer.id(), registries);
+			if (!stack.isEmpty()) {
+				rewards.put(offer.id(), new Reward(stack, stack.getCount()));
+			}
+		}
+		return rewards;
+	}
+
+	/**
+	 * What to call an offer in chat.
+	 *
+	 * <p>A starter item is named after the thing it gives, from the balance in effect, for the same
+	 * reason the screen draws it from there: any other name is a second copy of something an
+	 * override may change.
+	 */
+	private static Component nameOf(String id, ServerPlayer player) {
+		ItemStack stack = StarterItems.stackFor(id, player.level().registryAccess());
+		if (stack.isEmpty()) {
+			return Component.translatable(ShopText.nameKey(id));
+		}
+		return stack.getCount() > 1
+				? Component.translatable("mhr.shop.reward.name", stack.getCount(), stack.getHoverName())
+				: stack.getHoverName();
 	}
 
 	/** After anything changes, so an open shop screen never shows a stale price or level. */
@@ -74,21 +118,19 @@ public final class ShopServer {
 		if (result.bought()) {
 			UnlockEffects.applyAll(server);
 		}
-		player.sendSystemMessage(describe(result));
+		player.sendSystemMessage(describe(result, player));
 		sendToAll(server);
 	}
 
-	private static Component describe(Purchase.Result result) {
+	private static Component describe(Purchase.Result result, ServerPlayer player) {
+		Component name = nameOf(result.id(), player);
 		return switch (result.outcome()) {
-			case BOUGHT -> Component.translatable("mhr.shop.bought",
-					Component.translatable(ShopText.nameKey(result.id())), result.price(), result.balance());
+			case BOUGHT -> Component.translatable("mhr.shop.bought", name, result.price(), result.balance());
 			case NOT_FOR_SALE -> Component.translatable("mhr.shop.refused.not_for_sale", result.id());
-			case ALREADY_MAXED -> Component.translatable("mhr.shop.refused.maxed",
-					Component.translatable(ShopText.nameKey(result.id())));
+			case ALREADY_MAXED -> Component.translatable("mhr.shop.refused.maxed", name);
 			case TOO_EXPENSIVE -> Component.translatable("mhr.shop.refused.too_expensive",
-					Component.translatable(ShopText.nameKey(result.id())), result.price(), result.balance());
-			case NOT_SAVED -> Component.translatable("mhr.shop.refused.not_saved",
-					Component.translatable(ShopText.nameKey(result.id())));
+					name, result.price(), result.balance());
+			case NOT_SAVED -> Component.translatable("mhr.shop.refused.not_saved", name);
 		};
 	}
 }

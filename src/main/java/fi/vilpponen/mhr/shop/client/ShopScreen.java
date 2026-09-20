@@ -2,6 +2,7 @@ package fi.vilpponen.mhr.shop.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import fi.vilpponen.mhr.progression.Offer;
+import fi.vilpponen.mhr.shop.Reward;
 import fi.vilpponen.mhr.shop.ShopBuyPayload;
 import fi.vilpponen.mhr.shop.ShopLayout;
 import fi.vilpponen.mhr.shop.ShopText;
@@ -311,9 +312,14 @@ public final class ShopScreen extends Screen {
 		// of the tooltip explaining it.
 		extractor.fakeItem(ShopIcons.stackFor(offer.id()), x + 2, y + 2);
 
-		// A repeatable unlock's level sits where an item's stack count would, because that is the
-		// corner a Minecraft player already reads a number out of.
-		if (offer.isRepeatable() && offer.isOwned()) {
+		// The corner a Minecraft player already reads a number out of. An offer that hands over a
+		// stack says how many; a repeatable one says how far it has been taken. Nothing has both.
+		Reward reward = SyncedShop.reward(offer.id());
+		if (reward.count() > 1) {
+			extractor.text(font, Component.literal(String.valueOf(reward.count())),
+					x + ICON_BOX - 2 - font.width(String.valueOf(reward.count())), y + ICON_BOX - 9,
+					PRICE_COLOR);
+		} else if (offer.isRepeatable() && offer.isOwned()) {
 			extractor.text(font, Component.literal(String.valueOf(offer.level())),
 					x + ICON_BOX - 6, y + ICON_BOX - 9, offer.isMaxed() ? OWNED_COLOR : PARTIAL_COLOR);
 		}
@@ -348,9 +354,9 @@ public final class ShopScreen extends Screen {
 	 */
 	private List<Component> tooltipFor(Offer offer) {
 		List<Component> lines = new ArrayList<>();
-		lines.add(Component.translatable(ShopText.nameKey(offer.id())).withStyle(ChatFormatting.WHITE));
+		lines.add(nameOf(offer).copy().withStyle(ChatFormatting.WHITE));
 
-		Component description = Component.translatableWithFallback(ShopText.descriptionKey(offer.id()), "");
+		Component description = descriptionOf(offer);
 		if (!description.getString().isEmpty()) {
 			lines.add(description.copy().withStyle(ChatFormatting.GRAY));
 		}
@@ -374,6 +380,31 @@ public final class ShopScreen extends Screen {
 					: Component.translatable("mhr.shop.state.buy").withStyle(ChatFormatting.GRAY));
 		}
 		return lines;
+	}
+
+	/**
+	 * What to call an offer.
+	 *
+	 * <p>One that hands over an item is named after the item, with how many, out of what the server
+	 * said it will give. Writing that name down anywhere else is a second copy of something the
+	 * balance file is allowed to change, and the two drifted apart as soon as anybody retuned a
+	 * starter item.
+	 */
+	private static Component nameOf(Offer offer) {
+		Reward reward = SyncedShop.reward(offer.id());
+		if (!reward.isSomething()) {
+			return Component.translatable(ShopText.nameKey(offer.id()));
+		}
+		return reward.count() > 1
+				? Component.translatable("mhr.shop.reward.name", reward.count(), reward.item().getHoverName())
+				: reward.item().getHoverName();
+	}
+
+	/** Likewise: an item says what it is for itself, and the line below says where it turns up. */
+	private static Component descriptionOf(Offer offer) {
+		return SyncedShop.reward(offer.id()).isSomething()
+				? Component.translatable("mhr.shop.reward.desc")
+				: Component.translatableWithFallback(ShopText.descriptionKey(offer.id()), "");
 	}
 
 	// --- input -------------------------------------------------------------------------------

@@ -246,6 +246,11 @@ with `NOT_SAVED`.
 
 Rules to keep:
 
+- **A reward is described by whoever will hand it over.** A starter item's whole effect is a stack
+  in the balance catalogue, and an override may replace it. So the offer carries that stack and the
+  screen draws its icon, count and name from it. Do not write any of those facts into
+  `shop-layout.json` or the language file as well — `ShopLayoutTest` fails if you do, because the
+  two copies drift the moment anybody retunes a count.
 - **One writer.** `Progress` writes; nothing else does. `Wallet` and `UnlockState` are views over it
   and own nothing. Do not add a second file for a new kind of permanent progression — add a key to
   the snapshot.
