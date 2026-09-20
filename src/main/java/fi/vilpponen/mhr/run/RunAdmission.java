@@ -26,15 +26,50 @@ import net.minecraft.server.level.ServerPlayer;
  * <p>Zero is "no run", which is what an unmarked player reads as, and no run ever has that id.
  */
 public final class RunAdmission {
-	private static final AttachmentType<Integer> ADMITTED_RUN = AttachmentRegistry.createPersistent(
-			Identifier.fromNamespaceAndPath(HardcoreRoguelite.MOD_ID, "admitted_run"), Codec.INT);
+	/**
+	 * Assigned by {@link #register()} and not by class loading, which is the whole point.
+	 *
+	 * <p>A persistent attachment has to exist before any save data is read: Fabric resolves each
+	 * saved id as it loads an entity and drops the ones it does not recognise — "Skipping invalid
+	 * attachments" in the log and nothing else. Registering from a static initialiser means the
+	 * type appears whenever something first happens to touch this class, which on a server that
+	 * restarted mid-run is *after* the player's file has been read. Their admission would be gone,
+	 * the join would look like somebody who had never been admitted, and the reset would take a run
+	 * they were in the middle of playing.
+	 *
+	 * <p>Holding it behind the call rather than beside it also means getting the order wrong throws
+	 * here instead of quietly reading zero. Of the two failures, the loud one is much the better.
+	 */
+	private static AttachmentType<Integer> admittedRun;
 
 	private RunAdmission() {
 	}
 
+	/** Called once from the mod initializer, before any world or player data can be loaded. */
+	public static void register() {
+		if (admittedRun == null) {
+			admittedRun = AttachmentRegistry.createPersistent(
+					Identifier.fromNamespaceAndPath(HardcoreRoguelite.MOD_ID, "admitted_run"),
+					Codec.INT);
+		}
+	}
+
+	/** Has {@link #register()} run? Asked by the tests, which cannot otherwise see the wiring. */
+	public static boolean isRegistered() {
+		return admittedRun != null;
+	}
+
+	private static AttachmentType<Integer> type() {
+		if (admittedRun == null) {
+			throw new IllegalStateException("RunAdmission.register() has not run, so a player's"
+					+ " admitted run may already have been dropped while their save was read");
+		}
+		return admittedRun;
+	}
+
 	/** The run this player was let into, or zero if they have never been let into one. */
 	public static int of(ServerPlayer player) {
-		return player.getAttachedOrElse(ADMITTED_RUN, 0);
+		return player.getAttachedOrElse(type(), 0);
 	}
 
 	public static boolean isAdmittedTo(ServerPlayer player, int runId) {
@@ -43,7 +78,7 @@ public final class RunAdmission {
 
 	/** Write down that this player has crossed this run's start boundary. */
 	public static void admit(ServerPlayer player, int runId) {
-		player.setAttached(ADMITTED_RUN, runId);
+		player.setAttached(type(), runId);
 	}
 
 	/**
@@ -57,7 +92,7 @@ public final class RunAdmission {
 	 */
 	public static void carryOver(ServerPlayer from, ServerPlayer to) {
 		if (from != to) {
-			to.setAttached(ADMITTED_RUN, of(from));
+			to.setAttached(type(), of(from));
 		}
 	}
 }

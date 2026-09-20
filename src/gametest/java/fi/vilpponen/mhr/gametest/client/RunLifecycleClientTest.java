@@ -3,6 +3,7 @@ package fi.vilpponen.mhr.gametest.client;
 import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.gametest.mixin.ChatComponentAccessor;
 import fi.vilpponen.mhr.run.Lobby;
+import fi.vilpponen.mhr.run.RunAdmission;
 import fi.vilpponen.mhr.run.RunEvents;
 import fi.vilpponen.mhr.run.RunPhase;
 import fi.vilpponen.mhr.run.RunRecord;
@@ -179,6 +180,16 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	 */
 	private void startsInTheLobby(ClientGameTestContext context, TestDedicatedServerContext server,
 			TestDedicatedServerConnection connection) {
+		// Asked first, and asked here rather than anywhere later, because "before anything has used
+		// it" is the whole claim. A persistent attachment registered on first use is registered
+		// after the save data that needed it has already been read and its unknown ids dropped —
+		// which on a server restarted mid-run costs the player the run they were playing. Nothing
+		// in this process has admitted anybody yet, so the only thing that can have registered it
+		// is mod initialization.
+		check(server.computeOnServer(unused -> RunAdmission.isRegistered()),
+				"the admitted-run attachment must be registered during mod initialization, before"
+						+ " any player save data can be read, and it is not registered yet");
+
 		RunRecord record = TestRuns.record(server);
 		check(record.phase() == RunPhase.LOBBY,
 				"a save nobody has played must be in the lobby, and it says " + record.describe());
