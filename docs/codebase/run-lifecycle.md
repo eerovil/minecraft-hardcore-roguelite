@@ -1,65 +1,175 @@
 # Run lifecycle
 
-Read this before implementing death handling, the shop transition, new-world creation, first-join
+Read this before implementing death handling, the shop transition, new-run creation, first-join
 behaviour, or any state that must reset between runs.
 
 ## Product definition
 
 The design rule is:
 
-> **One Minecraft world = one run.**
+> **One run has one life.** Death ends that run permanently, the player gets the shop/meta step, and
+> the next run is a brand-new world while permanent progression remains.
 
-A run has one life. Death eventually ends that run permanently, the player gets the shop/meta step,
-and the next run starts in a brand-new world while permanent progression remains.
+Until issue #38 this was realised as "one Minecraft world = one run": a new run meant deleting the
+save and making another one. It is now realised inside **one save**, as a persistent lobby plus
+three disposable run dimensions that are deleted and regenerated while the server keeps running.
 
-That full loop is **not implemented yet**.
+A new run therefore no longer needs restarting Minecraft or re-opening the save.
 
-Do not infer otherwise from the existence of `RunStart`: today it owns the starter-chest
-once-per-world behaviour, not the whole roguelite lifecycle.
+## The shape of it
 
-## What exists today
+```
+Persistent save
+├── hardcore_roguelite:lobby   persistent, never deleted
+├── hardcore-roguelite-run.json  the loop's own state, in the save root
+│
+├── minecraft:overworld        disposable, this run only
+├── minecraft:the_nether       disposable, this run only
+└── minecraft:the_end          disposable, this run only
 
-### Permanent progression survives outside the world
+Outside the save, shared by every save on the installation:
+└── config/hardcore-roguelite-unlocks.json   permanent purchases
+```
 
-`UnlockState` is stored under the Fabric config directory, not in the world.
+**A run is the three vanilla dimensions; the lobby is the extra one**, not the other way round.
+That is deliberate and load-bearing: vanilla hard-codes which dimension a nether portal and an end
+portal lead to, so keeping the run on the vanilla three makes "dimension travel stays inside this
+run" true with no code at all. The lobby has no portals, so the only way into a run is starting one.
 
-Deleting the current world therefore leaves unlock ownership intact.
+| Code | Job |
+| --- | --- |
+| `run/RunPhase`, `run/RunRecord` | The state machine, as plain data. Decides which move is legal. |
+| `run/RunStorage` | Reads and writes the record as JSON in the save root. |
+| `run/RunLifecycle` | The coordinator. The only thing allowed to change the phase. |
+| `run/RunWorlds` | Deleting and rebuilding the three run dimensions. The only Minecraft-internals part. |
+| `run/Lobby` | The persistent dimension and getting a player into it. |
+| `run/RunEvents` | The seam features hook into: `RUN_STARTED`, `RUN_ENDED`. |
+| `run/RunCommand` | `/mhr run`, `/mhr run start [seed]`, `/mhr run end`. |
+| `mixin/MinecraftServerAccessor` | The four private server fields building a level out of band needs. |
 
-See `docs/codebase/progression.md`.
+## The state machine
 
-### A world can own run-local flags
+```
+LOBBY --startRun()--> CREATING_RUN --worlds built--> RUNNING --death--> ENDING_RUN --> LOBBY
+```
 
-`starter.RunStart` stores whether the starter chest has already been granted in Minecraft
-`SavedData`.
+`RunRecord` is a record of six values — phase, run id, seed, start time, completed runs, and the id
+of the last run whose reward was committed — and every transition on it throws when the phase does
+not allow it. That throw is the enforcement, not a convention:
 
-The flag is read from the **overworld's** data storage even if another dimension is involved.
+- a run cannot be started while one is in progress or being built;
+- only a `RUNNING` save can end, so a second death in the same tick finds nothing to end;
+- the reward can only be committed while `ENDING_RUN` and only when it is still outstanding;
+- the lobby cannot be reached until the reward has been committed.
 
-That choice is important: "once per run" means once per whole world/server save, not once per
-dimension.
+`RunRecord` has no Minecraft in it and is unit-tested in `src/test/.../run/RunRecordTest.java`.
+**Put lifecycle rules there rather than in `RunLifecycle`**, where they would need a running game to
+test.
 
-### Starter chest happens on first player join
+## Persistence and recovery
 
-The current chest is placed when the first relevant player joins because placement is relative to a
-player and no player exists at raw world creation time.
+The record lives in `<save>/hardcore-roguelite-run.json`, written whole to a temporary file and
+moved into place. It is in the save root rather than in world saved data because the three
+dimensions it describes are the ones being thrown away — and it is per save rather than per
+installation because two saves are two separate loops.
 
-The once-per-run flag is claimed before placement. A placement failure must not create a new chest
-on every reconnect.
+What a reload makes of each phase (`RunRecord.recovered()`):
 
-Reconnect therefore is not a new run.
+| Found on load | Meaning | What happens |
+| --- | --- | --- |
+| `LOBBY` | between runs | nothing |
+| `CREATING_RUN` | crashed while building a run | back to `LOBBY`; that run id is spent and never reused |
+| `RUNNING` | the player quit mid-run | the run continues. **Quitting is not dying.** |
+| `ENDING_RUN` | crashed while finishing a run | `RunLifecycle` finishes it: commits the reward if `rewardedRunId != runId`, then returns to the lobby |
 
-A second player joining the same world is not a new run.
+An unreadable file is reported loudly and read as a save nobody has played. That loses at most one
+run and never any permanent progression, which is stored elsewhere.
 
-Deleting that world and creating another is a new run, so the new world's run-local flag begins
-unset and the permanent starter-item purchases are granted again.
+## Exactly-once boundaries
 
-### World border is currently only partially integrated
+These operations must happen once and are each guarded by the record rather than by "this callback
+normally fires once":
 
-The world-border feature applies a selected tier to a running world and all dimensions.
+| Operation | Guard |
+| --- | --- |
+| ending a run | phase must be `RUNNING` |
+| committing the reward | `rewardedRunId` is set to `runId`, written before and after the payout |
+| counting a completed run | only the `ENDING_RUN -> LOBBY` transition increments it |
+| creating the next run | phase must be `LOBBY` |
+| granting once-per-run starter items | `RUN_STARTED` fires once per run by construction |
 
-The selected tier currently lives in memory and resets to its default when the process starts.
-Permanent shop ownership/selection of border tiers has not been wired into the lifecycle yet.
+Currency does not exist yet. When it does, credit it from a `RUN_ENDED` listener; that event is
+already exactly-once across a crash.
 
-Do not create a second border-specific run persistence mechanism when that integration is built.
+## The run-start hook
+
+Features must not watch unrelated events and infer that a run has begun. They listen:
+
+```java
+RunEvents.RUN_STARTED.register((server, overworld, run) -> { ... });
+RunEvents.RUN_ENDED.register((server, run) -> { ... });
+```
+
+`RUN_STARTED` fires on the server thread after the three dimensions exist and before any player is
+in them, so a listener can change the world the player is about to arrive in. The overworld it is
+handed is **a different object from the previous run's** — a listener that cached the old one is
+holding a closed level.
+
+Two listeners exist today and are the model to copy:
+
+- `border/WorldBorders` puts the selected tier on the run's three new dimensions;
+- `starter/RunStart` places the starter chest at the run's overworld spawn.
+
+Neither is called by name from `RunLifecycle`, and `RunLifecycle` does not import either.
+
+## What `RunWorlds` actually does
+
+In order, on the server thread, with every player already in the lobby:
+
+1. replace the server's `WorldGenSettings` with one holding the new seed — `ServerLevel.getSeed()`
+   reads it off the server, not off the level, so nothing else would change the terrain;
+2. remove the three run levels from the server's level map and close them with `noSave` set;
+3. delete their files;
+4. build three new `ServerLevel`s the way `MinecraftServer.createLevels` does and put them back;
+5. find a spawn in the new overworld and set it.
+
+Step 3 has an asymmetry worth knowing: **the overworld's dimension directory *is* the save
+directory.** The nether and the end own `DIM-1` and `DIM1` and are deleted whole; the overworld is
+picked apart instead — `region/`, `entities/`, `poi/`, and by name the two pieces of saved data that
+belong to a run rather than to a save, `minecraft:raids` and `minecraft:chunk_tickets`. Anything
+else you add under `<save>/data` that is run-local has to be added to `RunWorlds.RUN_SAVED_DATA` or
+it will survive into the next run.
+
+Step 5 matters because vanilla only chooses a spawn for a world that has never been initialised. By
+run two the save has been initialised for a long time, so without this every run after the first
+would start at run one's coordinates in terrain that no longer exists.
+
+### The old run's worlds are deleted at the *start* of the next run
+
+Not the moment the player returns to the lobby. Minecraft has an overworld at all times and a great
+deal of code, vanilla included, assumes so; deleting the three the instant a run ends would leave
+the server without one for as long as the player browsed the shop. Deleting them immediately before
+their replacements are built gives the same guarantee — no run ever reuses another run's chunks — at
+a moment when there is no gap for anything to notice. The finished run's levels do stay loaded and
+ticking while the player is between runs; with no player in them that is cheap, but it is a known
+simplification rather than an oversight.
+
+## Death
+
+`ServerLivingEntityEvents.ALLOW_DEATH` is the hook. Returning false cancels the death outright, so
+vanilla's hardcore game-over never becomes part of the loop — there is no spectator mode, no
+"delete world" button and no respawn screen in the roguelite.
+
+- dying in a run dimension during a `RUNNING` save ends the run;
+- dying in the lobby is revived and logged as a warning, because nothing there should be able to
+  kill anybody and a game-over between runs would be the loop breaking;
+- anything else is left to vanilla.
+
+The phase moves to `ENDING_RUN` inside the event, so nothing else can end the same run, but the
+rest of it — committing the reward, moving the players — is queued for the next tick. Teleporting a
+player between dimensions from inside the damage that would have killed them leaves their client
+still rendering the world it was told to leave. A second death that arrives while the run is
+winding up is revived and ignored.
 
 ## State taxonomy
 
@@ -67,176 +177,75 @@ Before adding a field, decide which column it belongs in.
 
 | State | Lifetime | Home |
 | --- | --- | --- |
-| Purchased unlock / repeatable level | Across runs | permanent progression outside world |
-| Future currency balance | Across runs unless design says otherwise | permanent progression outside world |
-| Starter item ownership | Across runs | permanent progression outside world |
-| "Starter chest already granted" | One run/world | overworld SavedData |
-| Generated chunks/entities | One run/world | Minecraft world |
-| Player inventory during a run | One run/world | Minecraft player/world data |
-| Selected/active run setup derived from purchases | One run; recomputable at start | run setup/world state |
+| Purchased unlock / repeatable level | Across saves | `config/hardcore-roguelite-unlocks.json` |
+| Future currency balance | Across saves unless design says otherwise | same file |
+| Starter item ownership | Across saves | same file |
+| Phase, run id, seed, run count, reward committed | The save, across runs | `<save>/hardcore-roguelite-run.json` |
+| Generated chunks/entities | One run | the run's dimensions, deleted between runs |
+| Player inventory, ender chest, XP | One run | cleared by `RunLifecycle` at run start |
+| Lobby contents | The save, across runs | the lobby dimension |
+| Selected/active run setup derived from purchases | One run; recomputable at start | applied by a `RUN_STARTED` listener |
 | Shop UI screen state | transient | client/server session, not progression |
-| Test-only setup | one scenario | GameTest state |
 
-The deletion test is useful:
+The deletion test is still useful, with a sharper question than before:
 
-> If the current world directory disappeared, should the value disappear?
+> If the three run dimensions were deleted right now, should the value disappear?
 
-If yes, it is run-local. If no, it belongs in permanent progression.
+If yes, it is run-local. If no, it belongs in the run record or in permanent progression.
 
-## Planned lifecycle contract
+## Where the shop goes
 
-The intended high-level transition is:
+The shop is the lobby's screen, and the between-runs state is `RunPhase.LOBBY`. It should:
+
+- read and write permanent progression (the unlock file, and currency when it exists);
+- call `RunLifecycle.get().startRun(OptionalLong.empty())` for "start next run", and show the
+  `IllegalStateException` message if that refuses;
+- read `RunLifecycle.get().record()` for what to display — runs completed, last run's seed;
+- credit currency from a `RUN_ENDED` listener rather than from the death path.
+
+It should not touch `RunWorlds`, mixins, or any feature's internals:
 
 ```
-permanent progression
-        |
-        v
-create fresh run/world
-        |
-        v
-derive run setup from purchases
-        |
-        v
-first join / starter delivery
-        |
-        v
-play one-life Hardcore run
-        |
-      death
-        |
-        v
-finalize run rewards
-        |
-        v
-shop / permanent purchases
-        |
-        v
-dispose old world
-        |
-        +----> create next fresh run
+shop -> purchase service -> permanent state
+RunLifecycle -> RunEvents.RUN_STARTED -> features read permanent state and configure the new run
 ```
 
-The implementation may refine the mechanics, but it should preserve these ownership boundaries.
+## Multiplayer assumption
 
-## The transition must be explicit
+Unchanged: one progression profile for the running installation, not per-Minecraft-account
+profiles. `RunLifecycle` moves **every** connected player at a run boundary and any player's death
+during a run ends it. If per-player or shared co-op progression is wanted later, that is a
+product-level migration that has to redefine who owns currency and unlocks, whose death ends a run,
+and who enters the shop.
 
-When the death/shop/new-run system is implemented, avoid a collection of unrelated event listeners
-that each infer whether a new run has happened.
+## New run means genuinely new generation
 
-Prefer one lifecycle coordinator/state machine with explicit transitions and narrow collaborators.
-
-The coordinator should own questions such as:
-
-- is this run active or ended?
-- has its reward been finalized?
-- is the player in the shop/meta phase?
-- has a next world been created?
-- which world is the current run?
-
-Feature code should not independently decide that "a death probably means reset now".
-
-This is future architecture guidance; there is no `RunManager` to preserve today.
-
-## Exactly-once boundaries
-
-The lifecycle will contain several operations that must happen exactly once:
-
-- ending a run;
-- computing/finalizing its reward;
-- crediting permanent currency;
-- opening/entering the shop state;
-- applying one purchase;
-- creating the next run;
-- granting once-per-run starter items.
-
-Design persistence so a crash/reconnect/retry cannot silently execute those twice.
-
-The starter chest's world-owned `Granted` flag is the current small example of this principle.
-
-Future currency/reward code should have equivalent idempotency rather than relying on "this callback
-normally fires once".
-
-## New world means genuinely new generation
-
-World unlocks affect generation, not already-generated terrain.
-
-A new run must therefore create a genuinely new world, not merely:
+World unlocks affect generation, not already-generated terrain. A new run must therefore create
+genuinely new chunks, not merely:
 
 - teleport the player far away;
 - clear the inventory in the old world;
 - move the world border;
 - reuse previously generated chunks.
 
-This matters for trees, ores, villages and chunk-populated animals.
+`RunWorlds` does this by deleting the region files and changing the seed. The client GameTest proves
+it by putting a diamond block in each run dimension and requiring it to be gone in the next run.
 
-The permanent unlock state is applied to generation of the next world/fresh chunks.
+## Verification
 
-## Dimension scope
+- `src/test/.../run/RunRecordTest.java` — the transitions, the exactly-once rules, and what each
+  phase means after a reload.
+- `src/test/.../run/RunStorageTest.java` — the record surviving a round trip, a missing file, a
+  corrupt file, a partial file, and a crash on either side of the reward.
+- `src/gametest/.../client/RunLifecycleClientTest.java` — the whole loop with a real client and a
+  real dedicated server: lobby, run, nether travel, death, lobby, second run with a different seed,
+  and the lobby and the purchases still standing at the end.
+- `src/gametest/.../client/StarterChestClientTest.java` — the run-start hook doing its job once per
+  run, across a reconnect and across two runs.
 
-Overworld, Nether and End are dimensions of the **same run**, not separate runs.
-
-Run-local flags that mean "once per run" need one authoritative home, normally the overworld or a
-server/world-level coordinator.
-
-Do not grant meta rewards, starter kits or run transitions once per dimension.
-
-World-border setup is dimension-specific geometry but one run-level tier.
-
-## Multiplayer assumption
-
-The current design and progression storage are effectively one progression profile for the running
-installation, not per-Minecraft-account profiles.
-
-Do not casually introduce player UUID keyed permanent state inside one feature.
-
-If per-player or shared-co-op progression is desired later, that is a product-level migration that
-must redefine:
-
-- who owns currency;
-- who owns unlocks;
-- whose death ends a run;
-- who enters the shop;
-- how starter items are granted.
-
-Until such a decision exists, preserve the current single progression-state model.
-
-## Shop is between runs, not a gameplay feature
-
-The future shop should operate on the permanent catalogue/currency layer and request the next run;
-it should not directly mutate every mixin or world object.
-
-A clean direction is:
-
-```
-shop -> purchase service -> permanent state
-run coordinator -> reads permanent state -> configures new run
-features -> read authoritative progression/run setup
-```
-
-Avoid:
-
-```
-shop -> TreeGenerationMixin
-shop -> OreGenerationMixin
-shop -> equipment internals
-```
-
-## Verification requirements for lifecycle work
-
-Lifecycle changes need end-to-end tests because helper tests cannot prove exactly-once behaviour.
-
-Important future scenarios include:
-
-- first join of fresh run grants once-per-run setup;
-- reconnect to same run does not duplicate it;
-- death finalizes a run exactly once;
-- reconnect/restart around death cannot double-credit currency;
-- old world is not reused for the next run;
-- permanent unlocks survive into a genuinely new world;
-- run-local flags do not survive into that new world;
-- worldgen in the next run reflects purchases made in the shop;
-- entering Nether/End does not create another run;
-- a failed transition leaves recoverable state rather than half-crediting permanent progression.
-
-Use Client GameTests for real connect/reconnect/screen flow and fresh dedicated servers/worlds where
-that is the acceptance criterion.
+**Known automation gap:** the harness cannot restart a dedicated server against the same save, so
+"a process restart resumes the run rather than counting a death" is proven in two halves — the
+client test asserts that the file on disk says `RUNNING` mid-run and that a reconnect changes
+nothing, and the unit tests assert what each phase is recovered to when that file is loaded. Nothing
+exercises a genuine second server process over the same world directory. If the Fabric client
+gametest API grows a server restart, close that gap.

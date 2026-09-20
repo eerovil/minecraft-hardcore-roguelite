@@ -123,6 +123,26 @@ sides happen to share a JVM.
 If a rule works only because integrated server and client can see the same singleton, it is not a
 valid multiplayer design.
 
+## Accessor mixins
+
+`MinecraftServerAccessor` is the one mixin here that injects no behaviour at all. It exposes four
+private `MinecraftServer` fields — the level map, the executor, the save directory handle and the
+world-generation settings — because `fi.vilpponen.mhr.run.RunWorlds` has to create and destroy
+levels inside a running server and Minecraft creates every level exactly once, in a method that
+offers to do it again for nobody.
+
+The rules that keep that honest are the same ones as for any other hook:
+
+- the accessor holds no decisions. Whether a run starts is `RunLifecycle`'s business, and how a
+  level is built is `RunWorlds`'; the mixin only hands over fields.
+- exactly one field is written to (`worldGenSettings`, because `ServerLevel.getSeed()` reads the
+  seed off the server rather than off the level) and the `@Mutable` on it says so.
+- the construction it enables copies `MinecraftServer.createLevels` deliberately, so that a run
+  world is an ordinary world in every respect a feature could notice.
+
+Reach for an accessor when a vanilla internal is genuinely not reachable any other way, and keep
+the logic that uses it in the feature package. See `docs/codebase/run-lifecycle.md`.
+
 ## Prefer Fabric events/APIs when they express the contract
 
 Not everything should be a mixin.
@@ -130,9 +150,15 @@ Not everything should be a mixin.
 Current non-mixin hooks include Fabric lifecycle/network/command events for things such as:
 
 - startup/shutdown;
-- first player join;
+- player join;
+- player death (`ServerLivingEntityEvents.ALLOW_DEATH`, which the run loop cancels so that
+  vanilla's hardcore game-over never becomes part of the game);
 - client synchronization;
 - command registration.
+
+The mod also publishes events of its own. `fi.vilpponen.mhr.run.RunEvents` is the seam features use
+to react to a run beginning or ending; a feature must not infer a run boundary by watching some
+other event. See `docs/codebase/run-lifecycle.md`.
 
 Use a Fabric event/API when it gives the needed semantic hook cleanly. Use a mixin when the rule
 really depends on a vanilla internal decision that no public event exposes.

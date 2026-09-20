@@ -37,6 +37,7 @@ the issue first.
 | World border | `src/main/java/fi/vilpponen/mhr/border/` |
 | Ore gating | `src/main/java/fi/vilpponen/mhr/ore/` |
 | Village gating | `src/main/java/fi/vilpponen/mhr/village/` |
+| Run lifecycle, lobby, run worlds | `src/main/java/fi/vilpponen/mhr/run/` |
 | Starter items / run-start chest | `src/main/java/fi/vilpponen/mhr/starter/` |
 | Minecraft hooks | `src/main/java/fi/vilpponen/mhr/mixin/` |
 | Datapack tags | `src/main/resources/data/hardcore_roguelite/` |
@@ -61,8 +62,9 @@ Prefer extending the existing feature seam over creating a second path that owns
 - [agent workflow](docs/agent-workflow.md) — read before implementing or reviewing a GitHub issue.
 - [progression](docs/codebase/progression.md) — read before touching unlock persistence, currency,
   purchases, repeatable upgrades or the future shop's progression model.
-- [run lifecycle](docs/codebase/run-lifecycle.md) — read before death handling, run reset/new-world
-  creation, first-join logic or deciding whether state is permanent versus per-run.
+- [run lifecycle](docs/codebase/run-lifecycle.md) — read before death handling, starting/ending a
+  run, the lobby, run-world creation or deletion, join logic, or deciding whether state is
+  permanent versus per-run.
 - [Minecraft hooks](docs/codebase/minecraft-hooks.md) — read before adding/changing mixins, Fabric
   hooks, datapack membership or client/server authority boundaries.
 - [GameTest authoring](docs/codebase/gametest.md) — read before adding/changing gameplay tests or

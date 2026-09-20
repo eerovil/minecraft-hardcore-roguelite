@@ -9,6 +9,7 @@
 		"JockeyAnimalMixin",
 		"LockedArmorSlotVisibleMixin",
 		"LockedSlotPlacementMixin",
+		"MinecraftServerAccessor",
 		"OreGenerationMixin",
 		"OreVeinMixin",
 		"PlayerEquipmentMixin",

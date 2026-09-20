@@ -74,7 +74,7 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 				server.runCommand("weather clear");
 
 				scenario(context, "the-world-a-run-starts-in-has-no-trees",
-						() -> theWorldARunStartsInHasNoTrees(server));
+						() -> theWorldARunStartsInHasNoTrees(context, server, connection));
 				scenario(context, "fresh-land-has-no-trees-while-locked",
 						() -> freshLandHasNoTreesWhileLocked(context, server, connection));
 				scenario(context, "fresh-land-has-trees-once-unlocked",
@@ -93,17 +93,25 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 
 	/**
 	 * The world a run actually begins in. Nothing is force-loaded here: this is the land the server
-	 * made around spawn on its own, before anything asked it a question, which is exactly what a
-	 * player sees on their first morning.
+	 * made around the run's spawn on its own, before anything asked it a question, which is exactly
+	 * what a player sees on their first morning.
+	 *
+	 * <p>A run is started rather than assumed, because a save begins in the lobby and the land a
+	 * run starts in does not exist until the run does. That is also what makes this the strongest
+	 * form of the question: the unlock is locked before a single chunk of that world is generated,
+	 * and the player is standing in it while it is counted.
 	 *
 	 * <p>The ground count is the control: the unlock withholds trees, not terrain, so a patch with
 	 * no ground in it would make "no logs" mean nothing.
 	 */
-	private void theWorldARunStartsInHasNoTrees(TestDedicatedServerContext server) {
+	private void theWorldARunStartsInHasNoTrees(ClientGameTestContext context,
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
 		server.runCommand("mhr lock world.trees");
+		TestRuns.start(server);
+		connection.waitForChunksRender();
 
-		BlockPos spawn = server.computeOnServer(minecraftServer ->
-				minecraftServer.getWorldData().overworldData().getRespawnData().pos());
+		BlockPos spawn = TestRuns.runSpawn(server);
+		waitForLoadedPatch(context, server, spawn);
 		int logs = count(server, spawn, BlockTags.LOGS);
 		int ground = count(server, spawn, BlockTags.DIRT);
 		LOGGER.info("Spawn at {}: {} logs, {} ground blocks", spawn, logs, ground);
@@ -210,6 +218,42 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 			for (int x = -RADIUS_IN_CHUNKS; x <= RADIUS_IN_CHUNKS; x++) {
 				for (int z = -RADIUS_IN_CHUNKS; z <= RADIUS_IN_CHUNKS; z++) {
 					if (level.getChunkSource().getChunkNow(centreChunkX + x, centreChunkZ + z) == null) {
+						return false;
+					}
+				}
+			}
+			return true;
+		});
+	}
+
+	/**
+	 * Wait until the server has the whole patch loaded, without asking it to generate anything.
+	 *
+	 * <p>What loads the land a run starts in is the player standing in it, and that finishes a few
+	 * ticks after they arrive. Waiting for it is not the same as force-loading it: nothing here
+	 * asks for a chunk, it only stops the count from running before the ones the player's own
+	 * presence pulls in are there.
+	 */
+	private static void waitForLoadedPatch(ClientGameTestContext context,
+			TestDedicatedServerContext server, BlockPos middle) {
+		for (int attempt = 0; attempt < 60; attempt++) {
+			if (patchIsLoaded(server, middle)) {
+				return;
+			}
+			context.waitTicks(5);
+		}
+		throw new AssertionError("The land around " + middle + " never finished loading");
+	}
+
+	private static boolean patchIsLoaded(TestDedicatedServerContext server, BlockPos middle) {
+		int centreChunkX = middle.getX() >> 4;
+		int centreChunkZ = middle.getZ() >> 4;
+		return server.computeOnServer(minecraftServer -> {
+			ServerLevel level = minecraftServer.overworld();
+			for (int chunkX = -RADIUS_IN_CHUNKS; chunkX <= RADIUS_IN_CHUNKS; chunkX++) {
+				for (int chunkZ = -RADIUS_IN_CHUNKS; chunkZ <= RADIUS_IN_CHUNKS; chunkZ++) {
+					if (level.getChunkSource()
+							.getChunkNow(centreChunkX + chunkX, centreChunkZ + chunkZ) == null) {
 						return false;
 					}
 				}

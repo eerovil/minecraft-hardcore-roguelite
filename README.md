@@ -2,9 +2,12 @@
 
 A Minecraft mod that turns Hardcore into a roguelite.
 
-One world is one run. You get one life. Death ends the run for good — and then opens a shop.
-What you buy in the shop is permanent and carries into every future run, which starts in a
-brand new world.
+One run, one life. Death ends the run for good — and then opens a shop. What you buy in the shop
+is permanent and carries into every future run, which starts in a brand new world.
+
+You play out of a save that keeps a persistent lobby. The run's overworld, nether and end are
+thrown away and generated again from a new seed every time you start a run, without leaving the
+game or the save.
 
 The twist is that a fresh save is missing things vanilla Minecraft normally gives you. No trees,
 no ores, no animals, no villages, locked armor and offhand slots, a small world border. You buy
@@ -60,6 +63,9 @@ There is no shop and no currency yet, so unlocks are toggled with a dev command:
 /mhr unlock player.craft.enchant 4    # or jump straight to one
 /mhr unlock starter.bread
 /mhr starterchest                     # place this run's chest again, for testing
+/mhr run                              # where the save is in the loop
+/mhr run start                        # start the next run: three new worlds, new seed
+/mhr run end                          # end this run without dying for it
 ```
 
 Prices, rewards, border sizes and the mob damage multiplier are data, not code: they live in
@@ -70,6 +76,8 @@ without restarting. See [`docs/balance.md`](docs/balance.md).
 - [`docs/balance.md`](docs/balance.md) — how balance numbers are configured and reloaded
 - [`docs/open-questions.md`](docs/open-questions.md) — things the design deliberately hasn't settled
 - [`docs/dev-environment.md`](docs/dev-environment.md) — how to build and test it
+- [`docs/codebase/run-lifecycle.md`](docs/codebase/run-lifecycle.md) — the lobby, the run loop and
+  where permanent state lives
 
 ## Building
 

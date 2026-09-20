@@ -5,9 +5,10 @@ out/
 bin/
 *.class
 
-# Minecraft dev runtime
-run/
-runs/
+# Minecraft dev runtime. Anchored to the repository root on purpose: unanchored these
+# would also swallow src/main/java/fi/vilpponen/mhr/run/, which is the run-lifecycle package.
+/run/
+/runs/
 
 # IDE
 .idea/

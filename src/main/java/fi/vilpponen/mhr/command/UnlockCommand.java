@@ -10,6 +10,7 @@ import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.animal.AnimalSpecies;
 import fi.vilpponen.mhr.equipment.EquipmentLocks;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
+import fi.vilpponen.mhr.run.RunLifecycle;
 import fi.vilpponen.mhr.starter.RunStart;
 import fi.vilpponen.mhr.starter.StarterChest;
 import fi.vilpponen.mhr.starter.StarterItems;
@@ -91,8 +92,7 @@ public final class UnlockCommand {
 					.append(state.isOwned(id) ? "[owned] " : "[locked] ")
 					.append(id);
 		}
-		lines.append("\nThis run's starter chest: ")
-				.append(RunStart.alreadyGranted(context.getSource().getLevel()) ? "already given" : "not given yet");
+		lines.append("\nRun lifecycle: ").append(RunLifecycle.get().record().describe());
 		String message = lines.toString();
 		context.getSource().sendSuccess(() -> Component.literal(message), false);
 		return Unlock.values().length + StarterItems.ids().size();
