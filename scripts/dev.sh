@@ -64,13 +64,25 @@ EOF
 #     and the one a normal `release_lock` takes;
 #   - the watchdog below drops the kubectl connection. This is the backstop for a `kill -9` of this
 #     script, which runs no traps and closes nothing in the children we already started.
+#
+# And the guard watches the other way round, because the lock can also die while we live: if that
+# `kubectl exec` loses its connection, the kernel in the pod drops the flock and somebody else may
+# take the pod while our gradle is still running in it. Losing the lock has to end the run.
 LOCK_TMP=""
 LOCK_PID=""
 LOCK_FD=""
 LOCK_WATCHDOG_PID=""
+LOCK_GUARD_PID=""
 
 release_lock() {
 	[[ -n "$LOCK_PID" ]] || return 0
+	# Both of these have to go before the holder does, or the guard would read our own deliberate
+	# release as the lock dying under us.
+	if [[ -n "$LOCK_GUARD_PID" ]]; then
+		kill "$LOCK_GUARD_PID" 2>/dev/null || true
+		wait "$LOCK_GUARD_PID" 2>/dev/null || true
+		LOCK_GUARD_PID=""
+	fi
 	if [[ -n "$LOCK_WATCHDOG_PID" ]]; then
 		kill "$LOCK_WATCHDOG_PID" 2>/dev/null || true
 		wait "$LOCK_WATCHDOG_PID" 2>/dev/null || true
@@ -145,6 +157,24 @@ take_lock() {
 		if grep -q '^HELD' "$LOCK_TMP/out" 2>/dev/null; then
 			# A second or two is just the exec starting up, not a queue worth reporting.
 			((waited >= 3)) && echo "Got the $name pod after ${waited}s."
+			# Armed only now: until HELD the holder is *expected* to exit, that is how a lost race
+			# and a timeout report themselves, and the loop below handles it.
+			(
+				while kill -0 "$holder" 2>/dev/null; do sleep 1; done
+				kill -0 "$me" 2>/dev/null || exit 0
+				echo "" >&2
+				echo "Lost the $name pod lock: the kubectl exec holding it has gone." >&2
+				echo "Another run can take the pod now, so this one stops here rather than" >&2
+				echo "carrying on unprotected. Nothing is wrong with your change; run it again." >&2
+				# The whole process group, because the command we are protecting is a child of ours
+				# and a plain SIGTERM to a bash sitting in a foreground command is not read until
+				# that command returns — which, for a gametest, is many minutes away. The group
+				# signal only works when we lead the group, which is true when a person ran the
+				# script and not always true when something else did, hence the fallback.
+				kill -TERM "$me" 2>/dev/null || true
+				kill -TERM -"$me" 2>/dev/null || pkill -TERM -P "$me" 2>/dev/null || true
+			) &
+			LOCK_GUARD_PID=$!
 			return 0
 		fi
 		if ! kill -0 "$LOCK_PID" 2>/dev/null; then
@@ -382,23 +412,31 @@ GAMETEST_JVM_SCAN='
 	}
 '
 
+# Both of these fail rather than pretend. A kubectl that cannot reach the pod used to come back as
+# "no JVMs here", which is the one answer that lets the run carry straight on into the port-25565
+# collision this check exists to prevent.
 gametest_jvms() {
-	kubectl -n "$NS" exec "$1" -- bash -c "$GAMETEST_JVM_SCAN"'
+	local out
+	out="$(kubectl -n "$NS" exec "$1" -- bash -c "$GAMETEST_JVM_SCAN"'
 		n=0
 		for p in /proc/[0-9]*; do
 			is_java "$p" && n=$((n + 1))
 		done
 		echo "$n"
-	' 2>/dev/null || echo 0
+	' 2>&1)" || { echo "$out" >&2; return 1; }
+	# A count and nothing else. Anything the transport prints on its way through is a failure too.
+	[[ "$out" =~ ^[0-9]+$ ]] || { echo "$out" >&2; return 1; }
+	echo "$out"
 }
 
 gametest_kill_jvms() {
-	kubectl -n "$NS" exec "$1" -- bash -c "$GAMETEST_JVM_SCAN"'
+	local out
+	out="$(kubectl -n "$NS" exec "$1" -- bash -c "$GAMETEST_JVM_SCAN"'
 		for p in /proc/[0-9]*; do
 			is_java "$p" && kill -9 "${p#/proc/}" 2>/dev/null
 		done
 		true
-	' >/dev/null 2>&1 || true
+	' 2>&1)" || { echo "$out" >&2; return 1; }
 }
 
 # We hold the lock, so nothing that respects the lock is running. A JVM alive in the pod anyway is
@@ -410,19 +448,22 @@ gametest_kill_jvms() {
 #     or a `gradle` typed into `gametest-shell`.
 #
 # Killing the first is required and killing the second destroys somebody's work, and they look
-# identical from here. So wait first: a real run finishes, debris never does. But waiting only
-# narrows the ambiguity, it does not remove it — a run can simply be slower than the grace period.
-# So when the grace runs out we stop and say what we found rather than guessing, and killing is a
-# decision the person at the keyboard makes with MHR_KILL_STRAYS=1.
-#
-# Once every branch in flight carries this script the ambiguity disappears, because nothing can run
-# without the lock any more, and the default could reasonably flip to killing.
+# identical from here. So wait first: a real run finishes, debris never does. When the grace runs
+# out we kill, which is what #40 asks for — by then the pod has been idle-but-occupied for ten
+# minutes with the lock in our hands, and debris is much the likelier of the two. Somebody who
+# knows they are running without the lock can hold the run off with MHR_KILL_STRAYS=0.
 MHR_STRAY_GRACE="${MHR_STRAY_GRACE:-600}"
-MHR_KILL_STRAYS="${MHR_KILL_STRAYS:-0}"
+MHR_KILL_STRAYS="${MHR_KILL_STRAYS:-1}"
 
 gametest_clear_strays() {
-	local pod="$1"
-	[[ "$(gametest_jvms "$pod")" == "0" ]] && return 0
+	local pod="$1" n
+
+	if ! n="$(gametest_jvms "$pod")"; then
+		echo "Could not look for leftover JVMs in the gametest pod." >&2
+		echo "Stopping: a check that did not run is not the same as a pod that is clear." >&2
+		exit 1
+	fi
+	[[ "$n" == "0" ]] && return 0
 
 	echo "A JVM is running in the gametest pod even though we hold the lock. That is either debris"
 	echo "from a run that died, or somebody running without the lock. Waiting up to ${MHR_STRAY_GRACE}s..."
@@ -430,27 +471,51 @@ gametest_clear_strays() {
 	while ((waited < MHR_STRAY_GRACE)); do
 		sleep 10
 		waited=$((waited + 10))
-		if [[ "$(gametest_jvms "$pod")" == "0" ]]; then
+		# A scan that fails here is not fatal — we are waiting anyway, and the next one is ten
+		# seconds away. Only a scan that succeeds *and* says zero lets the run through.
+		if n="$(gametest_jvms "$pod")" && [[ "$n" == "0" ]]; then
 			echo "It finished after ${waited}s. Carrying on."
 			return 0
 		fi
 	done
 
-	if [[ "$MHR_KILL_STRAYS" == "1" ]]; then
-		echo "Still there after ${MHR_STRAY_GRACE}s and MHR_KILL_STRAYS=1, so killing it."
-		gametest_kill_jvms "$pod"
-		return 0
-	fi
-
-	cat >&2 <<EOF
-Still there after ${MHR_STRAY_GRACE}s. Stopping rather than guessing: running now would fail on
-port 25565 anyway, and killing it might destroy somebody's run.
+	if [[ "$MHR_KILL_STRAYS" != "1" ]]; then
+		cat >&2 <<EOF
+Still there after ${MHR_STRAY_GRACE}s, and MHR_KILL_STRAYS is not 1, so this run stops here.
+Running anyway would fail on port 25565 for somebody else's reason.
 
   Somebody is working without the lock  -> wait, or ask them.
-  It is debris from a run that died     -> rerun with MHR_KILL_STRAYS=1, or clear it by hand:
+  It is debris from a run that died     -> rerun without MHR_KILL_STRAYS=0, or clear it by hand:
                                            kubectl -n $NS exec deploy/mhr-gametest -- pkill -f KnotClient
 
 To look first:
+  kubectl -n $NS exec deploy/mhr-gametest -- ps -ef
+EOF
+		exit 1
+	fi
+
+	echo "Still there after ${MHR_STRAY_GRACE}s. Treating it as debris from a dead run and killing it."
+	if ! gametest_kill_jvms "$pod"; then
+		echo "Could not kill the leftover JVMs in the gametest pod. Stopping." >&2
+		exit 1
+	fi
+
+	# Killing is not the same as gone: the kill can have missed, and a JVM takes a moment to die.
+	# Nothing may run until a scan that actually succeeded says the pod is clear.
+	local tries=0
+	while ((tries < 10)); do
+		sleep 1
+		tries=$((tries + 1))
+		if n="$(gametest_jvms "$pod")" && [[ "$n" == "0" ]]; then
+			echo "The pod is clear."
+			return 0
+		fi
+	done
+
+	cat >&2 <<EOF
+Killed the leftover JVMs but the pod does not look clear afterwards, so this run stops here.
+Something is restarting them, or the pod cannot be reached. Have a look:
+
   kubectl -n $NS exec deploy/mhr-gametest -- ps -ef
 EOF
 	exit 1

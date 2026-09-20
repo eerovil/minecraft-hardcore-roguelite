@@ -96,15 +96,17 @@ waits `MHR_STRAY_GRACE` (default 10 minutes): a real run finishes, debris does n
 idle this costs nothing.
 
 Waiting narrows the ambiguity but cannot remove it — a run can simply be slower than the grace
-period. So if something is still there when the grace runs out, the command stops and tells you
-what it found rather than guessing. Killing is your decision:
+period. Whatever is still there when the grace runs out is treated as debris and killed, and the
+run only continues once a fresh look at the pod confirms it is clear. Ten minutes of the pod being
+occupied while the lock sits in somebody else's hands is a dead run far more often than a live one.
+
+If you know you are the one running without the lock, hold the killing off:
 
 ```sh
-MHR_KILL_STRAYS=1 scripts/dev.sh gametest
+MHR_KILL_STRAYS=0 scripts/dev.sh gametest
 ```
 
-Once no branch in flight predates the lock, nothing can run without it, and that default could
-reasonably flip to killing.
+The run then stops at the end of the grace period and tells you what it found instead.
 
 ## Automated gameplay tests
 
@@ -1085,16 +1087,10 @@ removes both pods but keeps the volume, so bringing it back is fast.
   inside that JVM, so the port stays taken and the *next* run would die early with `FAILED TO BIND
   TO PORT` and a `TimeoutException` out of `createServer` — which looks like a broken test and is
   not. The giveaway is that it fails before any scenario is named. `gametest` looks for a leftover
-  JVM once it holds the lock, so what you should normally see instead is the command waiting out
-  `MHR_STRAY_GRACE` and then stopping to tell you what it found — it does not kill anything unless
-  you say so, because from outside it cannot tell debris from somebody running without the lock.
-  See [The run lock](#the-run-lock). Once you are sure it is debris, either rerun as
-
-  ```sh
-  MHR_KILL_STRAYS=1 scripts/dev.sh gametest
-  ```
-
-  or clear it by hand:
+  JVM once it holds the lock, waits `MHR_STRAY_GRACE` for it to finish in case it is a live run, and
+  then kills it and confirms the pod is clear before going on — so this should not reach you. See
+  [The run lock](#the-run-lock). If it does, the harness is at fault rather than the product code.
+  By hand:
 
   ```sh
   kubectl -n mhr-dev exec deploy/mhr-gametest -- pkill -f KnotClient
