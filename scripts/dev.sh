@@ -179,7 +179,12 @@ status=$?
 
 # Some commands have a step on the other end that belongs inside this section — a deploy's server
 # rollout. Hold the lock while that runs; the watcher still has us covered if they die during it.
-if [ -n "$hold" ]; then
+#
+# Only when the work went well, though. The step is the second half of something whose first half
+# has just failed: a deploy whose jar never got copied has nothing to restart the server for, and
+# restarting it anyway would put the previous jar back into service and report a failure at the
+# same time.
+if [ -n "$hold" ] && [ "$status" -eq 0 ]; then
 	echo MHR-CONTROL-HOLD
 	while [ ! -e "$go" ]; do sleep 1; done
 fi
@@ -215,16 +220,19 @@ run_locked() {
 	work="$(printf '%s\n' "$body" | stage_in_pod "$pod" "$as" .sh)"
 	runner="$(lock_runner "$lock" "$name" "$owner" "$work" "$as" "$step" | stage_in_pod "$pod" "" .sh)"
 
-	# The fifo is the line the pod watches. We hold the only writer, so it reaches EOF when we stop
-	# existing, whatever stops us; `{fd}>&-` keeps the kubectl child from holding a second writer
-	# and hiding our death.
+	# The fifo is the line the pod watches. This shell has to be the only thing holding it open, so
+	# that it reaches EOF when this shell stops existing, whatever stops it. Both halves of the
+	# pipeline below inherit the descriptor and both have to give it up: a surviving writer
+	# anywhere here is our death going unnoticed in the pod, with the lock still held. The control
+	# half writes to the fifo by name when it has something to say, which is why it can let go of
+	# the descriptor and still be heard.
 	tmp="$(mktemp -d)"
 	mkfifo "$tmp/hold"
 	exec {fd}<>"$tmp/hold"
 
 	if [[ -n "$step" ]]; then
 		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" 2>&1 {fd}>&- \
-			| lock_control "$step" "$tmp/hold" "$tmp/step-status"
+			| lock_control "$step" "$tmp/hold" "$tmp/step-status" {fd}>&-
 		status="${PIPESTATUS[0]}"
 		if [[ -s "$tmp/step-status" ]]; then
 			status="$(cat "$tmp/step-status")"
