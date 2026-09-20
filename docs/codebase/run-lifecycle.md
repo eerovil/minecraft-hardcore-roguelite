@@ -205,21 +205,34 @@ Neither is called by name from `RunLifecycle`, and `RunLifecycle` does not impor
 
 In order, on the server thread, with every player already in the lobby:
 
-1. replace the server's `WorldGenSettings` with one holding the new seed — `ServerLevel.getSeed()`
+1. check that the save can describe all three run dimensions, and refuse if it cannot;
+2. replace the server's `WorldGenSettings` with one holding the new seed — `ServerLevel.getSeed()`
    reads it off the server, not off the level, so nothing else would change the terrain;
-2. remove the three run levels from the server's level map and close them with `noSave` set;
-3. delete their files;
-4. build three new `ServerLevel`s the way `MinecraftServer.createLevels` does and put them back;
-5. find a spawn in the new overworld and set it.
+3. remove the three run levels from the server's level map and close them with `noSave` set;
+4. delete their files;
+5. build three new `ServerLevel`s the way `MinecraftServer.createLevels` does and put them back;
+6. find a spawn in the new overworld and set it.
 
-Step 3 has an asymmetry worth knowing: **the overworld's dimension directory *is* the save
+Step 1 is first for the reason everything destructive is ordered here. A `LevelStem` is the recipe
+a dimension is built from and all three come out of the save's own registry, so one can be missing:
+a world preset that never defined it, a datapack removed since the save was made. That used to be
+discovered inside step 5, by which point the seed was gone and so were the old worlds, and the only
+choices left were to carry on a dimension short or to stop with nothing to go back to. It carried
+on, and the run was then written down as playable with a third of it missing and its portals
+leading nowhere. Asked before step 2, the answer is free: nothing has happened yet, so nothing has
+to be undone and the save is exactly as it was.
+
+The general rule, since this is the third round to land on it: **anything that can refuse a run
+start must refuse before the first destructive step.** The lobby check and the stem check both do.
+
+Step 4 has an asymmetry worth knowing: **the overworld's dimension directory *is* the save
 directory.** The nether and the end own `DIM-1` and `DIM1` and are deleted whole; the overworld is
 picked apart instead — `region/`, `entities/`, `poi/`, and by name the two pieces of saved data that
 belong to a run rather than to a save, `minecraft:raids` and `minecraft:chunk_tickets`. Anything
 else you add under `<save>/data` that is run-local has to be added to `RunWorlds.RUN_SAVED_DATA` or
 it will survive into the next run.
 
-Step 5 matters because vanilla only chooses a spawn for a world that has never been initialised. By
+Step 6 matters because vanilla only chooses a spawn for a world that has never been initialised. By
 run two the save has been initialised for a long time, so without this every run after the first
 would start at run one's coordinates in terrain that no longer exists.
 
@@ -423,6 +436,12 @@ it by putting a diamond block in each run dimension and requiring it to be gone 
   and the lobby and the purchases still standing at the end.
 - `src/gametest/.../client/StarterChestClientTest.java` — the run-start hook doing its job once per
   run, across a reconnect and across two runs.
+
+`a-run-cannot-start-without-all-three-of-its-dimensions` is the one that needs a save in a state no
+world preset can be asked for: the nether's `LevelStem` is lifted out of the frozen registry for the
+length of the scenario and put straight back (`gametest/mixin/MappedRegistryAccessor`). It asserts
+the refusal *and* that the previous run's block and seed are untouched, because "nothing was
+destroyed" is the claim that makes refusing safe.
 
 The failure paths are driven rather than reasoned about. A listener that throws covers a failed
 run start, a failed player entry and a failed reward. The record write is the one thing a test

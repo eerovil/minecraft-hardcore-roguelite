@@ -183,6 +183,8 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 						() -> aFailedRewardIsRetriedOnce(server));
 				scenario(context, "a-run-cannot-start-without-a-lobby-to-leave-from",
 						() -> noLobbyMeansNoRun(server, connection));
+				scenario(context, "a-run-cannot-start-without-all-three-of-its-dimensions",
+						() -> everyDimensionOrNoRun(server, connection));
 			}
 
 			TestRuns.waitForNobodyConnected(context, server);
@@ -840,6 +842,68 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		check(TestRuns.phase(server) == RunPhase.RUNNING,
 				"with the lobby back a run must start again, and the save says "
 						+ TestRuns.record(server).describe());
+		TestRuns.end(server);
+	}
+
+	/**
+	 * A save that cannot describe all three run dimensions refuses, and refuses before it destroys.
+	 *
+	 * <p>A run is the overworld, the nether and the end — the portals between them are vanilla code
+	 * pointing at fixed keys — so a save missing one of the three has no run to offer. What the
+	 * scenario is really about is <em>when</em> that is noticed. It used to be found half way
+	 * through the rebuild, after the seed had been replaced and the old worlds were deleted, at
+	 * which point every remaining option was bad and the code took the worst one: log it, carry on,
+	 * and let the record call two thirds of a run playable.
+	 *
+	 * <p>So the assertions are not only "it refused". The previous run's block has to still be
+	 * standing and the seed has to be untouched, because "nothing was destroyed" is the claim that
+	 * makes refusing safe.
+	 */
+	private void everyDimensionOrNoRun(
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		check(TestRuns.phase(server) == RunPhase.LOBBY,
+				"this scenario starts between runs, and the save says "
+						+ TestRuns.record(server).describe());
+
+		// The worlds of the run that just finished are still loaded — they are deleted by the next
+		// start, which is exactly the step that must not happen here.
+		TestRuns.mark(server, Level.OVERWORLD, MARK, MARKER);
+		RunRecord before = TestRuns.record(server);
+		long seedBefore = server.computeOnServer(minecraftServer -> minecraftServer.overworld().getSeed());
+
+		TestRuns.withNoNetherStem(server, () -> {
+			int refused = TestRuns.runCommandResult(server, "mhr run start");
+			check(refused == 0,
+					"a save that cannot build all three run dimensions must refuse to start one, and"
+							+ " /mhr run start returned " + refused);
+
+			RunRecord after = TestRuns.record(server);
+			check(after.phase() == RunPhase.LOBBY,
+					"and it must refuse without moving the loop on, and the save says "
+							+ after.describe());
+			check(after.runId() == before.runId(),
+					"a run refused before it began must not spend an id: it was " + before.runId()
+							+ " and is now " + after.runId());
+
+			// The part that makes the refusal worth anything.
+			check(TestRuns.isMarked(server, Level.OVERWORLD, MARK, MARKER),
+					"and it must refuse before it destroys anything, and the last run's overworld has"
+							+ " already been deleted out from under it");
+			long seedNow = server.computeOnServer(minecraftServer -> minecraftServer.overworld().getSeed());
+			check(seedNow == seedBefore,
+					"nor may it have replaced the seed on the way: it was " + seedBefore
+							+ " and is now " + seedNow);
+		});
+
+		// And with the dimension back, the loop works again — so the refusal was the missing stem
+		// and not something this scenario broke on its way past.
+		TestRuns.start(server);
+		check(TestRuns.phase(server) == RunPhase.RUNNING,
+				"with all three dimensions available a run must start again, and the save says "
+						+ TestRuns.record(server).describe());
+		check(server.computeOnServer(minecraftServer ->
+						minecraftServer.getLevel(Level.NETHER) != null),
+				"and that run must have its nether");
 		TestRuns.end(server);
 	}
 

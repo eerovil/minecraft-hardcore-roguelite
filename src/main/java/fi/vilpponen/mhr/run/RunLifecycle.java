@@ -135,6 +135,13 @@ public final class RunLifecycle {
 					+ " dimension to come back to, so no run may start");
 		}
 
+		// Asked here as well as inside the rebuild, and here is the one that matters. A run is all
+		// three vanilla dimensions, and a save that cannot describe one of them has no run to
+		// offer — but the check has to come before the record is written, or a refusal still spends
+		// a run id and moves the save through CREATING_RUN and back. Refusing costs nothing at all
+		// from this side of the line.
+		RunWorlds.requireEveryStem(server);
+
 		long chosen = seed.orElseGet(RunWorlds::randomSeed);
 		// Written down before a single file is touched, so a crash during world creation is found
 		// as CREATING_RUN next time and recovered to the lobby rather than left half playable.

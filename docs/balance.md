@@ -208,7 +208,7 @@ world.border.medium
 ```
 
 There is exactly one id per unlock. The same string is the key in the balance file, the value
-written to `config/hardcore-roguelite-unlocks.json`, the argument the dev command takes, and what
+written to `config/hardcore-roguelite-progress.json`, the argument the dev command takes, and what
 `Unlock.id()` returns — so `balance.unlockPrice(unlock.id())` finds the price, and nothing needs a
 table translating one id into another.
 
@@ -216,10 +216,10 @@ An id is written into config files and saved state, so it has to survive constan
 renamed or removed. Adding an unlock later is adding a key to the balance file — no change to how
 state is persisted, how the shop is built, or how balance is loaded.
 
-Renaming one is a save migration, not a rename. `UnlockState.RENAMED_IDS` holds the old names that
-still have to be understood: a save written before the rename is migrated on load and rewritten
-once, so a purchase is never orphaned. Adding an unlock never needs an entry there — only changing
-the name of one that already shipped.
+Renaming one is a save migration, not a rename: a profile written before the rename is carried
+across on load, so a purchase is never orphaned. Where that happens and what it costs to add one is
+[`docs/codebase/progression.md`](codebase/progression.md). Adding an unlock never involves it — only
+changing the name of one that already shipped.
 
 ## When a broken file is noticed
 
@@ -254,7 +254,7 @@ What takes effect immediately, and what does not:
 
 | Value | After `/mhr reload` |
 | --- | --- |
-| Unlock prices, advancement rewards | Immediately — the shop reads the price when it sells |
+| Unlock prices, advancement rewards | Immediately — the shop reads the price when it sells, and an open shop screen is re-sent |
 | Mob damage multiplier | Immediately, for damage dealt after the reload |
 | World border sizes | **Next run.** A world already running keeps the border it was given; resizing it under a player mid-run is not something a balance edit should do |
 
@@ -319,10 +319,22 @@ answer for what fits an item is asked as well.
 
 ```
 core/        shared state and config loading — Balance, BalanceManager
-progression/ currency and rewards (not built yet; reads currency.advancements)
-shop/        the shop (not built yet; reads unlocks and worldBorder)
+progression/ permanent state and the one purchase operation — Progress, Wallet, Catalogue, Purchase
+shop/        the shop screen, its networking and its arrangement
 features/    gameplay mechanics only — no balance numbers of their own
 ```
+
+`progression/Catalogue` is what turns the balance file into a product list: the `unlocks` section in
+file order, plus the `worldBorder` tiers under their `world.border.*` ids. Nothing else enumerates
+what is for sale.
+
+A starter item is the exception to that last point: its icon, count and name in the shop come from
+this file, because this file is what the chest will hold. Everything else is presentation.
+
+Note what is *not* in the balance file: which row of the shop an unlock is drawn in, what icon it
+has and what it is called. Those are presentation, not tuning, and they live in
+`src/main/resources/shop-layout.json` and the language file. A balance edit changes what something
+costs; it never changes where it appears.
 
 Features depend on `core`, never on each other, and never on `shop` or `progression`. The existing
 feature code still sits directly under `fi.vilpponen.mhr`; it moves under `features/` as each

@@ -118,6 +118,7 @@ final class RunWorlds {
 	 * @return the run's new overworld
 	 */
 	static ServerLevel recreate(MinecraftServer server, long seed) {
+		requireEveryStem(server);
 		useSeed(server, seed);
 		IOException leftovers = firstOf(unload(server), deleteFiles(server));
 
@@ -138,6 +139,45 @@ final class RunWorlds {
 					leftovers);
 		}
 		return overworld;
+	}
+
+	/**
+	 * Refuse before anything is destroyed, if this save cannot describe all three run dimensions.
+	 *
+	 * <p>A {@link LevelStem} is the recipe a dimension is built from, and all three of a run's come
+	 * out of the save's own registry. One can be missing — a world preset that does not define it,
+	 * a datapack that has been removed since the save was made — and that is a save this mod cannot
+	 * run: a run is the overworld, the nether and the end, and the portals between them are vanilla
+	 * code pointing at fixed dimension keys with nowhere else to go.
+	 *
+	 * <p>The check has to be here, at the top, and the reason is the ordering rather than the
+	 * condition. It used to be a null test inside the rebuild, which was too late to act on: by
+	 * then the seed had been replaced and the old run's worlds were closed and deleted, so the only
+	 * choices left were to carry on without a dimension or to stop with nothing to go back to. It
+	 * logged and carried on, and {@code startRun} then wrote the run down as playable with a
+	 * missing third of it. Asked before the first destructive step, the honest answer is available:
+	 * nothing has happened yet, so nothing has to be undone.
+	 *
+	 * <p>Called twice on the way into a run, and both are wanted. {@link RunLifecycle#startRun}
+	 * asks before it writes the record, so a refused start does not even spend a run id — the save
+	 * is left byte for byte as it was. {@code recreate} asks again as its own first act, so the
+	 * guarantee belongs to this class rather than to whoever remembered to check.
+	 *
+	 * @throws IllegalStateException naming the dimension, before a single file is touched
+	 */
+	static void requireEveryStem(MinecraftServer server) {
+		Registry<LevelStem> stems = server.registryAccess().lookupOrThrow(Registries.LEVEL_STEM);
+		for (ResourceKey<Level> key : RUN_LEVELS) {
+			if (stems.getValue(stemKeyFor(key)) == null) {
+				throw new IllegalStateException("this save has no " + key.identifier()
+						+ " dimension to build, and a run is all three of them. Nothing has been"
+						+ " deleted. Is a data pack or world preset missing?");
+			}
+		}
+	}
+
+	private static ResourceKey<LevelStem> stemKeyFor(ResourceKey<Level> key) {
+		return ResourceKey.create(Registries.LEVEL_STEM, key.identifier());
 	}
 
 	/**
@@ -373,13 +413,10 @@ final class RunWorlds {
 			if (key.equals(Level.OVERWORLD)) {
 				continue;
 			}
-			ResourceKey<LevelStem> stemKey = ResourceKey.create(Registries.LEVEL_STEM, key.identifier());
-			LevelStem stem = stems.getValue(stemKey);
-			if (stem == null) {
-				HardcoreRoguelite.LOGGER.error("No level stem for {}; this run has no such dimension",
-						key.identifier());
-				continue;
-			}
+			// Present, because recreate() refused the whole start if it was not — which is the only
+			// point at which a missing one can still be acted on. Skipping it here would build a
+			// run with two thirds of its dimensions and let the caller call that playable.
+			LevelStem stem = stems.getValue(stemKeyFor(key));
 			ServerLevel level = new ServerLevel(server, access.mhr$executor(), storage,
 					new DerivedLevelData(server.getWorldData(), overworldData), key, stem, isDebug,
 					biomeZoomSeed, List.of(), false);

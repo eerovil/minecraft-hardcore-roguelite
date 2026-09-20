@@ -1,0 +1,60 @@
+{
+	"_comment": [
+		"How the shop screen is arranged. Presentation only: not one price, level or ceiling is here,",
+		"and nothing reads this on the server. The catalogue itself is default-balance.json.",
+		"",
+		"Groups are matched in order and an offer joins the first group whose prefixes it starts with,",
+		"so 'player.slot.' has to come before 'player.'. The last group matches the empty prefix, which",
+		"means a catalogue entry nobody has placed yet still shows up somewhere rather than vanishing.",
+		"",
+		"Tiers are drawn in the order they first appear below, and 'vanilla' appearing first is the",
+		"visual hierarchy the design asks for: restoring vanilla comes before going past it."
+	],
+
+	"defaultIcon": "minecraft:paper",
+
+	"groups": [
+		{ "id": "world", "tier": "vanilla", "prefixes": ["world.trees", "world.village"] },
+		{ "id": "border", "tier": "vanilla", "prefixes": ["world.border."] },
+		{ "id": "ores", "tier": "vanilla", "prefixes": ["world.ore."] },
+		{ "id": "animals", "tier": "vanilla", "prefixes": ["world.animal."] },
+		{ "id": "slots", "tier": "vanilla", "prefixes": ["player.slot."] },
+		{ "id": "gear", "tier": "vanilla_plus", "prefixes": ["starter."] },
+		{ "id": "upgrades", "tier": "vanilla_plus", "prefixes": ["player."] },
+		{ "id": "other", "tier": "vanilla_plus", "prefixes": [""] }
+	],
+
+	"icons": {
+		"world.trees": "minecraft:oak_sapling",
+		"world.village": "minecraft:emerald",
+
+		"world.border.tiny": "minecraft:cobblestone_wall",
+		"world.border.medium": "minecraft:mossy_cobblestone_wall",
+		"world.border.large": "minecraft:stone_brick_wall",
+		"world.border.infinite": "minecraft:end_portal_frame",
+
+		"world.ore.coal": "minecraft:coal_ore",
+		"world.ore.copper": "minecraft:copper_ore",
+		"world.ore.iron": "minecraft:iron_ore",
+		"world.ore.redstone": "minecraft:redstone_ore",
+		"world.ore.lapis": "minecraft:lapis_ore",
+		"world.ore.gold": "minecraft:gold_ore",
+		"world.ore.diamond": "minecraft:diamond_ore",
+
+		"world.animal.cow": "minecraft:cow_spawn_egg",
+		"world.animal.pig": "minecraft:pig_spawn_egg",
+		"world.animal.sheep": "minecraft:sheep_spawn_egg",
+		"world.animal.chicken": "minecraft:chicken_spawn_egg",
+		"world.animal.horse": "minecraft:horse_spawn_egg",
+		"world.animal.wolf": "minecraft:wolf_spawn_egg",
+
+		"player.slot.helmet": "minecraft:iron_helmet",
+		"player.slot.chestplate": "minecraft:iron_chestplate",
+		"player.slot.leggings": "minecraft:iron_leggings",
+		"player.slot.boots": "minecraft:iron_boots",
+		"player.slot.offhand": "minecraft:shield",
+
+
+		"player.craft.enchant": "minecraft:enchanting_table"
+	}
+}

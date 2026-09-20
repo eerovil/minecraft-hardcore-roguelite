@@ -14,7 +14,8 @@
 			"fi.vilpponen.mhr.gametest.server.AnimalSpawnGameTest",
 			"fi.vilpponen.mhr.gametest.server.OreFeatureTest",
 			"fi.vilpponen.mhr.gametest.server.StarterChestGameTest",
-			"fi.vilpponen.mhr.gametest.WorldBorderGameTest"
+			"fi.vilpponen.mhr.gametest.WorldBorderGameTest",
+			"fi.vilpponen.mhr.gametest.server.ShopPurchaseGameTest"
 		],
 		"fabric-client-gametest": [
 			"fi.vilpponen.mhr.gametest.client.EquipmentLockClientTest",
@@ -24,6 +25,7 @@
 			"fi.vilpponen.mhr.gametest.client.OreWorldgenClientTest",
 			"fi.vilpponen.mhr.gametest.client.VillageWorldgenClientTest",
 			"fi.vilpponen.mhr.gametest.client.StarterChestClientTest",
+			"fi.vilpponen.mhr.gametest.client.ShopClientTest",
 			"fi.vilpponen.mhr.gametest.client.RunLifecycleClientTest"
 		]
 	},

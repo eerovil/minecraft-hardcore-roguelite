@@ -1,6 +1,7 @@
 package fi.vilpponen.mhr.gametest.client;
 
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import fi.vilpponen.mhr.gametest.mixin.MappedRegistryAccessor;
 import fi.vilpponen.mhr.mixin.MinecraftServerAccessor;
 import fi.vilpponen.mhr.run.Lobby;
 import fi.vilpponen.mhr.run.RunAdmission;
@@ -13,6 +14,7 @@ import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerCon
 import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
@@ -22,6 +24,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.saveddata.WanderingTraderData;
 
@@ -381,6 +384,34 @@ final class TestRuns {
 		} finally {
 			server.runOnServer(minecraftServer ->
 					((MinecraftServerAccessor) minecraftServer).mhr$levels().put(Lobby.LEVEL, lobby));
+		}
+	}
+
+	/**
+	 * Run {@code body} on a save that cannot describe one of the three run dimensions.
+	 *
+	 * <p>The nether, because it is the one a run needs and the lobby does not, so taking it away
+	 * breaks exactly the thing under test and nothing else. Put straight back afterwards, whatever
+	 * the body did — a save left short a dimension would fail every scenario after this one for a
+	 * reason that had nothing to do with them.
+	 */
+	static void withNoNetherStem(TestDedicatedServerContext server, Runnable body) {
+		ResourceKey<LevelStem> stemKey =
+				ResourceKey.create(Registries.LEVEL_STEM, Level.NETHER.identifier());
+		Object stem = server.computeOnServer(minecraftServer -> {
+			Map<Object, Object> byKey = ((MappedRegistryAccessor) minecraftServer.registryAccess()
+					.lookupOrThrow(Registries.LEVEL_STEM)).mhr$byKey();
+			return byKey.remove(stemKey);
+		});
+		if (stem == null) {
+			throw new AssertionError("there was no " + stemKey.identifier() + " stem to take away");
+		}
+		try {
+			body.run();
+		} finally {
+			server.runOnServer(minecraftServer -> ((MappedRegistryAccessor) minecraftServer
+					.registryAccess().lookupOrThrow(Registries.LEVEL_STEM)).mhr$byKey()
+					.put(stemKey, stem));
 		}
 	}
 

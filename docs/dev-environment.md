@@ -238,7 +238,7 @@ Two consequences worth knowing:
 
 Nothing carries over between runs. Loom wipes `build/run/clientGameTest` before each one, and that
 directory is the client's *and* the dedicated server's game directory, so the world, the config
-directory, `hardcore-roguelite-unlocks.json` and the player's inventory all start empty. On top of
+directory, `hardcore-roguelite-progress.json` and the player's inventory all start empty. On top of
 that every scenario sets up the state it depends on rather than inheriting it — the equipment ones
 lock all five slots and empty the player, the tree ones set `world.trees` to what they need and
 clear their own patch of ground, the animal ones lock all six species — so one scenario cannot make
@@ -607,7 +607,7 @@ used" are the same number and a scenario about 28 slots is one line of JSON.
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/StarterChestClientTest.java` is the half only a
 real player arriving can answer. It builds three dedicated servers, because each one is a *run*: the
 harness deletes the world before it starts a server, while the purchases live outside the world in
-the unlock file, which is exactly the difference between rejoining and starting over.
+the progression snapshot, which is exactly the difference between rejoining and starting over.
 
 - **first-join-of-a-run-places-the-starter-chest** — the purchases are made while nobody is
   connected, the way a player buys them between runs, and then a real client connects. One chest,
@@ -625,7 +625,7 @@ the unlock file, which is exactly the difference between rejoining and starting 
   unlock state first, through `UnlockState.reloadFromFile()`, because this harness runs its
   dedicated server *inside the client's process*: without that the second run would read the very
   same object the first one bought from, and a purchase that never reached
-  `hardcore-roguelite-unlocks.json` would go unnoticed. That call is the one thing the tests ask of
+  `hardcore-roguelite-progress.json` would go unnoticed. That call is the one thing the tests ask of
   the mod itself, and it exists because the process boundary a real player crosses between runs is
   the one thing the harness cannot give them. This and the one above are the two halves of "once
   per run", and neither means anything without the other.
@@ -671,6 +671,10 @@ needs, and each is named in the log the way the client scenarios are:
 - **the-end-is-widened-only-when-the-tier-is-narrower-than-its-floor** — the floor itself, on a fixture that
   cannot drift: one tier retuned to a quarter of the minimum and another to four times it. The
   narrow one is widened in the end and left alone in the overworld, the wide one keeps its size.
+- **a-balance-that-turns-the-ladder-upside-down-is-refused** — the tiers are a ladder and two things
+  read it differently: a run walks the constants, the shop compares sizes. A balance making Medium
+  bigger than Large is refused outright and the sizes in effect are left alone, so the two can never
+  disagree; a ladder that goes up is still accepted.
 - **a-reloaded-override-resizes-the-tier-on-its-next-application** — writing a `worldBorder.medium.size`
   into the config override and running `mhr reload` leaves the border the run is already inside
   exactly as it was, which is what the reload command promises: a world is never resized under the
@@ -702,6 +706,97 @@ No client is involved in any of it. What a border is and where it goes are facts
 own world, and the two journeys ask the same question a player would by sending something through a
 real portal — so there is nothing here a real client is needed to answer.
 
+#### The shop
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/server/ShopPurchaseGameTest.java` covers everything
+about buying that needs no client, and every scenario accounts for the currency on both sides rather
+than asserting one field:
+
+- **with-nothing-to-spend-nothing-can-be-bought** — an empty purse is a refusal, not a free unlock.
+- **a-purchase-takes-the-price-once-and-grants-one-level** — the conservation check. It starts with
+  more than the price on purpose, so "the purse was emptied" cannot pass for "the price was taken".
+- **a-penny-short-buys-nothing-and-costs-nothing**.
+- **buying-something-already-owned-is-refused-and-free**.
+- **nothing-sells-an-id-the-catalogue-does-not-have** — refused before any money moves, and the id
+  is not written into the save file.
+- **a-repeatable-unlock-climbs-to-its-ceiling-and-stops** — four levels of the crafted-tool enchant,
+  then a refusal, and exactly four levels' worth charged.
+- **a-purchase-is-still-there-after-the-snapshot-is-read-again** — progression re-read from disk,
+  which is the nearest a test sharing the server's process gets to quitting.
+- **the-price-charged-is-the-one-in-the-balance-data** — an override, `/mhr reload`, and the next
+  purchase charges the new price.
+- **both-halves-of-a-purchase-reach-the-disk-together** — the snapshot is re-read from disk rather
+  than trusted in memory, and says both the level and the currency moved.
+- **a-purchase-the-disk-will-not-take-changes-nothing-at-all** — a directory is put where the
+  snapshot has to go, so the write cannot succeed. The purchase is refused, and the running game
+  believes neither half of it; the same purchase then goes through once the way is clear.
+- **a-refused-write-leaves-the-previous-progression-whole** — one purchase succeeds, the next cannot
+  be written, and the snapshot still holds exactly what the successful one left.
+- **a-smaller-border-tier-cannot-be-charged-for-once-a-bigger-one-is-owned** — the tiers are steps
+  and the run gets the largest one owned, so a smaller one bought afterwards changes nothing. It
+  shows as owned, a purchase is refused, nothing is charged and nothing is written. The rule runs
+  one way only: owning the smallest tier leaves every bigger one for sale.
+- **an-older-profile-is-carried-into-one-file** — the two files an older build wrote are read and
+  arrive in the snapshot whole, levels and currency both, and the old files are left where they are.
+- **the-oldest-save-shape-still-reads** — a bare list of ids, from before unlocks had levels.
+- **an-id-renamed-since-the-save-was-written-is-carried-over** — `trees` becomes `world.trees`.
+- **an-unreadable-snapshot-stops-rather-than-starting-empty** — a damaged snapshot refuses to load
+  and is left exactly as it was found, so it can still be repaired. Starting empty is the one
+  mistake that cannot be undone: the next purchase writes the empty profile over the real one.
+- **a-snapshot-missing-a-field-is-damaged-rather-than-empty** — `{"currency": 100}` parses fine and
+  is not a snapshot. Missing `unlocks`, missing `currency`, `unlocks` that are not an object, and a
+  currency that is not a whole number each refuse and leave the file untouched; a well-formed one
+  still loads, so the five refusals are not just "everything is refused".
+- **an-unreadable-legacy-unlock-file-stops-the-migration** — and writes no snapshot at all, because a
+  half-read migration committed *is* the loss.
+- **an-unreadable-legacy-currency-file-stops-it-too** — the same rule for the other source.
+
+`AtomicFileTest` covers the writer itself in plain JUnit, including a channel that takes one byte per
+call — a real file almost never writes short, which is why a missing loop there cannot be provoked
+through the public method.
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/ShopClientTest.java` is the half that needs a
+real screen and a real mouse. Nothing in it calls a purchase helper: the cursor lands on the square
+the player would see and the left button goes down.
+
+- **the-shop-opens-with-the-whole-catalogue-on-it** — the screen is told exactly what the server
+  sells, and every offer is reachable on the one scrolling page.
+- **vanilla-restoration-is-drawn-above-vanilla-plus** — measured on the screen, not in the layout
+  code: a world unlock is visible without scrolling and a starter item is below it.
+- **clicking-an-affordable-square-buys-it** — the server grants it, charges once, and the screen
+  shows both at once.
+- **clicking-an-unaffordable-square-changes-nothing**.
+- **owned-and-part-upgraded-states-reach-the-screen** — owned, part-upgraded, affordable and out of
+  reach all established for real and read back off the screen's own copy.
+- **a-retuned-starter-item-is-shown-as-what-it-will-grant** — a starter item is retuned to a
+  different item and count, and the open screen follows it, because the reward it draws is the stack
+  the server will actually put in the chest rather than a second copy in an icon or language file.
+- **an-unrelated-purchase-does-not-resize-the-run** — a border size is reloaded and then something
+  that is not a border is bought; the live border must not move. The control is that buying a bigger
+  tier still moves it.
+- **a-balance-reload-reaches-an-open-shop** — a price is retuned and `/mhr reload` run while the
+  shop is open; the screen shows the new price without being reopened, and the click then charges
+  what the screen was showing.
+- **a-square-that-is-not-drawn-cannot-be-bought** — one scroll notch is smaller than a square, so a
+  square can be left undrawn with part of itself still inside the panel. Clicking the whole of where
+  it would have been buys nothing; scrolling back and clicking the same square does, which is the
+  control.
+- **buying-a-border-tier-resizes-the-world** — the only place a border tier is applied to a real
+  world, because this test has a dedicated server to itself.
+- **a-smaller-border-tier-is-not-for-sale-once-a-bigger-one-is-owned** — the same rule where it can
+  be seen: Large is bought, Medium shows as owned on the screen, clicking it costs nothing and
+  writes nothing, and the world is still the size Large made it.
+
+The screenshots it takes are evidence rather than debris, and they are taken on the passing path:
+`shop-fresh-progression`, `shop-vanilla-plus-below`, `shop-after-buying-trees` and
+`shop-some-unlocks-owned`.
+
+**A trap worth knowing.** Buying anything asks the world border to look at the unlocks again, so
+without `/mhr border`'s hand-picked override a purchase would put the bought-for border back under a
+test that had deliberately gone unbounded to generate far-away terrain. That override is cleared
+when a server starts, so it never outlives the world it was picked for. If a worldgen test suddenly
+finds empty chunks thousands of blocks out, look at the border before you look at worldgen.
+
 ### What is still manual
 
 - The padlock **artwork**. The tests screenshot the inventory with the helmet slot locked and again
@@ -712,6 +807,9 @@ real portal — so there is nothing here a real client is needed to answer.
 - The **full-inventory fallback**, where a refused item falls at the player's feet.
 - Nothing about trees, animals or villages, beyond looking at a world by eye if you want to.
 - Nothing about the crafted enchant either, beyond the recipe-book button noted above.
+- **How the shop looks**, as opposed to what it says. The scenarios assert the arrangement, the
+  states and the purchases, and the screenshots are there to be looked at, but nothing compares
+  pixels and nothing can tell you the layout is pleasant.
 - **Where the starter chest lands on awkward ground** — a cave, a one-block tunnel, the Nether roof.
   The tests run on the harness's flat world, where the search finds a spot on its first try, so the
   slope and ceiling cases are still a `mhr starterchest` by hand.
@@ -749,7 +847,8 @@ terrain generated from scratch with and without the unlock. See
 [Automated gameplay tests](#automated-gameplay-tests). What follows is how to poke at it on the dev
 server when you want to *see* it rather than prove it.
 
-Trees are off until the unlock is bought. There is no shop yet, so use the dev command:
+Trees are off until the unlock is bought. Buy it in the shop with `/mhr shop`, or skip the currency
+and grant it outright with the dev command:
 
 ```sh
 scripts/dev.sh rcon "mhr list"
@@ -765,7 +864,7 @@ scripts/dev.sh rcon "fill 0 100 0 8 100 8 minecraft:dirt"
 scripts/dev.sh rcon "place feature minecraft:oak 4 101 4"
 ```
 
-Locked, that answers "Failed to place feature". After `mhr unlock world.trees` it answers "Placed". The unlock file lives at `/server/config/hardcore-roguelite-unlocks.json`
+Locked, that answers "Failed to place feature". After `mhr unlock world.trees` it answers "Placed". The progression file lives at `/server/config/hardcore-roguelite-progress.json`
 on the volume — outside the world, because unlocks are meant to survive it.
 
 ## Testing the villages unlock
@@ -901,8 +1000,9 @@ scripts/dev.sh rcon "mhr border medium"     # tiny | medium | large | infinite
 scripts/dev.sh rcon "worldborder get"       # vanilla's own read-back, in blocks
 ```
 
-The tier is not stored anywhere yet, so a server restart goes back to `tiny`. Remembering it
-between runs belongs to the permanent unlock state, which does not exist yet.
+`/mhr border` overrides by hand for the world it is run in. Left alone, a run gets the largest tier
+it owns — bought in the shop, and remembered in the progression snapshot — so a restart comes back
+on that rather than on `tiny`.
 
 Each dimension gets its own center, so the server log is the quickest way to see what was applied:
 
@@ -1008,9 +1108,19 @@ scripts/dev.sh rcon "mhr unlock player.craft.enchant 4"   # straight to the top 
 scripts/dev.sh rcon "mhr lock player.craft.enchant"
 ```
 
-The levels are kept in the same file as everything else, `/server/config/hardcore-roguelite-unlocks.json`,
-which is now a map of unlock id to level rather than a list of ids. A file in the old format still
-reads, with everything in it counting as level one, and is rewritten in the new shape on the spot.
+The levels are kept in the same file as everything else,
+`/server/config/hardcore-roguelite-progress.json`, whose shape is the currency and a map of unlock
+id to level:
+
+```json
+{
+  "currency": 35,
+  "unlocks": { "player.craft.enchant": 4 }
+}
+```
+
+A profile written by an older build — two files, and before that a bare list of ids — is read once
+and written back in this shape, with the old files left where they are.
 
 How many levels there are and what each is worth are balance numbers, so a curve change needs no
 rebuild:

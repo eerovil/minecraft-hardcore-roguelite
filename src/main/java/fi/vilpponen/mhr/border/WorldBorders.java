@@ -1,7 +1,10 @@
 package fi.vilpponen.mhr.border;
 
 import fi.vilpponen.mhr.HardcoreRoguelite;
+import fi.vilpponen.mhr.UnlockEffects;
+import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.core.Balance;
+import fi.vilpponen.mhr.core.BalanceException;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.run.RunEvents;
 import fi.vilpponen.mhr.run.RunLifecycle;
@@ -19,9 +22,10 @@ import net.minecraft.world.level.border.WorldBorder;
  * {@link #select(BorderTier)}, read it back with {@link #selectedTier()}. The border is then set up
  * when a server starts, and again immediately whenever the tier changes.
  *
- * <p>The tier lives in memory and starts at {@link BorderTier#DEFAULT} every time the game starts.
- * Remembering it between runs is the job of the permanent unlock state, which this feature
- * deliberately does not touch — when that arrives it only has to call {@link #select(BorderTier)}.
+ * <p>The tier is not remembered in memory between sessions, and does not need to be: it is decided
+ * by what the player has permanently bought. {@link #selectOwnedTier()} reads that, and is called
+ * when a server starts and again whenever the owned unlocks change. {@link #select(BorderTier)}
+ * stays for the dev command, which is allowed to ignore the shop.
  *
  * <p>Nothing about world generation is involved. The border is placed on the finished world, so
  * changing the tier never means changing worldgen code.
@@ -43,6 +47,17 @@ public final class WorldBorders {
 	private static volatile BorderTier selectedTier = BorderTier.DEFAULT;
 	private static volatile MinecraftServer runningServer;
 
+	/**
+	 * True once {@code /mhr border} has picked a tier by hand for this world.
+	 *
+	 * <p>The dev command is allowed to ignore what has been bought — that is what it is for, and
+	 * tests lean on it heavily to generate ordinary terrain a long way from spawn. Without this
+	 * flag, buying anything at all afterwards would quietly put the bought-for border back, because
+	 * every purchase asks the border to look at the unlocks again. Cleared when a server starts, so
+	 * a hand-picked tier never outlives the world it was picked for.
+	 */
+	private static volatile boolean pickedByHand;
+
 	private WorldBorders() {
 	}
 
@@ -50,6 +65,8 @@ public final class WorldBorders {
 	public static void init() {
 		ServerLifecycleEvents.SERVER_STARTED.register(server -> {
 			runningServer = server;
+			pickedByHand = false;
+			selectOwnedTier();
 			apply(server);
 		});
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> runningServer = null);
@@ -58,6 +75,91 @@ public final class WorldBorders {
 		// Listening here rather than being called by the lifecycle is what keeps world management
 		// from having to know that borders exist.
 		RunEvents.RUN_STARTED.register((server, overworld, run) -> apply(server));
+
+		// A border tier bought in the shop is the size of the world from that moment on, the same
+		// way the dev command's has always been.
+		UnlockEffects.onChange(server -> selectOwnedTier());
+
+		BalanceManager.addCheck(WorldBorders::checkTheTiersGoUp);
+		// The balance in effect was loaded before that could be registered, so nothing has looked at
+		// its tiers yet. A bundled or override file with the ladder the wrong way up stops the game
+		// here, rather than waiting for somebody to reload.
+		checkTheTiersGoUp(BalanceManager.get());
+	}
+
+	/**
+	 * The tiers are a ladder, so their sizes have to go up it.
+	 *
+	 * <p>Two things read that ladder and they read it differently. A run takes the largest tier
+	 * owned by walking {@link BorderTier} in order. The shop stops selling a tier once a bigger one
+	 * is owned, by comparing the sizes in the balance file. Those are the same ordering only while
+	 * the data says they are: make Medium bigger than Large and the two disagree about which is
+	 * bigger, and a tier that cannot change the world goes back on sale.
+	 *
+	 * <p>The answer is to require the data to agree rather than teach two readers to cope with data
+	 * that does not. Sizes may repeat — two tiers the same size satisfy each other, and neither
+	 * changes anything the other did not — but they may never go down, and nothing bounded may
+	 * follow something unbounded.
+	 *
+	 * @throws BalanceException naming the tier, so the message says which line to fix
+	 */
+	private static void checkTheTiersGoUp(Balance candidate) {
+		double previous = 0;
+		BorderTier below = null;
+		boolean unbounded = false;
+
+		for (BorderTier tier : BorderTier.values()) {
+			Balance.BorderBalance balance = tier.balance(candidate);
+			if (unbounded) {
+				throw new BalanceException("Border tier '" + tier.id() + "' has a size, and '" + below.id()
+						+ "' before it has none. The tiers have to get bigger going up, and nothing is"
+						+ " bigger than unbounded.");
+			}
+			if (balance.isUnbounded()) {
+				unbounded = true;
+				below = tier;
+				continue;
+			}
+
+			double size = balance.size().getAsDouble();
+			if (below != null && size < previous) {
+				throw new BalanceException("Border tier '" + tier.id() + "' is " + (long) size
+						+ " blocks across and '" + below.id() + "' below it is " + (long) previous
+						+ ". The tiers have to get bigger going up, never smaller.");
+			}
+			previous = size;
+			below = tier;
+		}
+	}
+
+	/**
+	 * Take the tier from what the player has permanently bought: the largest one owned, or
+	 * {@link BorderTier#DEFAULT} while none is.
+	 *
+	 * <p>This is what wires the border to progression. The tiers are steps rather than choices —
+	 * owning Large means the world is Large, whether or not Medium was ever bought — so the answer
+	 * is the furthest one along the enum, not the most recent purchase.
+	 */
+	public static void selectOwnedTier() {
+		if (pickedByHand) {
+			return;
+		}
+		UnlockState state = UnlockState.get();
+		BorderTier owned = BorderTier.DEFAULT;
+		for (BorderTier tier : BorderTier.values()) {
+			if (state.isOwned(tier.unlockId())) {
+				owned = tier;
+			}
+		}
+		if (owned == selectedTier) {
+			// Nothing about the border has changed, so nothing is put on the world. This is asked
+			// after *every* purchase, and applying a tier reads its size out of the balance in
+			// effect — so re-applying the tier already in force would hand a run the size a reload
+			// set while it was being played, which is the one thing {@code /mhr reload} promises it
+			// will not do. A run keeps the border it started with until the tier itself changes.
+			return;
+		}
+		set(owned);
 	}
 
 	public static BorderTier selectedTier() {
@@ -65,10 +167,19 @@ public final class WorldBorders {
 	}
 
 	/**
-	 * Choose the tier future runs start with. Takes effect on the running world straight away too,
-	 * so the same call works from a shop, from a dev command, or before a run begins.
+	 * Pick a tier by hand, ignoring what has been bought until this world is over.
+	 *
+	 * <p>{@code /mhr border} and nothing else. It takes effect on the running world straight away,
+	 * and from then on a purchase no longer decides the size of this world — see
+	 * {@link #pickedByHand}.
 	 */
 	public static void select(BorderTier tier) {
+		pickedByHand = true;
+		set(tier);
+	}
+
+	/** Put a tier in place, whoever chose it. */
+	private static void set(BorderTier tier) {
 		selectedTier = tier;
 		MinecraftServer server = runningServer;
 		if (server != null) {

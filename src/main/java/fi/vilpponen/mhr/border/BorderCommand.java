@@ -10,9 +10,14 @@ import fi.vilpponen.mhr.core.BalanceManager;
 import net.minecraft.network.chat.Component;
 
 /**
- * A developer command standing in for the shop, which does not exist yet.
+ * The developer way to pick a border tier, ignoring what has been bought.
  *
  * <p>{@code /mhr border} shows the tier, {@code /mhr border <tier>} changes it.
+ *
+ * <p>Not a stand-in for the shop — the shop sells the tiers, and a run ordinarily gets the largest
+ * one owned. This overrides that by hand for the world it is run in, which several worldgen tests
+ * depend on: they generate ordinary terrain thousands of blocks from spawn, and the roguelite
+ * border would otherwise be in the way. See {@code WorldBorders.select}.
  *
  * <p>Registered on its own rather than alongside the unlock command: brigadier merges two
  * registrations of the same {@code /mhr} root, so the border feature stays in one package.

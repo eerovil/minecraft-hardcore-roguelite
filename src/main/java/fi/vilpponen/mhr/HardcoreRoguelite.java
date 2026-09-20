@@ -3,13 +3,16 @@ package fi.vilpponen.mhr;
 import fi.vilpponen.mhr.border.BorderCommand;
 import fi.vilpponen.mhr.border.WorldBorders;
 import fi.vilpponen.mhr.command.BalanceCommand;
+import fi.vilpponen.mhr.command.ShopCommand;
 import fi.vilpponen.mhr.command.UnlockCommand;
 import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
+import fi.vilpponen.mhr.progression.Wallet;
 import fi.vilpponen.mhr.run.RunAdmission;
 import fi.vilpponen.mhr.run.RunCommand;
 import fi.vilpponen.mhr.run.RunLifecycle;
+import fi.vilpponen.mhr.shop.ShopServer;
 import fi.vilpponen.mhr.starter.RunStart;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -28,8 +31,9 @@ public class HardcoreRoguelite implements ModInitializer {
 		Balance balance = BalanceManager.load();
 
 		UnlockState state = UnlockState.get();
-		LOGGER.info("Hardcore Roguelite loaded. Unlocked: {}. Balance: {} unlocks priced, mob damage x{}",
-				state.describe(), balance.unlocks().size(), balance.mobDamageMultiplier());
+		LOGGER.info("Hardcore Roguelite loaded. Unlocked: {}. Currency: {}."
+						+ " Balance: {} unlocks priced, mob damage x{}",
+				state.describe(), Wallet.get().balance(), balance.unlocks().size(), balance.mobDamageMultiplier());
 
 		// First, and before anything can read a player's save data: a persistent attachment that is
 		// not registered by the time an entity is loaded is dropped with a log line and no other
@@ -40,11 +44,13 @@ public class HardcoreRoguelite implements ModInitializer {
 		RunLifecycle.register();
 		WorldBorders.init();
 		RunStart.register();
+		ShopServer.register();
 
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			UnlockCommand.register(dispatcher);
 			BalanceCommand.register(dispatcher);
 			BorderCommand.register(dispatcher);
+			ShopCommand.register(dispatcher);
 			RunCommand.register(dispatcher);
 		});
 	}

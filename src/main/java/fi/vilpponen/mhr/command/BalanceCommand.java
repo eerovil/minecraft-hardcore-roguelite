@@ -6,6 +6,7 @@ import fi.vilpponen.mhr.HardcoreRoguelite;
 import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceException;
 import fi.vilpponen.mhr.core.BalanceManager;
+import fi.vilpponen.mhr.shop.ShopServer;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -41,6 +42,10 @@ public final class BalanceCommand {
 					"Balance reload failed, nothing changed: " + e.getMessage()).withStyle(ChatFormatting.RED));
 			return 0;
 		}
+
+		// An open shop screen only knows the prices it was last sent. Leaving it showing the old ones
+		// while the server charges the new ones is the one way a reload can look like a shop bug.
+		ShopServer.sendToAll(context.getSource().getServer());
 
 		context.getSource().sendSuccess(() -> Component.literal(summary(balance)), true);
 		context.getSource().sendSuccess(() -> Component.literal(
