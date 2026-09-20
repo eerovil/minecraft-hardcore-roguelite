@@ -30,42 +30,115 @@ import java.nio.file.StandardOpenOption;
  * neither the old contents nor the new, and a caller told "written" would have sold something on
  * the strength of it. Every failure is reported, because the caller is the only one that knows
  * whether it can carry on without the write.
+ *
+ * <p><b>The rename is the commit point, and a failure says which side of it it is on.</b> That
+ * distinction is the whole of this class's contract, because the two sides call for opposite
+ * answers and a caller that cannot tell them apart will get one of them wrong:
+ *
+ * <ul>
+ *   <li>{@link NotWritten} — the target still holds exactly what it held. Nothing happened, and a
+ *       caller may say so.</li>
+ *   <li>{@link WrittenNotFlushed} — the target holds the new contents. The change <em>has</em>
+ *       happened; what is in doubt is only whether it would survive the power going out. A caller
+ *       that treats this as "nothing happened" is lying about a file it can go and read, and will
+ *       later write its stale idea of the contents back over the real ones.</li>
+ * </ul>
  */
 public final class AtomicFile {
+	/** The write did not happen. Whatever the target held, it still holds. */
+	public static class NotWritten extends IOException {
+		NotWritten(Path file, Throwable cause) {
+			super("Could not write " + file + "; it still holds what it held", cause);
+		}
+	}
+
+	/**
+	 * The target holds the new contents, and only their survival of a power cut is in doubt.
+	 *
+	 * <p>Not a failure of the write. The rename has happened, so the file <em>is</em> the new one;
+	 * what could not be done is flushing the directory entry that makes the rename itself durable.
+	 */
+	public static class WrittenNotFlushed extends IOException {
+		WrittenNotFlushed(Path file, Throwable cause) {
+			super("Wrote " + file + ", and could not flush the directory, so it might not survive a"
+					+ " power cut. The file itself is the new one.", cause);
+		}
+	}
+
+	/**
+	 * Flushing a directory, so the test that has to fail after the rename can.
+	 *
+	 * <p>The one step this class cannot provoke a failure in through its public method: on any real
+	 * filesystem a directory that opens will flush. Same reason {@link #writeFully} takes a channel
+	 * interface.
+	 */
+	@FunctionalInterface
+	public interface DirectoryFlush {
+		void flush(Path directory) throws IOException;
+	}
+
 	/** Whether this run has already said that directories cannot be flushed. */
 	private static volatile boolean directoriesCannotBeOpened;
+
+	/** Nothing in the game ever replaces this. See {@link #useDirectoryFlush}. */
+	private static volatile DirectoryFlush directoryFlush = AtomicFile::forceDirectory;
 
 	private AtomicFile() {
 	}
 
 	/**
+	 * Replace how directories are flushed. For the test that proves what a post-rename failure does;
+	 * pass null to put the real one back.
+	 */
+	public static void useDirectoryFlush(DirectoryFlush flush) {
+		directoryFlush = flush == null ? AtomicFile::forceDirectory : flush;
+	}
+
+	/**
 	 * Replace a file's whole contents, or leave it exactly as it was.
 	 *
-	 * @throws IOException if the new contents did not reach the disk, in which case the file still
-	 *     holds whatever it held before
+	 * <p>The body is in two halves on purpose, with the rename between them, because that is where
+	 * the commit point is and the caller has to be able to see which half failed.
+	 *
+	 * @throws NotWritten if it did not happen, in which case the file still holds what it held
+	 * @throws WrittenNotFlushed if it did happen but may not survive a power cut
 	 */
-	public static void write(Path file, String contents) throws IOException {
+	public static void write(Path file, String contents) throws NotWritten, WrittenNotFlushed {
 		Path directory = file.getParent();
-		Files.createDirectories(directory);
-		Path temporary = directory.resolve(file.getFileName() + ".tmp");
+		Path temporary = directory == null ? null : directory.resolve(file.getFileName() + ".tmp");
 
+		// --- before the commit point: anything that goes wrong here changed nothing ---
 		try {
+			Files.createDirectories(directory);
 			try (FileChannel channel = FileChannel.open(temporary,
 					StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
 				writeFully(channel, StandardCharsets.UTF_8.encode(contents));
 				channel.force(true);
 			}
 			move(temporary, file);
-			forceDirectory(directory);
-		} catch (IOException e) {
+		} catch (IOException | RuntimeException e) {
 			// The half-written temporary file is of no use to anyone, and leaving it behind would
 			// only confuse the next person to look in the config directory.
-			try {
-				Files.deleteIfExists(temporary);
-			} catch (IOException ignored) {
-				// Nothing useful to do about it, and the real failure is the one being thrown.
-			}
-			throw e;
+			deleteQuietly(temporary);
+			throw new NotWritten(file, e);
+		}
+
+		// --- after it: the file is the new one, whatever happens next ---
+		try {
+			directoryFlush.flush(directory);
+		} catch (IOException | RuntimeException e) {
+			throw new WrittenNotFlushed(file, e);
+		}
+	}
+
+	private static void deleteQuietly(Path file) {
+		if (file == null) {
+			return;
+		}
+		try {
+			Files.deleteIfExists(file);
+		} catch (IOException ignored) {
+			// Nothing useful to do about it, and the real failure is the one being thrown.
 		}
 	}
 

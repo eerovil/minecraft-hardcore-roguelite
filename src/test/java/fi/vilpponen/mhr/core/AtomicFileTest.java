@@ -119,19 +119,56 @@ class AtomicFileTest {
 	}
 
 	@Test
-	void aWriteThatCannotHappenLeavesThePreviousContentsAlone(@TempDir Path directory) throws IOException {
-		Path file = directory.resolve("unlocks.json");
+	void aFailureBeforeTheRenameSaysNothingWasWrittenAndMeansIt(@TempDir Path directory) throws IOException {
+		Path file = directory.resolve("progress.json");
 		AtomicFile.write(file, "{\"world.trees\": 1}");
 
 		// A non-empty directory where the temporary file has to go: the write cannot even start.
-		Path temporary = directory.resolve("unlocks.json.tmp");
+		Path temporary = directory.resolve("progress.json.tmp");
 		Files.createDirectory(temporary);
 		Files.writeString(temporary.resolve("in-the-way"), "");
 
-		assertThrows(IOException.class, () -> AtomicFile.write(file, "{\"world.trees\": 0}"));
+		assertThrows(AtomicFile.NotWritten.class, () -> AtomicFile.write(file, "{\"world.trees\": 0}"));
 
 		assertEquals("{\"world.trees\": 1}", Files.readString(file, StandardCharsets.UTF_8),
 				"a write that did not happen must not have changed anything");
+	}
+
+	/**
+	 * The other side of the commit point, and the one that cannot be reached any other way: on a
+	 * real filesystem a directory that opens will flush.
+	 */
+	@Test
+	void aFailureAfterTheRenameSaysSoAndTheFileIsAlreadyTheNewOne(@TempDir Path directory) throws IOException {
+		Path file = directory.resolve("progress.json");
+		AtomicFile.write(file, "{\"currency\": 1}");
+
+		AtomicFile.useDirectoryFlush(unused -> {
+			throw new IOException("injected: the directory would not flush");
+		});
+		try {
+			assertThrows(AtomicFile.WrittenNotFlushed.class,
+					() -> AtomicFile.write(file, "{\"currency\": 2}"));
+		} finally {
+			AtomicFile.useDirectoryFlush(null);
+		}
+
+		assertEquals("{\"currency\": 2}", Files.readString(file, StandardCharsets.UTF_8),
+				"the rename had already happened, so the file has to be the new one — calling this"
+						+ " 'not written' is what makes a caller overwrite it later");
+	}
+
+	@Test
+	void theRealDirectoryFlushComesBack(@TempDir Path directory) throws IOException {
+		AtomicFile.useDirectoryFlush(unused -> {
+			throw new IOException("injected");
+		});
+		AtomicFile.useDirectoryFlush(null);
+
+		Path file = directory.resolve("progress.json");
+		AtomicFile.write(file, "{}");
+
+		assertEquals("{}", Files.readString(file, StandardCharsets.UTF_8));
 	}
 
 	private static void assertDoesNotThrowIo(IoAction action) {

@@ -738,6 +738,10 @@ than asserting one field:
 - **an-unreadable-legacy-unlock-file-stops-the-migration** — and writes no snapshot at all, because a
   half-read migration committed *is* the loss.
 - **an-unreadable-legacy-currency-file-stops-it-too** — the same rule for the other source.
+- **a-snapshot-that-lands-but-cannot-be-flushed-is-not-called-unsaved** — the directory flush is
+  made to fail after the rename, which is the one step no real filesystem will fail on. The file,
+  the running game and the player all have to say the purchase happened, and the next purchase has
+  to be refused rather than stacking another change behind the doubt.
 
 `AtomicFileTest` covers the writer itself in plain JUnit, including a channel that takes one byte per
 call — a real file almost never writes short, which is why a missing loop there cannot be provoked

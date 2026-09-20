@@ -2,6 +2,7 @@ package fi.vilpponen.mhr.gametest.server;
 
 import fi.vilpponen.mhr.Unlock;
 import fi.vilpponen.mhr.UnlockState;
+import fi.vilpponen.mhr.core.AtomicFile;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.core.PersistenceException;
 import fi.vilpponen.mhr.progression.Catalogue;
@@ -95,8 +96,11 @@ public class ShopPurchaseGameTest {
 					this::anUnreadableLegacyUnlockFileStopsTheMigration);
 			scenario(failures, "an-unreadable-legacy-currency-file-stops-it-too",
 					this::anUnreadableLegacyCurrencyFileStopsItToo);
+			scenario(failures, "a-snapshot-that-lands-but-cannot-be-flushed-is-not-called-unsaved",
+					this::aSnapshotThatLandsButCannotBeFlushedIsNotCalledUnsaved);
 		} finally {
 			removeOverride(helper);
+			AtomicFile.useDirectoryFlush(null);
 			unblock(Progress.file());
 			startFromNothing();
 			reset();
@@ -444,6 +448,59 @@ public class ShopPurchaseGameTest {
 
 		check(refusesToLoad(), "an unreadable old currency file must refuse to migrate, and it migrated");
 		check(!Files.exists(Progress.file()), "and must write no snapshot");
+
+		startFromNothing();
+	}
+
+	/**
+	 * The far side of the commit point, end to end.
+	 *
+	 * <p>The rename lands and the directory flush fails. The file is the new snapshot from that
+	 * moment, so there are three things that could disagree about what happened — what the file
+	 * says, what the running game believes, and what the player was told — and the whole point of
+	 * the contract is that they cannot. Reporting "not saved" here is what used to let the next
+	 * write put the old snapshot back over a purchase that was already on the disk.
+	 */
+	private void aSnapshotThatLandsButCannotBeFlushedIsNotCalledUnsaved() {
+		startFromNothing();
+		int price = priceOf(TREES);
+		// Enough for the second purchase too, so that when it is refused it is refused for the
+		// reason under test rather than for being unaffordable.
+		int left = priceOf(VILLAGE) + 5;
+		Wallet.get().set(price + left);
+
+		AtomicFile.useDirectoryFlush(directory -> {
+			throw new IOException("injected: the directory would not flush");
+		});
+		try {
+			Purchase.Result result = Purchase.buy(TREES);
+
+			// What the player was told.
+			check(result.bought(),
+					"the snapshot reached the file, so the purchase happened and must be reported as"
+							+ " bought — and it was reported as " + result.outcome());
+			// What the running game believes.
+			check(owns(TREES), "the running game must own what the file says it owns");
+			check(balance() == left,
+					"and must have been charged: the purse holds " + balance() + " rather than " + left);
+
+			// Nothing more is written while the doubt stands, rather than stacking up more changes
+			// nobody can promise survive.
+			Purchase.Result next = Purchase.buy(VILLAGE);
+			check(next.outcome() == Purchase.Outcome.NOT_SAVED,
+					"the next purchase must be refused while durability is in doubt, and it was "
+							+ next.outcome());
+			check(!owns(VILLAGE) && balance() == left, "and must change nothing");
+		} finally {
+			AtomicFile.useDirectoryFlush(null);
+		}
+
+		// What the file says. This is the assertion the old behaviour could not have passed: it kept
+		// the pre-purchase snapshot in memory while the file held the purchase.
+		Progress.reloadFromFile();
+		check(owns(TREES), TREES + " is on the disk and must still be owned after re-reading it");
+		check(!owns(VILLAGE), VILLAGE + " was refused and must not be on the disk");
+		check(balance() == left, "and the file must agree about the currency, not hold " + balance());
 
 		startFromNothing();
 	}

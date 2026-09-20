@@ -250,6 +250,17 @@ Rules to keep:
   and own nothing. Do not add a second file for a new kind of permanent progression — add a key to
   the snapshot.
 - **Never change memory before the write.** That is the whole of the guarantee.
+- **The rename is the commit point, and the two sides of it get opposite answers.** `AtomicFile`
+  says which side a failure is on, and that distinction is the contract:
+  - *before it* — `NotWritten`. The file still holds what it held, memory keeps the old snapshot,
+    the purchase is refused. Nothing happened and saying so is honest.
+  - *after it* — `WrittenNotFlushed`. The file already **is** the new snapshot, so memory adopts it
+    and the purchase is reported as what it was: bought. Keeping the old snapshot in memory here is
+    exactly what lets the next write put it back over a purchase that is on the disk. What is in
+    doubt is only whether the rename survives a power cut, and that doubt is sticky: nothing further
+    is written until the game is started again.
+
+  So the file, the running game and the player can never be told three different things.
 - **Fail closed at the file boundary.** Both halves of this matter:
   - `AtomicFile` does not fall back. A filesystem that will not promise an atomic rename gets an
     error rather than a quiet plain replace, because a caller told "written" would sell something on
