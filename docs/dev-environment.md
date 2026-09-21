@@ -56,8 +56,8 @@ scripts/dev.sh logs    # follow the server log
 `go` is the loop. Edit here, run `go`, reconnect. A rebuild after a small change takes seconds;
 the server restart is the slow part, about half a minute.
 
-Other commands: `sync`, `build`, `deploy`, `gametest`, `image`, `console`, `rcon`, `shell`,
-`newworld`, `status`, `down`, `nuke`. Run `scripts/dev.sh` with no arguments for the list.
+Other commands: `sync`, `build`, `deploy`, `client`, `gametest`, `image`, `console`, `rcon`,
+`shell`, `newworld`, `status`, `down`, `nuke`. Run `scripts/dev.sh` with no arguments for the list.
 
 `sync` copies exactly what a commit would see — tracked files plus untracked ones that are not
 gitignored. It wipes `src/`, `k8s/` and `scripts/` in the pod first so deleted files do not
@@ -813,6 +813,43 @@ finds empty chunks thousands of blocks out, look at the border before you look a
 - **Where the starter chest lands on awkward ground** — a cave, a one-block tunnel, the Nether roof.
   The tests run on the harness's flat world, where the search finds a spot on its first try, so the
   slope and ceiling cases are still a `mhr starterchest` by hand.
+
+## Getting the mod into your own client
+
+```sh
+scripts/dev.sh client
+```
+
+That is the whole thing. It syncs the checkout to the build pod, runs the same gradle build as
+`scripts/dev.sh build` under the same lock, and copies two jars back onto this machine: the mod jar
+it just built, and the Fabric API version `gradle.properties` declares. Nothing is built locally —
+no JDK and no gradle on the machine you play on — and there is no `kubectl cp` to get right.
+
+On a Mac it installs into `$HOME/Library/Application Support/minecraft/mods`, the official
+launcher's directory. That directory has to exist already: start the Fabric 26.3 profile once and
+the launcher makes it. Anywhere else — Prism, MultiMC, a second instance, a machine that is not a
+Mac — name the directory yourself:
+
+```sh
+MHR_CLIENT_MODS_DIR="$HOME/Library/Application Support/PrismLauncher/instances/mhr/.minecraft/mods" \
+  scripts/dev.sh client
+```
+
+Nothing is ever created for you. A mods directory we invented would be one no launcher reads, which
+from the outside looks exactly like a mod that does not work, so a missing directory is an error
+that tells you how to point at the right one instead.
+
+Each run replaces `hardcore-roguelite*.jar` and `fabric-api-*.jar` and leaves every other mod in the
+directory alone, so old builds cannot pile up and win load order over the one you just made. Both
+jars are copied in under names Minecraft ignores and renamed at the end, so a transfer that dies
+halfway leaves the client as it was. The Fabric API download is cached in the cluster, so only the
+first run after a version bump waits for it.
+
+Then launch the Minecraft 26.3 profile with Fabric Loader 0.19.5 or newer and, if you want the dev
+server rather than a single-player world, port-forward it as below.
+
+`client` and `go` are separate on purpose: `go` is the server loop, `client` is the client
+install. Neither touches the other's destination.
 
 ## Joining the server
 
