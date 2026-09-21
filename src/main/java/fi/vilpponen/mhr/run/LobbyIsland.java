@@ -172,6 +172,17 @@ public final class LobbyIsland {
 	 * arrival after the first, and it needs no file, no record field and no upgrade counter that
 	 * could disagree with the world it describes.
 	 *
+	 * <p><b>Which is why the marker goes last, and why the order is a named thing.</b> The marker
+	 * is a block on the floor being swept, so clearing it in its turn would write down "this lobby
+	 * has been upgraded" while most of the floor was still there — and a server stopped or a sweep
+	 * thrown at that moment would leave the rest of the plane behind for good, with nothing left to
+	 * say it was owed. Kept until everything else is gone, it says the true thing the whole time:
+	 * while any of the old floor might remain, the marker is still there and the next arrival
+	 * sweeps again. Re-sweeping costs nothing, because a position that is already air is skipped.
+	 * The order is {@link LobbyFloorSweep}, which is plain arithmetic and unit-tested, because
+	 * "the marker is the last thing touched" is the whole of this fix and an interrupted sweep is
+	 * not something the gameplay harness can stage.
+	 *
 	 * <p>Only bedrock, and only the bottom layer. The old lobby's floor was solid bedrock, so
 	 * nothing could be placed at that height without breaking bedrock first — which survival
 	 * cannot do. Everything an operator or a player put in the old lobby was therefore put
@@ -196,16 +207,16 @@ public final class LobbyIsland {
 				+ " within {} blocks of the island", LEGACY_FLOOR.getName().getString(), floor,
 				LEGACY_SWEEP);
 		int cleared = 0;
-		for (int x = -LEGACY_SWEEP; x <= LEGACY_SWEEP; x++) {
-			for (int z = -LEGACY_SWEEP; z <= LEGACY_SWEEP; z++) {
-				BlockPos pos = new BlockPos(TOP_CENTRE.getX() + x, floor, TOP_CENTRE.getZ() + z);
-				if (lobby.getBlockState(pos).is(LEGACY_FLOOR)) {
-					// UPDATE_CLIENTS and nothing else: there are no neighbours worth telling on a
-					// flat layer of bedrock, and a hundred thousand update cascades would be a
-					// server start nobody enjoys.
-					lobby.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
-					cleared++;
-				}
+		int[] offsets = LobbyFloorSweep.offsets(LEGACY_SWEEP);
+		for (int i = 0; i < offsets.length; i += 2) {
+			BlockPos pos = new BlockPos(
+					TOP_CENTRE.getX() + offsets[i], floor, TOP_CENTRE.getZ() + offsets[i + 1]);
+			if (lobby.getBlockState(pos).is(LEGACY_FLOOR)) {
+				// UPDATE_CLIENTS and nothing else: there are no neighbours worth telling on a flat
+				// layer of bedrock, and a hundred thousand update cascades would be a server start
+				// nobody enjoys.
+				lobby.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+				cleared++;
 			}
 		}
 		HardcoreRoguelite.LOGGER.info("Cleared {} block(s) of the lobby's old floor", cleared);

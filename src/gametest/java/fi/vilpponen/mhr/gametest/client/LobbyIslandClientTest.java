@@ -102,11 +102,23 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 			try (TestDedicatedServerConnection connection = server.connect()) {
 				TestRuns.settleClient(context, connection);
 				TestRuns.waitForPlayerInTheLobby(context, server, connection);
-				TestPlayer player = new TestPlayer(context, server, connection);
-				registerEntryFault(server);
 
 				scenario(context, "arriving-at-a-legacy-lobby-takes-its-old-floor-out",
 						() -> theOldFloorIsGone(context, server));
+
+				// And now the same save left looking like a sweep that stopped part-way, so the
+				// next arrival has to be the one that finishes it.
+				layAHalfSweptFloor(server);
+			}
+
+			try (TestDedicatedServerConnection connection = server.connect()) {
+				TestRuns.settleClient(context, connection);
+				TestRuns.waitForPlayerInTheLobby(context, server, connection);
+				TestPlayer player = new TestPlayer(context, server, connection);
+				registerEntryFault(server);
+
+				scenario(context, "an-interrupted-floor-sweep-is-finished-on-the-next-arrival",
+						() -> theInterruptedSweepFinishes(context, server));
 
 				// Said out loud rather than hoped for: a dig proves nothing about survival rules
 				// if the digger turns out to be in creative.
@@ -158,8 +170,7 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 	 * what a fill that silently did nothing also looks like.
 	 */
 	private void theOldFloorIsGone(ClientGameTestContext context, TestDedicatedServerContext server) {
-		int floor = server.computeOnServer(minecraftServer ->
-				minecraftServer.getLevel(Lobby.LEVEL).getMinY());
+		int floor = lobbyFloor(server);
 
 		for (BlockPos pos : List.of(
 				new BlockPos(0, floor, 0),
@@ -182,6 +193,39 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 		String drawn = blockOnClient(context, new BlockPos(0, floor, 0));
 		check(drawn.contains("air"), "and the client must have been told: it still draws " + drawn
 				+ " at the bottom of the lobby");
+	}
+
+	/**
+	 * A sweep that stopped part-way is owed, and the next arrival pays it.
+	 *
+	 * <p>The marker the migration runs on is a block of the floor it is clearing, so the order it
+	 * is cleared in decides whether an interrupted upgrade can ever be finished. This is the save
+	 * left in the middle of one: the marker still there, an inner patch of the plane already gone,
+	 * the rest of it still standing. Arriving has to finish the job rather than read the leftover
+	 * air as "nothing to do here".
+	 *
+	 * <p>Said plainly, because it matters for what this is worth: the ordering bug itself cannot be
+	 * staged from here — nothing in the harness can stop a sweep half-way through — and the code
+	 * that had it would pass this scenario too. What this pins down is the other half, that the
+	 * sweep is idempotent and does not give up at the first position that is already clear. The
+	 * ordering is asked about in {@code LobbyFloorSweepTest}, where it is plain arithmetic.
+	 */
+	private void theInterruptedSweepFinishes(
+			ClientGameTestContext context, TestDedicatedServerContext server) {
+		int floor = lobbyFloor(server);
+
+		for (BlockPos pos : List.of(
+				new BlockPos(0, floor, 0),
+				new BlockPos(STAGED_FLOOR_RADIUS, floor, STAGED_FLOOR_RADIUS),
+				new BlockPos(-STAGED_FLOOR_RADIUS, floor, 0))) {
+			String held = blockOnServer(server, pos);
+			check(held.contains("air"), "an upgrade that stopped part-way must be finished by the"
+					+ " next arrival, and " + pos + " still holds " + held);
+		}
+
+		String underfoot = blockOnServer(server, Lobby.SPAWN.below());
+		check(underfoot.contains("grass"),
+				"and the island must still be there: the spawn has " + underfoot + " under it");
 	}
 
 	/**
@@ -563,22 +607,69 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 	 * make the scenario after it pass against any implementation at all, including none.
 	 */
 	private static void layTheOldFloor(TestDedicatedServerContext server) {
-		int floor = server.computeOnServer(minecraftServer ->
-				minecraftServer.getLevel(Lobby.LEVEL).getMinY());
+		int floor = lobbyFloor(server);
 		int r = STAGED_FLOOR_RADIUS;
-		server.runCommand("execute in " + Lobby.LEVEL.identifier() + " run fill "
-				+ (-r) + " " + floor + " " + (-r) + " " + r + " " + floor + " " + r + " "
-				+ LobbyIsland.LEGACY_FLOOR.builtInRegistryHolder().key().identifier());
+		fill(server, -r, floor, -r, r, floor, r,
+				LobbyIsland.LEGACY_FLOOR.builtInRegistryHolder().key().identifier().toString());
+
+		requireStaged(server, "a legacy lobby floor", "bedrock",
+				new BlockPos(0, floor, 0), new BlockPos(r, floor, r));
+		LOGGER.info("Staged a legacy lobby floor at y={}, {} blocks either way", floor, r);
+	}
+
+	/**
+	 * The same save, left looking like an upgrade that stopped half-way through.
+	 *
+	 * <p>The whole plane laid again, an inner patch of it taken back out, and the marker under the
+	 * spawn put back — which is the state a sweep interrupted after it had cleared some of the
+	 * floor leaves behind, and the state the next arrival has to recognise as unfinished.
+	 *
+	 * <p>Its own positive control, like the one above: the leftover bedrock has to be genuinely
+	 * there and the cleared patch genuinely gone, or the scenario that follows is asking nothing.
+	 */
+	private static void layAHalfSweptFloor(TestDedicatedServerContext server) {
+		int floor = lobbyFloor(server);
+		int r = STAGED_FLOOR_RADIUS;
+		int done = r / 2;
+		String bedrock =
+				LobbyIsland.LEGACY_FLOOR.builtInRegistryHolder().key().identifier().toString();
+
+		fill(server, -r, floor, -r, r, floor, r, bedrock);
+		fill(server, -done, floor, -done, done, floor, done, "minecraft:air");
+		server.runCommand("execute in " + Lobby.LEVEL.identifier() + " run setblock 0 " + floor
+				+ " 0 " + bedrock);
 		TestRuns.settle(server);
 
-		for (BlockPos pos : List.of(new BlockPos(0, floor, 0), new BlockPos(r, floor, r))) {
+		requireStaged(server, "a half-swept lobby floor", "bedrock",
+				new BlockPos(0, floor, 0), new BlockPos(r, floor, r));
+		requireStaged(server, "a half-swept lobby floor", "air", new BlockPos(done, floor, done));
+		LOGGER.info("Staged a half-swept lobby floor at y={}: marker kept, the middle {} blocks"
+				+ " already cleared", floor, done);
+	}
+
+	private static int lobbyFloor(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer ->
+				minecraftServer.getLevel(Lobby.LEVEL).getMinY());
+	}
+
+	private static void fill(TestDedicatedServerContext server,
+			int x1, int y1, int z1, int x2, int y2, int z2, String block) {
+		server.runCommand("execute in " + Lobby.LEVEL.identifier() + " run fill "
+				+ x1 + " " + y1 + " " + z1 + " " + x2 + " " + y2 + " " + z2 + " " + block);
+		TestRuns.settle(server);
+	}
+
+	/** A staging step that quietly did nothing would make everything after it pass for free. */
+	private static void requireStaged(TestDedicatedServerContext server, String what,
+			String expected, BlockPos... positions) {
+		for (BlockPos pos : positions) {
 			String held = blockOnServer(server, pos);
-			if (!held.contains("bedrock")) {
-				throw new AssertionError("could not stage a legacy lobby floor: " + pos
-						+ " holds " + held + " and the scenario that follows would prove nothing");
+			if (!held.contains(expected)) {
+				throw new AssertionError("could not stage " + what + ": " + pos + " should hold "
+						+ expected + " and holds " + held + " — the scenario that follows would"
+						+ " prove nothing");
 			}
 		}
-		LOGGER.info("Staged a legacy lobby floor at y={}, {} blocks either way", floor, r);
 	}
 
 	/** Back to the middle of the island, facing north — away from the shop block. */

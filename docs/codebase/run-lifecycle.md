@@ -88,6 +88,13 @@ into the lobby. Three things about it are deliberate:
 - **the absence of the floor is the version marker.** Nothing generates or places bedrock in the
   new lobby, so bedrock at the bottom of the dimension under the spawn means the old recipe and
   nothing else. No upgrade file, no record field, nothing that can disagree with the world;
+- **the marker is cleared last**, and that is not tidiness. It is a block of the very floor being
+  swept, so clearing it in its turn would write down "upgraded" while most of the plane was still
+  standing, and a server stopped in that window would leave the rest behind for good. Kept until
+  everything else is gone, it stays true the whole way: while any of the old floor might remain,
+  the next arrival sweeps again, and a position that is already air costs a read. The order is
+  `LobbyFloorSweep`, a class with no Minecraft in it so that `LobbyFloorSweepTest` can ask about it —
+  an interrupted sweep is not something the gameplay harness can stage;
 - **only bedrock, and only the bottom layer.** The old floor was solid bedrock, so nothing could be
   placed at that height without breaking bedrock first — which survival cannot do. Everything
   anybody left in the old lobby is above it;
