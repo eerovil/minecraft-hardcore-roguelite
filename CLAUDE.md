@@ -82,6 +82,9 @@ These have already cost implementation/debugging time.
   setup guides blindly. The names in the Minecraft jar are the real names.
 - **The real dev environment is Kubernetes.** The build pod, GameTest pod and dedicated server have
   separate jobs. Do not infer that the persistent dev server is running your branch.
+- **There are two clusters and `scripts/dev.sh` names the one it wants.** `eero-pc` is the default;
+  `MHR_CONTEXT=mac-docker-desktop` is the fallback. Do not "fix" a cluster problem by switching your
+  ambient `kubectl` context — the script ignores it, on purpose.
 - **Gameplay verification has a real headless client now.** Do not write "requires manual client
   verification" for deterministic behaviour before checking whether Client GameTest can exercise it.
 - **Worldgen only answers once.** An unlock change cannot rewrite already-generated chunks. Use
@@ -110,6 +113,10 @@ These have already cost implementation/debugging time.
   interaction feedback, not a replacement for server enforcement.
 - **A mixin is a hook, not a feature module.** Keep injections narrow and delegate to feature code
   so unrelated vanilla behaviour remains untouched.
+- **`scripts/dev.sh` has to run on bash 3.2**, because `client` runs on the Mac and that is the bash
+  macOS ships. No `exec {fd}<>`, no `mapfile`, no `declare -A`, and `"${arr[@]}"` on an empty array
+  is an unbound-variable error under `set -u` — write `${arr[@]+"${arr[@]}"}`. Checking it is one
+  command: `podman run --rm -v "$PWD:/w:ro" -w /w docker.io/library/bash:3.2 bash -n scripts/dev.sh`.
 
 ## Issue and agent workflow
 
