@@ -8,10 +8,11 @@
 #
 # Build and load it with:
 #   scripts/dev.sh image
-# which prints the command to run on the Mac. There is no registry: the image is imported straight
-# into the cluster node's containerd. See docs/dev-environment.md#the-gametest-image.
+# which prints the command to run on the cluster node. There is no registry: the image is imported
+# straight into that node's containerd. See docs/dev-environment.md#the-gametest-image.
 #
-# Must be built for linux/arm64 — the only node is Apple Silicon.
+# Build it for the node's own architecture — amd64 on eero-pc, arm64 on the Mac. `scripts/dev.sh
+# image` already prints the right one for the context it is run under.
 
 # JDK 25, not 21: Fabric Loom 1.18 refuses to run on anything older, even though the mod itself
 # is compiled for Java 21 (see build.gradle). Same base as the build pod, so the two pods agree

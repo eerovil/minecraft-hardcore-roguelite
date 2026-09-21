@@ -80,6 +80,9 @@ These have already cost implementation/debugging time.
   setup guides blindly. The names in the Minecraft jar are the real names.
 - **The real dev environment is Kubernetes.** The build pod, GameTest pod and dedicated server have
   separate jobs. Do not infer that the persistent dev server is running your branch.
+- **There are two clusters and `scripts/dev.sh` names the one it wants.** `eero-pc` is the default;
+  `MHR_CONTEXT=mac-docker-desktop` is the fallback. Do not "fix" a cluster problem by switching your
+  ambient `kubectl` context — the script ignores it, on purpose.
 - **Gameplay verification has a real headless client now.** Do not write "requires manual client
   verification" for deterministic behaviour before checking whether Client GameTest can exercise it.
 - **Worldgen only answers once.** An unlock change cannot rewrite already-generated chunks. Use

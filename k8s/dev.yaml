@@ -53,13 +53,19 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /pvc
+          # The build and gametest locks are separate on purpose, so a build and a test run can
+          # both be at their peak at the same time — and the dev server is up underneath them.
+          # The three memory ceilings are therefore sized to sit alongside each other rather than
+          # one at a time: 5 + 7 + 3 fits the eero-pc node's 15.5Gi with room for k3s itself. A
+          # ceiling that only holds when nothing else is running fails as an OOM kill in the
+          # middle of a run, which reads as a flaky test rather than as a full node.
           resources:
             requests:
               cpu: "1"
               memory: 2Gi
             limits:
               cpu: "6"
-              memory: 8Gi
+              memory: 5Gi
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -127,13 +133,16 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /pvc
+          # The largest of the three, because a client GameTest run is three JVMs at once: gradle,
+          # the dedicated test server and a real Minecraft client. See the build pod above for how
+          # the three ceilings are sized against each other.
           resources:
             requests:
               cpu: "1"
               memory: 2Gi
             limits:
               cpu: "6"
-              memory: 8Gi
+              memory: 7Gi
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -172,8 +181,11 @@ spec:
               value: "26.3"
             - name: FABRIC_LOADER_VERSION
               value: "0.19.5"
+            # 2G, not 3G: the heap has to fit inside the pod's memory limit with the JVM's own
+            # non-heap overhead on top, or the kernel OOM-kills the server rather than the JVM
+            # collecting. See the build pod for why the limit is where it is.
             - name: MEMORY
-              value: 3G
+              value: 2G
             # Reachable only through a port-forward, so skip Mojang auth and let any
             # username in. Do not expose this server to a real network.
             - name: ONLINE_MODE
@@ -207,10 +219,10 @@ spec:
           resources:
             requests:
               cpu: "1"
-              memory: 3Gi
+              memory: 2Gi
             limits:
-              cpu: "4"
-              memory: 5Gi
+              cpu: "3"
+              memory: 3Gi
       volumes:
         - name: data
           persistentVolumeClaim:

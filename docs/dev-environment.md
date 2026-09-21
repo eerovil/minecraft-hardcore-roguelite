@@ -1,8 +1,33 @@
 # Dev environment
 
 Nothing about developing this mod runs on the Linux desktop. Gradle, the Minecraft downloads and
-the test server all live in the kubernetes cluster on the MacBook Air, so the desktop only holds
-the source and issues commands.
+the test server all live in a kubernetes cluster elsewhere, so the desktop only holds the source
+and issues commands.
+
+## Which cluster
+
+There are two, and `scripts/dev.sh` names the one it wants rather than inheriting whatever
+`kubectl config current-context` happens to say:
+
+| Context | What it is | When |
+| --- | --- | --- |
+| `eero-pc` | k3s on the eero-pc box on the LAN. 8 CPUs, 15.5 GB, x86_64. | The default. Everything below assumes it. |
+| `mac-docker-desktop` | the older `kind` cluster on the MacBook Air. 8 CPUs, 24 GB, arm64. | The fallback, when eero-pc is down or you are working from the Mac. |
+
+```sh
+scripts/dev.sh gametest                                   # eero-pc
+MHR_CONTEXT=mac-docker-desktop scripts/dev.sh gametest    # the Mac
+MHR_CONTEXT= scripts/dev.sh gametest                      # whatever context is current
+```
+
+The context is passed explicitly on every `kubectl` call the script makes. That is not
+belt-and-braces: the current context is process-wide state that another terminal or another agent
+session can change underneath you, and the failure it produces is not an error — it is a build or
+a gametest run that went to the other cluster and reported success.
+
+The two clusters share nothing. Each has its own volume, its own Gradle cache, its own gametest
+image and its own dev world, so the first command against a cluster you have not used lately
+re-downloads Minecraft.
 
 ## Shape of it
 
@@ -198,19 +223,26 @@ into an image now,
 [`k8s/gametest.Dockerfile`](../k8s/gametest.Dockerfile), and the pod's startup script is down to
 making directories and sleeping.
 
-Building it is the one thing that cannot be done from this machine. The only node is the Mac, it
-is arm64, and this desktop is x86_64 — so the image is built natively on the Mac rather than
-cross-built under qemu here. `scripts/dev.sh image` does not build anything; it prints the command
-to run **on the Mac**, generated from the Dockerfile so the Dockerfile stays the only copy of what
-goes into the image.
+Building it is the one thing that cannot be done from this machine. There is no registry (see
+below), so the image has to be handed to the cluster node's own containerd — and the node is never
+this desktop. `scripts/dev.sh image` therefore does not build anything; it prints the command to
+run **on the node**, generated from the Dockerfile so the Dockerfile stays the only copy of what
+goes into the image. It prints a different recipe per context, because the two nodes take an image
+by different routes:
+
+- **eero-pc** is a k3s box, so the image is built with `podman` and imported with
+  `podman save … | sudo k3s ctr -n k8s.io images import -`. Only the import needs root.
+- **the Mac** is a `kind` cluster whose node is a container on Docker, so the image is built for
+  `linux/arm64` and imported with `docker save … | docker exec desktop-control-plane ctr …`, which
+  is exactly what `kind load docker-image` does.
 
 ```sh
 # 1. bump the tag in k8s/dev.yaml if the Dockerfile changed
-# 2. print the build command and run what it prints, on the Mac
+# 2. print the build command, and run what it prints on the cluster node
 scripts/dev.sh image
 # 3. put the new tag in the cluster and wait for the pod
-kubectl apply -f k8s/dev.yaml
-kubectl -n mhr-dev rollout status deploy/mhr-gametest --timeout=5m
+kubectl --context eero-pc apply -f k8s/dev.yaml
+kubectl --context eero-pc -n mhr-dev rollout status deploy/mhr-gametest --timeout=5m
 ```
 
 `apply`, not `rollout restart`. A restart rolls the deployment as the cluster already has it, so
@@ -218,13 +250,11 @@ it would faithfully start the old tag again; the new tag only exists in your loc
 `k8s/dev.yaml` until something applies it.
 
 **There is no registry, and that is deliberate.** The command imports the built image straight
-into the node container's containerd (`docker save … | docker exec desktop-control-plane ctr -n
-k8s.io images import -`), which is exactly what `kind load docker-image` does and works because
-this is a kind cluster whose node is a container on the Mac's Docker. An in-cluster registry was
-the other option and is worse here: containerd refuses plain-HTTP registries even on `localhost`,
-unlike the old Docker daemon, so it would need either a TLS certificate or a `hosts.toml` dropped
-on the node — and Docker Desktop tends to reset node-level configuration across restarts. The
-import route leaves no standing infrastructure to keep alive.
+into the node's containerd. An in-cluster registry was the other option and is worse here:
+containerd refuses plain-HTTP registries even on `localhost`, unlike the old Docker daemon, so it
+would need either a TLS certificate or a `hosts.toml` dropped on the node — on *each* node, now
+that there are two, and Docker Desktop tends to reset node-level configuration across restarts
+anyway. The import route leaves no standing infrastructure to keep alive.
 
 Two consequences worth knowing:
 
@@ -863,10 +893,10 @@ podman run --rm -v "$PWD:/w:ro" -w /w docker.io/library/bash:3.2 bash -n scripts
 
 ## Joining the server
 
-The server is not exposed outside the cluster. On the **Mac**:
+The server is not exposed outside the cluster. On whichever machine you want to play from:
 
 ```sh
-kubectl -n mhr-dev port-forward svc/mhr-server 25565:25565
+kubectl --context eero-pc -n mhr-dev port-forward svc/mhr-server 25565:25565
 ```
 
 Then add a server in Minecraft pointing at `localhost:25565`.
@@ -1250,15 +1280,29 @@ lands and the tests run on flat ground where there is nowhere else for it to go:
 
 ## Resource use
 
-The Mac node has 8 CPUs and 24 GB. The build pod is capped at 6 CPU / 8 GB and the server at
-4 CPU / 5 GB, both well inside that with room for whatever else the Mac is doing. `scripts/dev.sh down`
-removes both pods but keeps the volume, so bringing it back is fast.
+The eero-pc node has 8 CPUs and 15.5 GB, which is the tighter of the two clusters — the Mac has
+24 GB. The memory ceilings are sized to hold *simultaneously* rather than one at a time: build
+5 GB, gametest 7 GB, server 3 GB, which is 15 GB with the rest left to k3s. That matters because
+the build and gametest locks are separate on purpose, so a build and a test run can both be at
+their peak while the dev server is up underneath them. A ceiling that only holds when nothing else
+is running does not fail as "the node is full" — it fails as an OOM kill partway through a test
+run, which reads as a flaky test.
+
+The dev server's heap is 2 GB inside its 3 GB pod, leaving room for the JVM's non-heap overhead.
+If you raise one, raise the other.
+
+There is one manifest for both clusters, so applying it to the Mac gives the Mac these ceilings
+too — 9 GB below what its node could carry. That is deliberate: one set of numbers that is right
+on the tighter node and merely generous on the other beats two manifests that drift apart.
+
+`scripts/dev.sh down` removes the pods but keeps the volume, so bringing it back is fast.
 
 ## Known gaps
 
 - Client-side behaviour is tested by the client GameTests in the `mhr-gametest` pod, not by hand —
   see [Automated gameplay tests](#automated-gameplay-tests). There is still no client you can *look*
-  at: for exploring by eye you run the real Minecraft client on the Mac through the port-forward.
+  at: for exploring by eye you run the real Minecraft client on your own machine through the
+  port-forward.
 - The mouse button is `InputConstants.MOUSE_BUTTON_LEFT`, which is **1** in 26.3, not 0. 26.3
   takes its input from SDL and SDL numbers buttons from one. Pressing 0 presses nothing at all and
   the test then fails somewhere much later, so it is worth knowing before writing the next one.
@@ -1290,5 +1334,6 @@ removes both pods but keeps the volume, so bringing it back is fast.
   image, see [The gametest image](#the-gametest-image).
 - The Gradle `runServer`/`runClient` dev tasks from Loom are not used here; the mod is tested as a
   built jar against a real server, which is closer to how it will ship but slower to iterate.
-- The cluster is a `kind` cluster with no port mappings, hence the port-forward. Exposing 25565 on
-  the Mac's Tailscale address would mean recreating the cluster.
+- Neither cluster exposes 25565 to the LAN, hence the port-forward. On the Mac it is a `kind`
+  cluster with no port mappings, so exposing it would mean recreating the cluster; on eero-pc a
+  NodePort would work but nobody has needed one.
