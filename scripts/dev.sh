@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drive the dev environment running in the Mac kubernetes cluster.
+# Drive the dev environment running in the eero-pc kubernetes cluster.
 #
 # Nothing here builds or runs Minecraft locally — the whole point is to keep that
 # off this machine. See docs/dev-environment.md.
@@ -7,6 +7,32 @@ set -euo pipefail
 
 NS=mhr-dev
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# --- which cluster ------------------------------------------------------------------------
+#
+# Named here rather than taken from whatever `kubectl config current-context` happens to say.
+# The ambient context is process-wide state that anything can change — another terminal, an
+# agent session, a half-finished experiment — and the failure it produces is a build or a
+# gametest run that quietly went to the wrong cluster and reported success. So every kubectl
+# call below carries the context explicitly.
+#
+#   eero-pc             the k3s box on the LAN. The default, and where the work happens.
+#   mac-docker-desktop  the older kind cluster on the MacBook Air. The fallback.
+#
+# MHR_CONTEXT= (empty) opts back out and uses the ambient context, for a cluster neither of
+# those names.
+MHR_CONTEXT="${MHR_CONTEXT-eero-pc}"
+
+# Shadowing the name is deliberate: there are some forty call sites and every one of them
+# wants the context. `command kubectl` is the real binary, so this does not recurse.
+kubectl() {
+	if [[ -n "$MHR_CONTEXT" ]]; then
+		command kubectl --context "$MHR_CONTEXT" "$@"
+	else
+		command kubectl "$@"
+	fi
+}
+
 # Where the source tree lands in the build pod. The volume is shared, so a test that must not be
 # disturbed by someone else's `go` can point at a directory of its own:
 #   MHR_WORKSPACE=/pvc/workspace-mine scripts/dev.sh build
@@ -20,12 +46,14 @@ usage() {
 Usage: scripts/dev.sh <command>
 
   image         Print the command that builds the gametest image and loads it into the
-                cluster node. It has to run on the Mac — see docs/dev-environment.md.
+                cluster node. It has to run on that node — see docs/dev-environment.md.
   up            Create the namespace, volume and both deployments, then wait for them
   sync          Copy the working tree into the build pod
   build         Run `gradle build` in the build pod (sync first)
   deploy        Put the freshly built jar in the server's mods/ and restart the server
   go            sync + build + deploy, the normal inner loop
+  client        sync + build, then install the mod jar and its Fabric API into the
+                Minecraft client's mods/ on this machine, for playing by hand
   gametest      Run the automated gameplay verification headless in a pod of its own:
                 unit tests, server GameTests, client GameTests. PASS/FAIL plus artifacts.
   gametest-shell  Shell in the gametest pod
@@ -37,6 +65,15 @@ Usage: scripts/dev.sh <command>
   status        What is running and how far along it is
   down          Delete the deployments but keep the volume
   nuke          Delete everything including the volume
+
+`client` installs into $HOME/Library/Application Support/minecraft/mods on a Mac. Any other
+launcher or instance, and any other operating system, needs the directory naming itself:
+
+  MHR_CLIENT_MODS_DIR=/path/to/instance/mods scripts/dev.sh client
+
+Everything runs against the `eero-pc` kube context. The MacBook Air cluster is the fallback:
+
+  MHR_CONTEXT=mac-docker-desktop scripts/dev.sh gametest
 
 The cluster is shared. Commands that use a pod's workspace take that pod's lock and wait for it
 rather than running on top of each other; MHR_LOCK_WAIT (seconds) bounds the wait. `shell`,
@@ -85,7 +122,9 @@ stage_in_pod() {
 	if [[ -n "${2:-}" ]]; then
 		read -r -a as <<<"$2"
 	fi
-	kubectl -n "$NS" exec -i "$pod" -- "${as[@]}" bash -c \
+	# `${as[@]+...}` rather than plain `"${as[@]}"`: under `set -u` bash 3.2 — which is the bash
+	# macOS ships, and `client` runs on the Mac — calls an empty array an unbound variable.
+	kubectl -n "$NS" exec -i "$pod" -- ${as[@]+"${as[@]}"} bash -c \
 		"f=\$(mktemp /pvc/.mhr-XXXXXXXX$suffix) && cat >\"\$f\" && echo \"\$f\""
 }
 
@@ -231,7 +270,7 @@ run_locked() {
 	local pod="$1" name="$2" as="${3:-}" step="${4:-}"
 	local lock="/pvc/.mhr-lock-$name"
 	local owner="${USER:-someone}@$(hostname -s 2>/dev/null || echo unknown), started $(date '+%H:%M:%S')"
-	local body work runner tmp fd status=0
+	local body work runner tmp status=0
 	body="$(cat)"
 
 	work="$(printf '%s\n' "$body" | stage_in_pod "$pod" "$as" .sh)"
@@ -246,22 +285,25 @@ run_locked() {
 	# anywhere here is our death going unnoticed in the pod, with the lock still held. The control
 	# half writes to the fifo by name when it has something to say, which is why it can let go of
 	# the descriptor and still be heard.
+	#
+	# Descriptor 7 by number rather than `exec {fd}<>`, which needs bash 4.1 and so is not available
+	# on the bash macOS ships. Nothing else in this script uses 7.
 	tmp="$(mktemp -d)"
 	mkfifo "$tmp/hold"
-	exec {fd}<>"$tmp/hold"
+	exec 7<>"$tmp/hold"
 
 	if [[ -n "$step" ]]; then
-		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" 2>&1 {fd}>&- \
-			| lock_control "$step" "$tmp/hold" "$tmp/step-status" {fd}>&-
+		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" 2>&1 7>&- \
+			| lock_control "$step" "$tmp/hold" "$tmp/step-status" 7>&-
 		status="${PIPESTATUS[0]}"
 		if [[ -s "$tmp/step-status" ]]; then
 			status="$(cat "$tmp/step-status")"
 		fi
 	else
-		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" {fd}>&- || status=$?
+		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" 7>&- || status=$?
 	fi
 
-	exec {fd}>&-
+	exec 7>&-
 	rm -rf "$tmp"
 
 	if ((status == LOCK_BUSY_STATUS)); then
@@ -285,15 +327,24 @@ require_build_pod() {
 	echo "$pod"
 }
 
-# The gametest image is built on the Mac, because the only cluster node is the Mac and it is
-# arm64 while this machine is x86_64. There is no registry anywhere: the built image is imported
-# straight into the node container's containerd, which is what `kind load docker-image` does and
-# what Docker Desktop's kind-based kubernetes leaves room for. containerd refuses plain-HTTP
-# registries even on localhost, so an in-cluster registry would need a certificate or a
-# node-level hosts.toml that Docker Desktop resets — this route needs neither.
+# The gametest image is built on the cluster node itself, and this command only prints the recipe
+# for doing it. That is not laziness about automating it: there is no registry anywhere, so the
+# image has to be handed to the node's containerd directly, and the node is never this machine.
+# containerd refuses plain-HTTP registries even on localhost, so standing one up would need a
+# certificate or node-level configuration on every cluster — this route needs neither. Run the
+# printed command on the node and come back.
 #
 # The command is generated rather than kept as a second file so that k8s/gametest.Dockerfile
 # stays the only copy of what goes into the image.
+#
+# Which node, and therefore which recipe, follows the context:
+#
+#   eero-pc             a k3s box. Build with podman and import with `k3s ctr`, which is the
+#                       supported way to put an image into k3s' own containerd.
+#   mac-docker-desktop  a kind cluster whose node is a container on the Mac's Docker, so the
+#                       import goes through `docker exec` into that container — which is exactly
+#                       what `kind load docker-image` does. arm64, because the node is Apple
+#                       Silicon while this machine is x86_64.
 cmd_image() {
 	local tag dockerfile
 	dockerfile="$REPO_ROOT/k8s/gametest.Dockerfile"
@@ -302,7 +353,10 @@ cmd_image() {
 		echo "No mhr-gametest tag in k8s/dev.yaml" >&2
 		exit 1
 	fi
-	cat <<EOF
+
+	if [[ "$MHR_CONTEXT" == mac-docker-desktop ]]; then
+		echo "# Run this on the Mac:" >&2
+		cat <<EOF
 set -eu
 # Build $tag for the cluster node and import it into that node's containerd.
 docker inspect --format 'node container: {{.State.Status}}' desktop-control-plane
@@ -315,6 +369,34 @@ rm -rf "\$ctx"
 docker save $tag | docker exec -i desktop-control-plane ctr -n k8s.io images import -
 # Prove it landed. grep fails the whole command if it did not.
 docker exec desktop-control-plane ctr -n k8s.io images ls | grep '$tag'
+EOF
+		return
+	fi
+
+	# The name has to be spelled out in full. containerd stores images under a normalized
+	# reference, and the kubelet asking for `mhr-gametest:1` is asking for
+	# `docker.io/library/mhr-gametest:1` — docker tags it that way implicitly, podman does not:
+	# it prefixes a locally-built image with `localhost/` instead. An image imported under the
+	# podman name lands in containerd perfectly and the pod still sits on ErrImageNeverPull,
+	# because the two are simply different images as far as the kubelet is concerned.
+	local ref="docker.io/library/$tag"
+	echo "# Run this on the $MHR_CONTEXT node itself (it needs that node's containerd):" >&2
+	cat <<EOF
+set -eu
+# k3s installs outside the PATH sudo keeps, so find it before needing root.
+k3s=\$(command -v k3s || ls /usr/local/bin/k3s /usr/bin/k3s /opt/bin/k3s 2>/dev/null | head -1)
+[ -n "\$k3s" ] || { echo "No k3s binary found — is this the right machine?" >&2; exit 1; }
+
+ctx=\$(mktemp -d)
+cat > "\$ctx/Dockerfile" <<'MHR_DOCKERFILE'
+$(cat "$dockerfile")
+MHR_DOCKERFILE
+# Rootless is fine for the build; only handing the result to containerd needs root.
+podman build -t $ref "\$ctx"
+rm -rf "\$ctx"
+podman save $ref | sudo "\$k3s" ctr -n k8s.io images import -
+# Prove it landed, under the name the kubelet will ask for. grep fails the whole command if not.
+sudo "\$k3s" ctr -n k8s.io images ls | grep '$ref'
 EOF
 }
 
@@ -434,6 +516,122 @@ cmd_build_pod() {
 	local hold=""
 	((restart)) && hold=rollout_server
 	run_locked "$pod" build "" "$hold" <<<"set -euo pipefail"$'\n'"$body"
+}
+
+# --- the client jars ----------------------------------------------------------------------
+#
+# `client` is `build` with a different destination: the same sync, the same lock, the same gradle,
+# and then the finished jars come out to this machine instead of going to the server's mods/.
+# Nothing is built here — this machine only receives files.
+
+gradle_prop() {
+	grep "^$1=" "$REPO_ROOT/gradle.properties" | cut -d= -f2
+}
+
+# Where the finished jars go. The Mac's default launcher directory is the only path we are willing
+# to guess, and even that one has to exist already: every launcher keeps its instances somewhere of
+# its own, and a mods/ we invent is a directory nothing ever reads, which looks exactly like a mod
+# that does not work.
+client_mods_dir() {
+	local dir="${MHR_CLIENT_MODS_DIR:-}"
+	if [[ -z "$dir" ]]; then
+		if [[ "$(uname -s)" != Darwin ]]; then
+			cat >&2 <<EOF
+This is $(uname -s), not a Mac, so there is no launcher path worth guessing. Say where the mods go:
+  MHR_CLIENT_MODS_DIR=/path/to/instance/mods scripts/dev.sh client
+EOF
+			exit 1
+		fi
+		dir="$HOME/Library/Application Support/minecraft/mods"
+	fi
+	if [[ ! -d "$dir" ]]; then
+		cat >&2 <<EOF
+No such directory: $dir
+
+Nothing has been created, because a guessed instance is worse than none. Either start the
+launcher's Fabric $(gradle_prop minecraft_version) profile once so it makes its own mods/, or name the instance you
+actually play:
+  MHR_CLIENT_MODS_DIR=/path/to/instance/mods scripts/dev.sh client
+EOF
+		exit 1
+	fi
+	printf '%s\n' "$dir"
+}
+
+# The finished jars, collected into one file inside the critical section for the same reason the
+# gametest artifacts are: the workspace is shared, so another worker's build can replace
+# build/libs the moment the lock goes.
+#
+# Fabric API is cached on the volume rather than fetched every time. It only changes when
+# gradle.properties does, and the name carries the version, so a stale cache is not possible.
+remote_pack_client_jars() {
+	printf 'out=%q\nws=%q\nfabric_version=%q\n' \
+		"$1" "$WORKSPACE" "$(gradle_prop fabric_version)"
+	cat <<'EOF'
+cache=/pvc/fabric-api
+want="fabric-api-${fabric_version}.jar"
+mkdir -p "$cache"
+if [ ! -f "$cache/$want" ]; then
+	echo "Downloading $want"
+	curl -fsSL -o "$cache/$want.part" \
+		"https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/${fabric_version}/fabric-api-${fabric_version}.jar"
+	mv "$cache/$want.part" "$cache/$want"
+fi
+jar=$(ls -t "$ws"/build/libs/*.jar 2>/dev/null | grep -v -e "-sources" -e "-dev" | head -1)
+if [ -z "${jar:-}" ]; then echo "No built jar in $ws/build/libs" >&2; exit 1; fi
+d=$(mktemp -d)
+cp "$jar" "$cache/$want" "$d/"
+tar -C "$d" -cf "$out" .
+rm -rf "$d"
+echo "Packed $(basename "$jar") and $want"
+EOF
+}
+
+# Ours and the Fabric API are replaced; every other mod in the directory is somebody's choice and
+# is left alone. Both jars are copied in under names Minecraft does not load before anything is
+# removed, so a transfer that fails halfway leaves the client exactly as it was.
+install_client_jars() {
+	local dir="$1" from="$2" jar name
+	for jar in "$from"/*.jar; do
+		cp "$jar" "$dir/.mhr-incoming-$(basename "$jar")"
+	done
+	rm -f "$dir"/hardcore-roguelite*.jar "$dir"/fabric-api-*.jar
+	for jar in "$from"/*.jar; do
+		name="$(basename "$jar")"
+		mv "$dir/.mhr-incoming-$name" "$dir/$name"
+		echo "Installed $name"
+	done
+}
+
+cmd_client() {
+	local dir pod pack tmp
+	# Before the build, not after it: a destination nobody can write to is worth knowing about
+	# without waiting for gradle first.
+	dir="$(client_mods_dir)"
+	pod="$(require_build_pod)"
+	stage_source "$pod"
+	pack="$(</dev/null stage_in_pod "$pod" "" .tar)"
+
+	run_locked "$pod" build "" <<EOF
+set -euo pipefail
+$(remote_install_source "$WORKSPACE" "$STAGED_TARBALL")
+$(remote_gradle_build)
+$(remote_pack_client_jars "$pack")
+EOF
+
+	# Out of the pod after the lock has gone; the tarball is its own file, so the next run cannot
+	# pull it out from under this copy.
+	tmp="$(mktemp -d)"
+	kubectl -n "$NS" exec -i "$pod" -- bash -c "cat '$pack'; rm -f '$pack'" | tar -C "$tmp" -xf -
+	install_client_jars "$dir" "$tmp"
+	rm -rf "$tmp"
+
+	echo
+	echo "Into: $dir"
+	echo "Launch the Minecraft $(gradle_prop minecraft_version) profile with Fabric Loader $(gradle_prop loader_version) or newer."
+	echo "Then, to play against the dev server:"
+	echo "  kubectl -n $NS port-forward svc/mhr-server 25565:25565"
+	echo "and join localhost:25565 (offline mode, any username)."
 }
 
 rollout_server() {
@@ -716,8 +914,8 @@ cmd_newworld() {
 cmd_status() {
 	kubectl -n "$NS" get pods -o wide
 	echo
-	echo "Connect from the Mac with:"
-	echo "  kubectl -n $NS port-forward svc/mhr-server 25565:25565"
+	echo "Connect from the machine you play on with:"
+	echo "  kubectl${MHR_CONTEXT:+ --context $MHR_CONTEXT} -n $NS port-forward svc/mhr-server 25565:25565"
 	echo "then join localhost:25565 (offline mode, any username)."
 }
 
@@ -736,6 +934,7 @@ case "${1:-}" in
 	build) cmd_build_pod sync build ;;
 	deploy) cmd_build_pod deploy ;;
 	go) cmd_build_pod sync build deploy ;;
+	client) cmd_client ;;
 	gametest) shift; cmd_gametest "$@" ;;
 	gametest-shell) cmd_gametest_shell ;;
 	logs) cmd_logs ;;
