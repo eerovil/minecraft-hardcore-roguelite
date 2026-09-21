@@ -47,13 +47,38 @@ public final class ShopServer {
 		UnlockEffects.onChange(ShopServer::sendToAll);
 	}
 
-	/** Put the screen in front of one player. {@code /mhr shop} is the only caller today. */
-	public static void open(ServerPlayer player) {
+	/**
+	 * Put the screen in front of one player. {@code /mhr shop} is the only caller today.
+	 *
+	 * <p>The dedicated server is joinable without the client mod, so a player can ask for a screen
+	 * their client has no way of drawing. That gets said out loud rather than dropped: asking for
+	 * the shop and getting nothing at all is indistinguishable from the shop being broken.
+	 *
+	 * @return false if the player was told the shop cannot be opened instead of being shown it.
+	 */
+	public static boolean open(ServerPlayer player) {
+		if (!canReceive(player)) {
+			player.sendSystemMessage(ShopText.clientModRequired());
+			return false;
+		}
 		sendTo(player, true);
+		return true;
 	}
 
+	/** Whether this player's client has told us it can receive the shop, i.e. whether it has the mod. */
+	public static boolean canReceive(ServerPlayer player) {
+		return ServerPlayNetworking.canSend(player, ShopStatePayload.TYPE);
+	}
+
+	/**
+	 * Tell one client what the shop holds now, if it is listening.
+	 *
+	 * <p>Silent when it is not, deliberately: this is the background refresh, sent on joining and
+	 * after every change, and a client without the mod has not asked for any of it. The player
+	 * asking for the screen themselves is {@link #open(ServerPlayer)}, which does answer.
+	 */
 	public static void sendTo(ServerPlayer player, boolean open) {
-		if (!ServerPlayNetworking.canSend(player, ShopStatePayload.TYPE)) {
+		if (!canReceive(player)) {
 			return;
 		}
 		List<Offer> offers = Catalogue.offers();
