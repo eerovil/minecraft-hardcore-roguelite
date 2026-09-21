@@ -64,6 +64,22 @@ final class TestRuns {
 		settle(server);
 	}
 
+	/**
+	 * The same, on a named seed, for a scenario whose claim is about the terrain.
+	 *
+	 * <p>{@code /mhr run start <seed>} exists for exactly this — see {@link
+	 * fi.vilpponen.mhr.run.RunCommand}. A scenario that asserts anything about what generated around
+	 * spawn has to say which world it means, or it is asking a different question every run.
+	 *
+	 * <p>Whether two runs differ is still asked of the record rather than assumed from the argument,
+	 * so naming the seeds does not weaken the freshness claim: two distinct fixed seeds prove a
+	 * different world exactly as well as two random ones, and they prove it the same way every time.
+	 */
+	static void start(TestDedicatedServerContext server, long seed) {
+		server.runCommand("mhr run start " + seed);
+		settle(server);
+	}
+
 	/** End a run without anybody having to die for it. */
 	static void end(TestDedicatedServerContext server) {
 		server.runCommand("mhr run end");

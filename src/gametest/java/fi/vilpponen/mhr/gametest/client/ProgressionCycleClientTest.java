@@ -62,8 +62,16 @@ import org.slf4j.LoggerFactory;
  *       the left mouse button going down, charged against currency that came from inside run 1.
  * </ul>
  *
- * <p>The seed is not fixed. "Each run is a fresh world" is the criterion, so naming a seed would
- * test the opposite of it.
+ * <p>Both runs are generated from a named seed. This test asserts what is standing around each
+ * run's spawn — no chest in run 1, exactly one holding sixteen bread in run 2 — and a scenario
+ * that asks about terrain has to say which terrain it means, or it is asking a different
+ * question every time it runs. {@code /mhr run start <seed>} exists for this.
+ *
+ * <p>Naming them costs the freshness claim nothing, which is the thing that looks wrong at first
+ * glance. "Run 2 is a different world" is never read off the argument: it is the record's own
+ * seed differing, the overworld reporting that seed, and run 1's three marker blocks being gone.
+ * Two distinct fixed seeds prove that exactly as well as two random ones, and prove it the same
+ * way on every run.
  *
  * <p>See {@code docs/dev-environment.md} for how to run this, and {@code docs/manual-smoke-test.md}
  * for the same loop done by hand.
@@ -94,6 +102,15 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 
 	/** How much a run pays in this test. Enough for both purchases and some change. */
 	private static final int EARNED_IN_RUN_ONE = 20;
+
+	/**
+	 * The two worlds this test is about, named so they are the same two every run.
+	 *
+	 * <p>Distinct, because run 2 differing from run 1 is one of the things being proved. Arbitrary
+	 * otherwise — nothing here wants a particular biome, only the same one twice.
+	 */
+	private static final long RUN_ONE_SEED = 45_000_001L;
+	private static final long RUN_TWO_SEED = 45_000_002L;
 
 	private final List<String> failures = new ArrayList<>();
 
@@ -188,12 +205,17 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
 		check(lobbyReached, "the cycle never reached the lobby, so there is no run to start");
 
-		TestRuns.start(server);
+		TestRuns.start(server, RUN_ONE_SEED);
 		connection.waitForChunksRender();
 
 		RunRecord record = TestRuns.record(server);
 		check(record.phase() == RunPhase.RUNNING && record.runId() == 1,
 				"the first run must be run 1 and in progress, and the record says " + record.describe());
+		// The terrain assertions below are about one particular world, so the run has to have
+		// taken the seed it was handed rather than rolled its own.
+		check(record.seed() == RUN_ONE_SEED,
+				"run 1 must be generated from the seed the test named, " + RUN_ONE_SEED
+						+ ", and the record says " + record.seed());
 		check(TestRuns.playerDimension(server, connection).equals("minecraft:overworld"),
 				"a run starts in its overworld, and the player is in "
 						+ TestRuns.playerDimension(server, connection));
@@ -360,14 +382,20 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection, TestShop shop) {
 		check(purchasesMade, "nothing was bought, so there is nothing for run 2 to be better for");
 
-		TestRuns.start(server);
+		TestRuns.start(server, RUN_TWO_SEED);
 		connection.waitForChunksRender();
 
 		RunRecord record = TestRuns.record(server);
 		check(record.phase() == RunPhase.RUNNING && record.runId() == 2,
 				"the second run must be run 2 and in progress, and the record says " + record.describe());
 
-		// Fresh: a new seed, and none of run 1's chunks under any of the three dimension keys.
+		check(record.seed() == RUN_TWO_SEED,
+				"run 2 must be generated from the seed the test named, " + RUN_TWO_SEED
+						+ ", and the record says " + record.seed());
+
+		// Fresh: a different seed, and none of run 1's chunks under any of the three dimension
+		// keys. Asked of the record rather than taken from the argument — the point is that the
+		// loop really moved to another world, not that the test asked it to.
 		check(record.seed() != firstSeed,
 				"each run must be generated from a fresh seed, and run 2 reused " + firstSeed);
 		long overworldSeed = server.computeOnServer(minecraftServer ->
