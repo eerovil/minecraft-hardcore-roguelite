@@ -92,7 +92,9 @@ stage_in_pod() {
 	if [[ -n "${2:-}" ]]; then
 		read -r -a as <<<"$2"
 	fi
-	kubectl -n "$NS" exec -i "$pod" -- "${as[@]}" bash -c \
+	# `${as[@]+...}` rather than plain `"${as[@]}"`: under `set -u` bash 3.2 — which is the bash
+	# macOS ships, and `client` runs on the Mac — calls an empty array an unbound variable.
+	kubectl -n "$NS" exec -i "$pod" -- ${as[@]+"${as[@]}"} bash -c \
 		"f=\$(mktemp /pvc/.mhr-XXXXXXXX$suffix) && cat >\"\$f\" && echo \"\$f\""
 }
 
@@ -238,7 +240,7 @@ run_locked() {
 	local pod="$1" name="$2" as="${3:-}" step="${4:-}"
 	local lock="/pvc/.mhr-lock-$name"
 	local owner="${USER:-someone}@$(hostname -s 2>/dev/null || echo unknown), started $(date '+%H:%M:%S')"
-	local body work runner tmp fd status=0
+	local body work runner tmp status=0
 	body="$(cat)"
 
 	work="$(printf '%s\n' "$body" | stage_in_pod "$pod" "$as" .sh)"
@@ -253,22 +255,25 @@ run_locked() {
 	# anywhere here is our death going unnoticed in the pod, with the lock still held. The control
 	# half writes to the fifo by name when it has something to say, which is why it can let go of
 	# the descriptor and still be heard.
+	#
+	# Descriptor 7 by number rather than `exec {fd}<>`, which needs bash 4.1 and so is not available
+	# on the bash macOS ships. Nothing else in this script uses 7.
 	tmp="$(mktemp -d)"
 	mkfifo "$tmp/hold"
-	exec {fd}<>"$tmp/hold"
+	exec 7<>"$tmp/hold"
 
 	if [[ -n "$step" ]]; then
-		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" 2>&1 {fd}>&- \
-			| lock_control "$step" "$tmp/hold" "$tmp/step-status" {fd}>&-
+		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" 2>&1 7>&- \
+			| lock_control "$step" "$tmp/hold" "$tmp/step-status" 7>&-
 		status="${PIPESTATUS[0]}"
 		if [[ -s "$tmp/step-status" ]]; then
 			status="$(cat "$tmp/step-status")"
 		fi
 	else
-		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" {fd}>&- || status=$?
+		kubectl -n "$NS" exec -i "$pod" -- bash "$runner" <"$tmp/hold" 7>&- || status=$?
 	fi
 
-	exec {fd}>&-
+	exec 7>&-
 	rm -rf "$tmp"
 
 	if ((status == LOCK_BUSY_STATUS)); then
