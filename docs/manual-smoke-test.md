@@ -15,30 +15,53 @@ in an issue.
 | Fabric Loader | 0.19.5 or newer | `gradle.properties`, `fabric.mod.json` |
 | Fabric API | 0.161.0+26.3 | `gradle.properties` — **required**, the mod does not run without it |
 | Java to play on | 21 or newer | `build.gradle` |
-| JDK to build with | 25 | Loom refuses to run on less — `docs/dev-environment.md` |
 
-There is no gradle wrapper in this repository, so building locally needs a system Gradle running on
-JDK 25.
+Nothing here builds on your own machine. The mod is built in the cluster's build pod, the same as
+every other build in this project, and you copy the finished jars out — you do not need a JDK or a
+Gradle on the Mac at all.
 
-## 1. Get the jar
-
-The normal path is the cluster, because that is where everything else about this project builds:
+## 1. Build it in the cluster and copy the jars out
 
 ```sh
 scripts/dev.sh go          # sync + build + deploy + restart the dev server
 ```
 
-That also puts the jar and Fabric API into the dev server's `mods/` for you, which is the quickest
-way to *play* it — see [option A](#2a-play-on-the-dev-server) below.
+`go` is `sync` + `build` + `deploy`. If you only want the jar and not a server restart,
+`scripts/dev.sh build` is enough.
 
-To get a jar in your hand instead:
+That leaves two jars on the cluster's volume, and the client needs **both** of them:
+
+| | Where it lands in the cluster |
+| --- | --- |
+| the mod | `/pvc/workspace/build/libs/hardcore-roguelite-0.1.0.jar` in the build pod |
+| Fabric API | `/pvc/server/mods/fabric-api-0.161.0+26.3.jar` in the build pod, put there by `deploy` |
+
+Copy them to your Minecraft instance's `mods/` folder. On the Mac:
 
 ```sh
-gradle build               # needs JDK 25
-ls build/libs/
+MODS=~/Library/Application\ Support/minecraft/mods      # or your launcher's instance
+mkdir -p "$MODS"
+
+BUILD=$(kubectl -n mhr-dev get pod -l app=mhr-build -o jsonpath='{.items[0].metadata.name}')
+
+kubectl -n mhr-dev cp \
+  "$BUILD:/pvc/workspace/build/libs/hardcore-roguelite-0.1.0.jar" \
+  "$MODS/hardcore-roguelite-0.1.0.jar"
+
+kubectl -n mhr-dev cp \
+  "$BUILD:/pvc/server/mods/fabric-api-0.161.0+26.3.jar" \
+  "$MODS/fabric-api-0.161.0+26.3.jar"
 ```
 
-The one you want is `build/libs/hardcore-roguelite-0.1.0.jar`. Ignore `-sources`.
+Two things to know about those paths. `deploy` is what downloads Fabric API, so run `go` rather
+than `build` the first time or the second copy has nothing to fetch. And if you build into a
+workspace of your own — `MHR_WORKSPACE=/pvc/workspace-mine scripts/dev.sh build` — the jar is under
+that directory instead.
+
+Ignore the `-sources` jar next to the mod; it is not a mod.
+
+Each time you change the code, run `scripts/dev.sh go` and copy the mod jar again. Fabric API only
+changes when `gradle.properties` does.
 
 ## 2a. Play on the dev server
 
@@ -50,9 +73,9 @@ On the Mac that runs the cluster:
 kubectl -n mhr-dev port-forward svc/mhr-server 25565:25565
 ```
 
-Then, in a Fabric 26.3 client with Fabric API **and this mod's jar** in its `mods/` folder, add a
-server at `localhost:25565` and join. The client needs the mod too: the shop screen and the
-inventory padlocks are client-side.
+Then, in a Fabric 26.3 client with both jars from step 1 in its `mods/` folder, add a server at
+`localhost:25565` and join. The client needs the mod too: the shop screen and the inventory
+padlocks are client-side.
 
 Op yourself, because every `/mhr` command needs permission level 2:
 
@@ -68,8 +91,8 @@ their jar.
 ## 2b. Play in singleplayer
 
 Not a path the repository verifies, but there is nothing in the mod that needs a dedicated server.
-Make an ordinary Fabric 26.3 instance, put `hardcore-roguelite-0.1.0.jar` and
-`fabric-api-0.161.0+26.3.jar` in its `mods/`, and create a **new world with cheats allowed** —
+Make an ordinary Fabric 26.3 instance, put the two jars you copied in step 1 in its `mods/`, and
+create a **new world with cheats allowed** —
 without cheats you cannot run `/mhr` at all, and there is no other way to start a run yet.
 
 Hardcore is not required. The mod cancels vanilla's death handling itself, so the roguelite rules
