@@ -56,10 +56,12 @@ Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks im
   below. Every entry is an icon with its price under it, hovering explains what it does, and
   clicking buys it. Prices come from the balance data and what you own comes from the permanent
   progression snapshot; the server decides every purchase. Open it with `/mhr shop`.
+- **earning the currency** — finishing a vanilla advancement inside a run pays what the balance data
+  prices it at, and it is paid the instant it is earned, so a run that ends badly keeps what it
+  banked. Every run can earn the same advancements again, because a run is a new world and starts
+  with none. The purse is drawn in the top corner of the screen the whole time.
 
-**Currency is not earned yet.** The purse is real and permanent and the shop spends it, but nothing
-in gameplay pays into it, because how currency is earned is still an open design question — see
-[`docs/open-questions.md`](docs/open-questions.md). Until that is settled, put currency in by hand:
+The dev command still puts currency in by hand, which is what the tests and a quick playtest use:
 
 ```
 /mhr currency             # what you have

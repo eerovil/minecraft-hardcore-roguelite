@@ -860,6 +860,31 @@ test that had deliberately gone unbounded to generate far-away terrain. That ove
 when a server starts, so it never outlives the world it was picked for. If a worldgen test suddenly
 finds empty chunks thousands of blocks out, look at the border before you look at worldgen.
 
+#### Earning the currency
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/CurrencyEarningClientTest.java` is the income
+side of the economy, played on a real dedicated server with a real client:
+
+- **an-advancement-pays-what-the-balance-table-says** — finishing `story/mine_stone` in a run adds
+  the balance file's price for it, and the new total is in the progression snapshot on disk rather
+  than only in memory.
+- **an-advancement-finished-once-pays-once** — granting the same advancement again pays nothing, and
+  neither does a second criterion of `story/obtain_armor`, which any one of four criteria finishes.
+  That second half is the one a careless hook fails: it would pay four times for one advancement.
+- **an-advancement-the-table-does-not-list-pays-nothing** — most advancements are not in the price
+  list, and the control proves the hook is reading it rather than paying for everything.
+- **nothing-is-earned-outside-a-run** — the same advancement finished in the lobby pays nothing.
+- **the-next-run-earns-the-same-advancements-again** — the scenario the whole economy rests on. A
+  run's advancements are cleared as the player crosses into it, so run 2 pays for `mine_stone` just
+  as run 1 did.
+- **the-purse-is-on-the-screen-while-the-run-is-played** — the client's own copy of the balance
+  matches the server's with no screen open, and the shot `currency-hud-during-a-run` is the HUD
+  drawing it.
+
+Every scenario reads the purse immediately before the thing it is testing and asserts the
+difference. Asserting a total instead would pass or fail on anything else that happened to pay in
+the same run.
+
 #### The whole cycle, as one player experience
 
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/ProgressionCycleClientTest.java` is the only

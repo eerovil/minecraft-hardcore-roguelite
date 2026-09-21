@@ -88,7 +88,12 @@ on purpose: a generated copy of the whole catalogue would go stale the moment a 
 ```
 
 - **`currency.advancements`** — currency for completing a vanilla advancement, by its full id. An
-  advancement that is not listed pays nothing.
+  advancement that is not listed pays nothing, which is most of them. This is the whole income side
+  of the economy: it is paid the moment the advancement is finished inside a run, and every run can
+  earn it again because a run starts with no advancements. Retuning a number here retunes how long
+  the design's "about five reasonable runs restores vanilla" takes, so
+  `AdvancementPayoutBalanceTest` guards the statements that make it an economy at all — later
+  milestones pay better than earlier ones, and one early run earns enough to buy something.
 - **`unlocks`** — what the shop sells, keyed by stable unlock id. `price` is in currency. A
   repeatable unlock is priced once and costs that much each time it is bought. `item` is only for
   starter items — see [Starter items](#starter-items).

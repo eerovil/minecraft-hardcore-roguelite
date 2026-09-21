@@ -28,7 +28,8 @@
 			"fi.vilpponen.mhr.gametest.client.ShopClientTest",
 			"fi.vilpponen.mhr.gametest.client.LobbyIslandClientTest",
 			"fi.vilpponen.mhr.gametest.client.RunLifecycleClientTest",
-			"fi.vilpponen.mhr.gametest.client.ProgressionCycleClientTest"
+			"fi.vilpponen.mhr.gametest.client.ProgressionCycleClientTest",
+			"fi.vilpponen.mhr.gametest.client.CurrencyEarningClientTest"
 		]
 	},
 	"depends": {

@@ -212,9 +212,16 @@ rather than replacing either:
 - `Purchase.buy(id)` — the one operation that turns currency into ownership. The shop screen's click
   and `/mhr unlock` both end up here or in `UnlockState` directly; nothing else moves currency.
 
-**Currency is still not earned.** Nothing in gameplay pays into the wallet, because how it is earned
-is the blocking open question in `docs/open-questions.md`. `/mhr currency give` is a development
-stand-in. Do not add an earning rule as a side effect of another change.
+**Currency is earned by finishing advancements**, in `fi.vilpponen.mhr.earn.AdvancementPayouts`:
+one narrow hook on `PlayerAdvancements.award` tells it when an advancement is completed, and it
+pays what `currency.advancements` prices that advancement at. Nothing pays outside a run, and
+`/mhr currency give` stays as the development stand-in for putting a number where a test wants it.
+
+The part to understand before changing it is the ledger, because there isn't one. An advancement is
+completed once, and a player's advancements are cleared as they cross into a run, so "once per run"
+falls out of vanilla's own record — there is no set of paid ids to keep in step with the wallet, and
+no window in which a crash pays twice. Adding a second earning rule means answering that question
+again for the new rule; do not assume a bare `Wallet.earn` is safe to call from anywhere.
 
 `Purchase.buy` makes one authoritative decision:
 
