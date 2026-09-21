@@ -8,7 +8,8 @@ import fi.vilpponen.mhr.core.PersistenceException;
  * <p>A view over {@link Progress}, which owns everything permanent. What this adds is the two
  * questions currency gets asked — how much is there, and is it enough — and the one way it is set.
  *
- * <p><b>Nothing here earns it.</b> See {@link Progress} for why that is still open.
+ * <p>What earns it is {@link fi.vilpponen.mhr.earn.AdvancementPayouts}, which calls
+ * {@link #earn(int)} when a run finishes an advancement the balance data prices.
  */
 public final class Wallet {
 	private static final Wallet INSTANCE = new Wallet();

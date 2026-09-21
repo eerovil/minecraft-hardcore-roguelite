@@ -18,11 +18,10 @@ import net.minecraft.server.level.ServerPlayer;
  * {@link ShopServer#open(ServerPlayer)}, and the command stays for operators and for tests, which
  * need a shop they can open from anywhere.
  *
- * <p>{@code /mhr currency give} and {@code set} are the development stand-ins for earning.
- * <b>Nothing in gameplay pays out yet</b>, and deliberately so: how currency is earned is still
- * open in {@code docs/open-questions.md}, and picking a rule here would settle it by accident. The
- * balance file's {@code currency.advancements} table is the price list that decision will use, not
- * the decision itself.
+ * <p>{@code /mhr currency give} and {@code set} put a number in the purse by hand. Gameplay pays
+ * out on its own now — finishing an advancement inside a run does, through
+ * {@link fi.vilpponen.mhr.earn.AdvancementPayouts} — so this is for tests and playtests that want
+ * to start from a particular amount rather than earn their way to it.
  */
 public final class ShopCommand {
 	private ShopCommand() {

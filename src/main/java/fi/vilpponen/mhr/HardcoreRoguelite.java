@@ -7,6 +7,7 @@ import fi.vilpponen.mhr.command.ShopCommand;
 import fi.vilpponen.mhr.command.UnlockCommand;
 import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
+import fi.vilpponen.mhr.earn.AdvancementPayouts;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
 import fi.vilpponen.mhr.progression.Wallet;
 import fi.vilpponen.mhr.run.LobbyIsland;
@@ -46,6 +47,7 @@ public class HardcoreRoguelite implements ModInitializer {
 		RunLifecycle.register();
 		WorldBorders.init();
 		RunStart.register();
+		AdvancementPayouts.register();
 		ShopServer.register();
 		LobbyIsland.register();
 		ShopBlock.register();

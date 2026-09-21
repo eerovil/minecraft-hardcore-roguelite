@@ -60,8 +60,9 @@ import net.fabricmc.loader.api.FabricLoader;
  * <p>{@link fi.vilpponen.mhr.UnlockState} and {@link Wallet} are the two views feature code talks
  * to. Neither of them owns anything; this does.
  *
- * <p><b>Nothing here earns currency.</b> How it is earned is still the open design question in
- * {@code docs/open-questions.md}; the shop spends it and the dev command grants it, and that is all.
+ * <p>Nothing here decides how currency is earned. That is
+ * {@link fi.vilpponen.mhr.earn.AdvancementPayouts}, which pays for advancements finished inside a
+ * run; this only holds the number it lands on.
  */
 public final class Progress {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
