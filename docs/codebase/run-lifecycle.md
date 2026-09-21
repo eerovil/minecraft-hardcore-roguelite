@@ -472,7 +472,7 @@ it by putting a diamond block in each run dimension and requiring it to be gone 
 - `src/gametest/.../client/ProgressionCycleClientTest.java` — the loop as one player experience:
   a restricted run, a death, currency spent on a real shop screen in the lobby, and a second run
   that is both a fresh world and a better one. It is the only test that crosses all four seams in
-  one sequence, so its scenarios deliberately depend on each other in order.
+  one sequence, and it is one scenario walked in six named steps rather than six scenarios.
 
 `a-run-cannot-start-without-all-three-of-its-dimensions` is the one that needs a save in a state no
 world preset can be asked for: the nether's `LevelStem` is lifted out of the frozen registry for the

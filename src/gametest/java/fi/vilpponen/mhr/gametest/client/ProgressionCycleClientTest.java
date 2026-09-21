@@ -40,16 +40,17 @@ import org.slf4j.LoggerFactory;
  * earned inside a run that is about to be deleted, spent on a screen in the world that is never
  * deleted, and collected in the world after that.
  *
- * <p>So the scenarios run <b>in order and depend on each other on purpose</b>, which is the one
- * place this repository's usual rule has to bend: a cycle is a sequence, and a scenario that
- * re-established its own starting point would be testing the step rather than the loop. The first
- * scenario is the only one that establishes state, and it establishes it for all of them.
+ * <p>A cycle is a sequence, so this is <b>one scenario</b> —
+ * {@code the-whole-roguelite-cycle-once-round} — walked in six named steps. That is not a way of
+ * bending this repository's scenario-isolation rule; it is how the test avoids needing to. The rule
+ * is that scenario B must not depend on scenario A, and there is no B: the steps are the inside of
+ * a single scenario, which establishes its own starting point once and then does not stop being one
+ * thing half way through.
  *
- * <p>Each of the rest opens by checking that the previous step actually happened, and what that buys
- * is <em>readable</em> cascade rather than no cascade. One broken step still fails every step after
- * it and the run still reports them all — but the ones after it say "the run never ended, so there
- * is no shop step to take" instead of asserting against half-built state and reporting something
- * that looks like an unrelated second bug. The first failure in the list is the real one.
+ * <p>The first step that fails ends the cycle there. It names itself in the failure and in the
+ * screenshot, and nothing downstream runs — because everything downstream is about state that step
+ * was supposed to build, and asserting against state that was never built reports something that
+ * looks like a second, unrelated bug. One broken step is one failure, and it is the real one.
  *
  * <p>Three claims are asked the hard way, because each has a way of passing for the wrong reason:
  *
@@ -116,13 +117,7 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 	private static final long RUN_ONE_SEED = 45_000_001L;
 	private static final long RUN_TWO_SEED = 45_000_002L;
 
-	private final List<String> failures = new ArrayList<>();
-
-	/** What each step hands to the next. A cycle is a sequence; see the class comment. */
-	private boolean lobbyReached;
-	private boolean runOneRan;
-	private boolean backInTheLobby;
-	private boolean purchasesMade;
+	/** What each step hands to the next, inside the one scenario. */
 	private long firstSeed;
 	private double runOneBorder;
 	private int purseAfterBuying;
@@ -135,26 +130,23 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 				TestPlayer player = new TestPlayer(context, server, connection);
 				TestShop shop = new TestShop(context, player);
 
-				scenario(context, "the-cycle-starts-in-the-lobby-with-an-empty-profile",
-						() -> theCycleStartsInTheLobby(context, server, connection, shop));
-				scenario(context, "run-one-is-as-restricted-as-an-empty-profile-makes-it",
-						() -> runOneIsRestricted(context, server, connection));
-				scenario(context, "dying-ends-the-run-and-leaves-the-currency-behind",
-						() -> dyingEndsTheRunAndKeepsTheCurrency(context, server, connection));
-				scenario(context, "the-shop-turns-that-currency-into-permanent-unlocks",
-						() -> theShopTurnsCurrencyIntoUnlocks(context, shop));
-				scenario(context, "run-two-is-a-fresh-world-that-has-what-was-bought",
-						() -> runTwoIsFreshAndBetter(context, server, connection, shop));
-				scenario(context, "progression-outlived-both-runs-and-the-runs-did-not",
-						() -> progressionOutlivedBothRuns(context, server, connection));
+				scenario(context, "the-whole-roguelite-cycle-once-round", () -> {
+					step(context, "the-cycle-starts-in-the-lobby-with-an-empty-profile",
+							() -> theCycleStartsInTheLobby(context, server, connection, shop));
+					step(context, "run-one-is-as-restricted-as-an-empty-profile-makes-it",
+							() -> runOneIsRestricted(context, server, connection));
+					step(context, "dying-ends-the-run-and-leaves-the-currency-behind",
+							() -> dyingEndsTheRunAndKeepsTheCurrency(context, server, connection));
+					step(context, "the-shop-turns-that-currency-into-permanent-unlocks",
+							() -> theShopTurnsCurrencyIntoUnlocks(context, shop));
+					step(context, "run-two-is-a-fresh-world-that-has-what-was-bought",
+							() -> runTwoIsFreshAndBetter(context, server, connection, shop));
+					step(context, "progression-outlived-both-runs-and-the-runs-did-not",
+							() -> progressionOutlivedBothRuns(context, server, connection));
+				});
 			}
 		}
-
-		if (!failures.isEmpty()) {
-			throw new AssertionError(failures.size() + " progression-cycle scenario(s) failed:\n  "
-					+ String.join("\n  ", failures));
-		}
-		LOGGER.info("All progression-cycle client scenarios passed.");
+		LOGGER.info("The progression cycle went round once.");
 	}
 
 	// --- the cycle -----------------------------------------------------------------------------
@@ -190,7 +182,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 						+ TestRuns.playerDimension(server, connection));
 
 		TestRuns.mark(server, Lobby.LEVEL, LOBBY_MARK, MARKER);
-		lobbyReached = true;
 	}
 
 	/**
@@ -207,8 +198,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 	 */
 	private void runOneIsRestricted(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
-		check(lobbyReached, "the cycle never reached the lobby, so there is no run to start");
-
 		TestRuns.start(server, RUN_ONE_SEED);
 		connection.waitForChunksRender();
 
@@ -267,7 +256,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 		LOGGER.info("Run 1: seed {}, spawn {}, border {} across", firstSeed, spawn, runOneBorder);
 		TestRuns.waitForClientIn(context, Level.OVERWORLD.identifier().toString());
 		context.takeScreenshot("cycle-run-one-restricted");
-		runOneRan = true;
 	}
 
 	/**
@@ -284,8 +272,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 	 */
 	private void dyingEndsTheRunAndKeepsTheCurrency(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
-		check(runOneRan, "run 1 never started, so there is no death to test");
-
 		server.runCommand("kill Player0");
 		TestRuns.waitForPhase(context, server, RunPhase.LOBBY);
 
@@ -318,7 +304,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 						+ EARNED_IN_RUN_ONE + " and the file says " + purse);
 
 		TestRuns.waitForClientIn(context, Lobby.LEVEL.identifier().toString());
-		backInTheLobby = true;
 	}
 
 	/**
@@ -329,8 +314,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 	 * cycle that a server test could not have done.
 	 */
 	private void theShopTurnsCurrencyIntoUnlocks(ClientGameTestContext context, TestShop shop) {
-		check(backInTheLobby, "the run never ended, so there is no shop step to take");
-
 		int breadPrice = shop.priceOf(BREAD);
 		int borderPrice = shop.priceOf(MEDIUM_BORDER);
 		int before = shop.balanceOnServer();
@@ -371,7 +354,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 
 		context.takeScreenshot("cycle-shop-after-buying-with-run-one-pay");
 		shop.close();
-		purchasesMade = true;
 	}
 
 	/**
@@ -384,8 +366,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 	 */
 	private void runTwoIsFreshAndBetter(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection, TestShop shop) {
-		check(purchasesMade, "nothing was bought, so there is nothing for run 2 to be better for");
-
 		TestRuns.start(server, RUN_TWO_SEED);
 		connection.waitForChunksRender();
 
@@ -456,8 +436,6 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 	 */
 	private void progressionOutlivedBothRuns(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
-		check(purchasesMade, "nothing was bought, so there is nothing to have survived");
-
 		int purse = server.computeOnServer(unused -> Wallet.reloadFromFile().balance());
 		check(purse == purseAfterBuying,
 				"the change from the purchases must be on the disk: it should be " + purseAfterBuying
@@ -557,20 +535,48 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 
 	// --- plumbing ------------------------------------------------------------------------------
 
+	/**
+	 * The one scenario. Unlike the other client tests here it does not collect failures and carry
+	 * on, because it has nothing to carry on to: there is one scenario, so the first failure is the
+	 * result.
+	 */
 	private void scenario(ClientGameTestContext context, String name, Runnable body) {
 		LOGGER.info("=== scenario {} ===", name);
 		try {
 			body.run();
-			LOGGER.info("=== scenario {}: PASS ===", name);
 		} catch (Throwable failure) {
-			failures.add(name + ": " + failure.getMessage());
 			LOGGER.error("=== scenario {}: FAIL === {}", name, failure.getMessage(), failure);
+			throw failure;
+		}
+		LOGGER.info("=== scenario {}: PASS ===", name);
+	}
+
+	/**
+	 * One named step of the cycle, run for its effect on the next one.
+	 *
+	 * <p>The name is diagnostic, not a scenario boundary. It goes in the log on the way past, and on
+	 * failure it goes into the screenshot's filename and into the front of the assertion message —
+	 * so a red run says which step of the loop broke without having to be six scenarios to say it.
+	 *
+	 * <p>The failure is rethrown rather than recorded. Everything after a given step is about state
+	 * that step was supposed to build, and asserting against state that was never built reports a
+	 * second bug that does not exist.
+	 */
+	private void step(ClientGameTestContext context, String name, Runnable body) {
+		LOGGER.info("--- step {} ---", name);
+		try {
+			body.run();
+		} catch (Throwable failure) {
+			LOGGER.error("--- step {}: FAIL === {}", name, failure.getMessage(), failure);
 			try {
 				context.takeScreenshot("failed-" + name);
 			} catch (Throwable ignored) {
 				LOGGER.warn("Could not screenshot the failure of {}", name);
 			}
+			throw new AssertionError("the cycle broke at step " + name + ": " + failure.getMessage(),
+					failure);
 		}
+		LOGGER.info("--- step {}: ok ---", name);
 	}
 
 	private static void check(boolean condition, String message) {

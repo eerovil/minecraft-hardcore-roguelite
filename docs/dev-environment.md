@@ -867,9 +867,12 @@ test that crosses all four of the above in one sequence, and the seam it exists 
 the middle: money earned inside a run that is about to be deleted, spent on a screen in the world
 that is never deleted, and collected in the world after that. Everything else proves one piece.
 
-Its six scenarios run **in order and depend on each other on purpose** — a cycle is a sequence, and
-a scenario that re-established its own starting point would be testing the step rather than the
-loop. Only the first establishes state.
+It is **one scenario**, `the-whole-roguelite-cycle-once-round`, walked in six named steps. A cycle
+is a sequence, and six scenarios that each re-established their own starting point would be
+testing the steps rather than the loop — so rather than bend the isolation rule, the loop is one
+scenario and the steps are its inside. The first step that fails ends the run there, naming
+itself in the failure and in the screenshot; nothing downstream is asserted against state that
+step never built. The steps:
 
 - **the-cycle-starts-in-the-lobby-with-an-empty-profile** — and empties the profile itself, because
   permanent progression is shared by every test in this client's process.
