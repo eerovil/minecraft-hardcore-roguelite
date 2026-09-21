@@ -28,9 +28,13 @@ Currency and ownership are one file because they are one purchase. The persisted
     "player.slot.helmet": 1,
     "player.craft.enchant": 3,
     "starter.bread": 1
-  }
+  },
+  "paidAdvancements": { "run": 7, "entries": ["<player uuid>|minecraft:story/mine_stone"] }
 }
 ```
+
+The third field is what the current run has already been paid for; see
+[Currency and purchasing](#currency-and-purchasing).
 
 An unlock's value is the purchased level. Missing means level 0 / not owned.
 
@@ -217,11 +221,41 @@ one narrow hook on `PlayerAdvancements.award` tells it when an advancement is co
 pays what `currency.advancements` prices that advancement at. Nothing pays outside a run, and
 `/mhr currency give` stays as the development stand-in for putting a number where a test wants it.
 
-The part to understand before changing it is the ledger, because there isn't one. An advancement is
-completed once, and a player's advancements are cleared as they cross into a run, so "once per run"
-falls out of vanilla's own record — there is no set of paid ids to keep in step with the wallet, and
-no window in which a crash pays twice. Adding a second earning rule means answering that question
-again for the new rule; do not assume a bare `Wallet.earn` is safe to call from anywhere.
+The part to understand before changing it is **where "already paid" is written down**, because the
+obvious answer is wrong. A player's advancements look like the ledger — an advancement is completed
+once, and they are cleared as the player crosses into a run — but Minecraft saves them on the
+player-save cycle rather than when the purse is written. Crash between the two and the game comes
+back with the money paid and no trace of what it was paid for, and finishing the milestone again
+pays again.
+
+So the ledger is a third field in the snapshot, written by the same commit as the balance:
+
+```json
+{
+  "currency": 35,
+  "unlocks": { "world.trees": 1 },
+  "paidAdvancements": { "run": 7, "entries": ["<player uuid>|minecraft:story/mine_stone"] }
+}
+```
+
+`Progress.creditOnce(runId, key, amount)` is the one operation that moves currency into the purse
+from gameplay, and `Wallet.earnOnce` is the view of it. It pays and records together or does
+neither. The ledger belongs to one run: a credit from a later run replaces it, which is both the
+"every run earns the same milestones again" rule and what stops it growing for ever. Run ids are
+never reused, so an old entry cannot be mistaken for a current one.
+
+Two rules for any further earning rule:
+
+- **Anything gameplay pays out goes through `earnOnce`, not `earn`.** `Wallet.earn` and
+  `/mhr currency give` are for a hand putting a number in, where there is no outside record to get
+  out of step with.
+- **The key is the caller's to compose and has to be unique within a run.** Advancements use
+  `<player uuid>|<advancement id>`: per player, because the purse is shared and two people finishing
+  the same thing is two people's work.
+
+Unlike `currency` and `unlocks`, the ledger is optional when read: a profile written before it
+existed has none, and "nothing paid for yet" is the one missing-field reading that cannot cost
+anybody anything. A ledger that is there and the wrong shape is damaged like everything else.
 
 `Purchase.buy` makes one authoritative decision:
 
@@ -246,7 +280,8 @@ adding machinery to the gap before the gap itself was removed. **There is now on
 ```json
 {
   "currency": 35,
-  "unlocks": { "world.trees": 1, "player.craft.enchant": 2 }
+  "unlocks": { "world.trees": 1, "player.craft.enchant": 2 },
+  "paidAdvancements": { "run": 7, "entries": ["<player uuid>|minecraft:story/mine_stone"] }
 }
 ```
 
@@ -271,6 +306,9 @@ Rules to keep:
   screen draws its icon, count and name from it. Do not write any of those facts into
   `shop-layout.json` or the language file as well — `ShopLayoutTest` fails if you do, because the
   two copies drift the moment anybody retunes a count.
+- **Earning is one write too.** A payout and the note saying what it was for go in together, for
+  the same reason a purchase's two halves do — and here the alternative is worse than an
+  inconsistent file, because the other half lives in a file Minecraft saves on its own schedule.
 - **One writer.** `Progress` writes; nothing else does. `Wallet` and `UnlockState` are views over it
   and own nothing. Do not add a second file for a new kind of permanent progression — add a key to
   the snapshot.
@@ -364,6 +402,7 @@ Examples:
 - an unknown owned id is preserved;
 - a starter catalogue entry needs no enum constant;
 - currency purchase conserves currency and cannot double-buy on one action;
+- an earned payout cannot be earned twice after the snapshot is read again from the file;
 - a purchase whose snapshot cannot be written changes nothing, on the disk or in memory;
 - a refused write leaves the previous snapshot wholly intact;
 - both halves of a purchase are in the file together after a reload;

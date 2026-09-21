@@ -877,6 +877,10 @@ side of the economy, played on a real dedicated server with a real client:
 - **the-next-run-earns-the-same-advancements-again** — the scenario the whole economy rests on. A
   run's advancements are cleared as the player crosses into it, so run 2 pays for `mine_stone` just
   as run 1 did.
+- **a-crash-cannot-mint-the-same-payout-twice** — the snapshot is read back off the file, which is
+  what a restart does, and the advancement is revoked, which is what a record that was never saved
+  comes back as. Finishing it again pays nothing. Minecraft saves a player's advancements on its own
+  schedule, so without the ledger in the snapshot this is a real way to mint currency.
 - **the-purse-is-on-the-screen-while-the-run-is-played** — the client's own copy of the balance
   matches the server's with no screen open, and the shot `currency-hud-during-a-run` is the HUD
   drawing it.
@@ -884,6 +888,11 @@ side of the economy, played on a real dedicated server with a real client:
 Every scenario reads the purse immediately before the thing it is testing and asserts the
 difference. Asserting a total instead would pass or fail on anything else that happened to pay in
 the same run.
+
+The storage side of the same rule is in `ShopPurchaseGameTest`, which owns the progression snapshot
+for the server batch: a credit survives the file being read again and is refused the second time, a
+later run is paid for the same milestone again, and a credit the disk will not take leaves neither
+the money nor the note behind.
 
 #### The whole cycle, as one player experience
 

@@ -23,8 +23,13 @@ What that settles, question by question:
 
 One consequence is worth knowing before changing anything near it: **a player's advancements are
 cleared as they cross into a run**, because a run is meant to be a fresh world and a fresh world has
-none. That is what makes the same advancement earnable in every run — and it is also why nothing has
-to remember which advancements have already been paid for. Vanilla's own record is the ledger.
+none. That is what makes the same advancement earnable in every run.
+
+What it does **not** do is decide what has already been paid for. Minecraft saves a player's
+advancements on its own schedule, not when the purse is written, so a crash in between comes back to
+money paid and no record of what it was paid for — and the milestone mints it again. The note saying
+what a run has been paid for therefore lives in the progression snapshot beside the balance, written
+by the same commit. See [progression](codebase/progression.md#currency-and-purchasing).
 
 Still open, and now worth playtesting rather than deciding on paper:
 

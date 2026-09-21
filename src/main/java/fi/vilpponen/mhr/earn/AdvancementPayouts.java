@@ -33,10 +33,14 @@ import net.minecraft.server.level.ServerPlayer;
  *       cross into a run, exactly as starting another vanilla world would clear it.
  * </ul>
  *
- * <p>Those two together mean the paying ledger is vanilla's own: an advancement is completed once
- * per run, so it pays once per run, and nothing here has to remember what it has already paid for.
- * There is no second store to keep in step with the advancement file, and no window in which a
- * crash could pay twice.
+ * <p><b>What has been paid for is written down where the money is</b>, in the {@link
+ * fi.vilpponen.mhr.progression.Progress} snapshot, by the same write that moves it — see
+ * {@link Wallet#earnOnce}. Vanilla's own advancement record looks like it would do the job and does
+ * not: a player's advancements are saved on the player-save cycle, not when the wallet is written,
+ * so a crash in between comes back to a credited purse and a record with no trace of what it was
+ * credited for. The player finishes the milestone again and it mints the money a second time. One
+ * write, holding both the balance and the note saying what it was for, is the only shape with no
+ * such gap in it.
  *
  * <p>The price list is {@code currency.advancements} in the balance data, read at the moment it is
  * needed like every other tuning value. An advancement that is not listed pays nothing, which is
@@ -60,8 +64,10 @@ public final class AdvancementPayouts {
 	 * One advancement has just been completed by this player.
 	 *
 	 * <p>Called from {@code AdvancementPayoutMixin} at the exact point vanilla itself decides an
-	 * advancement is newly done, so "again" cannot happen: a completed advancement grants no further
-	 * progress, and the next run starts from a cleared record.
+	 * advancement is newly done, which keeps an advancement finished by one of four alternative
+	 * criteria from arriving here four times. Being called twice for a genuine re-completion is
+	 * still possible — a crash can take the advancement record back to before it — and that is the
+	 * ledger's job rather than the hook's.
 	 *
 	 * <p>A payout that cannot be written down is not a payout. {@link Wallet} hands the whole
 	 * snapshot to the disk and refuses the change if it does not land, so the player is told rather
@@ -69,7 +75,8 @@ public final class AdvancementPayouts {
 	 * would be a second lie on top of the first.
 	 */
 	public static void completed(ServerPlayer player, AdvancementHolder advancement) {
-		if (!RunAdmission.isInARun(player)) {
+		int runId = RunAdmission.of(player);
+		if (runId == RunAdmission.NO_RUN) {
 			return;
 		}
 		int reward = BalanceManager.get().advancementReward(advancement.id().toString());
@@ -79,12 +86,21 @@ public final class AdvancementPayouts {
 
 		// Vanilla's own name for it — the advancement's title, or its id when it has no display.
 		Component name = Advancement.name(advancement);
+		boolean paid;
 		try {
-			Wallet.get().earn(reward);
+			paid = Wallet.get().earnOnce(runId, keyFor(player, advancement), reward);
 		} catch (PersistenceException failure) {
 			HardcoreRoguelite.LOGGER.error("Could not save the {} currency earned for {}",
 					reward, advancement.id(), failure);
 			player.sendSystemMessage(Component.translatable("mhr.earn.not_saved", reward, name));
+			return;
+		}
+		if (!paid) {
+			// This run has already been paid for it, and the advancement record has since lost the
+			// completion — a crash between the wallet's write and the player's save is how. Saying
+			// nothing is right: the player was paid and told at the time.
+			HardcoreRoguelite.LOGGER.info("Run {} has already been paid for {}; not paying again",
+					runId, advancement.id());
 			return;
 		}
 
@@ -92,6 +108,16 @@ public final class AdvancementPayouts {
 				Component.translatable("mhr.earn.advancement", reward, name, Wallet.get().balance()));
 		// The clients' copy of the purse is the shop state packet, and the HUD draws from it.
 		ShopServer.sendToAll(server(player));
+	}
+
+	/**
+	 * What one payout is called in the ledger: this player, this advancement.
+	 *
+	 * <p>Per player rather than per run, because the purse is shared and two people in the same run
+	 * each finishing the same advancement is two people's work.
+	 */
+	private static String keyFor(ServerPlayer player, AdvancementHolder advancement) {
+		return player.getUUID() + "|" + advancement.id();
 	}
 
 	/**

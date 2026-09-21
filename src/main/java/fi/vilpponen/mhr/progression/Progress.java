@@ -17,7 +17,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import net.fabricmc.loader.api.FabricLoader;
 
 /**
@@ -32,9 +34,14 @@ import net.fabricmc.loader.api.FabricLoader;
  * <pre>
  * {
  *   "currency": 35,
- *   "unlocks": { "world.trees": 1, "player.craft.enchant": 2 }
+ *   "unlocks": { "world.trees": 1, "player.craft.enchant": 2 },
+ *   "paidAdvancements": { "run": 7, "entries": ["&lt;player uuid&gt;|minecraft:story/mine_stone"] }
  * }
  * </pre>
+ *
+ * <p>The third field is there for the same reason as the first two. Currency is earned from things
+ * Minecraft records in its own files on its own schedule, so "have I already paid for this?" has to
+ * be answered from the same write that moved the money — see {@link #creditOnce}.
  *
  * <p>The rule every change here follows is <b>write, then adopt</b>. A change is built as a whole
  * new snapshot, written through {@link AtomicFile} — which leaves the file either wholly as it was
@@ -76,6 +83,22 @@ public final class Progress {
 	private static final String UNLOCKS = "unlocks";
 
 	/**
+	 * The ledger of what has already been paid for in the run being played.
+	 *
+	 * <pre>
+	 * "paidAdvancements": { "run": 7, "entries": ["&lt;player uuid&gt;|minecraft:story/mine_stone"] }
+	 * </pre>
+	 *
+	 * <p>Optional on read, unlike the other two fields, and that is not a relaxation of the
+	 * fail-closed rule: a profile written before this existed has none, and an absent ledger means
+	 * "nothing has been paid for in a run yet", which is the one reading that cannot cost anybody
+	 * anything. A ledger that is <em>there</em> and the wrong shape is damaged like everything else.
+	 */
+	private static final String PAID = "paidAdvancements";
+	private static final String PAID_RUN = "run";
+	private static final String PAID_ENTRIES = "entries";
+
+	/**
 	 * Unlock ids that have been renamed, old name to current one.
 	 *
 	 * <p>A profile written before the rename is migrated as it is read, so nobody loses a purchase
@@ -104,6 +127,12 @@ public final class Progress {
 	private final Path file;
 	private int currency;
 	private Map<String, Integer> levels = Map.of();
+
+	/** The run the ledger below belongs to, or 0 for "no run has been paid for yet". */
+	private int paidRun;
+
+	/** What has already been paid for in that run. Empty for any other run. */
+	private Set<String> paidKeys = Set.of();
 
 	private Progress(Path file) {
 		this.file = file;
@@ -170,14 +199,60 @@ public final class Progress {
 	public synchronized void buy(String id, int level, int currencyLeft) {
 		Map<String, Integer> next = new TreeMap<>(levels);
 		put(next, id, level);
-		commit(currencyLeft, next);
+		commit(currencyLeft, next, paidRun, paidKeys);
 	}
 
 	/**
 	 * @throws PersistenceException if it did not reach the disk, in which case nothing changed
 	 */
 	public synchronized void setCurrency(int amount) {
-		commit(Math.max(0, amount), levels);
+		commit(Math.max(0, amount), levels, paidRun, paidKeys);
+	}
+
+	/** Has this key already been paid for in this run? */
+	public synchronized boolean hasPaid(int runId, String key) {
+		return runId == paidRun && paidKeys.contains(key);
+	}
+
+	/**
+	 * Pay for something once in a run, and write down that it has been paid for, together.
+	 *
+	 * <p>The together is the whole of it. Earning is triggered by things Minecraft keeps in its own
+	 * files — a player's advancements are saved on the player-save cycle, not when this is written —
+	 * so "have I paid for this already?" cannot be asked of them: a crash between the two saves
+	 * leaves a credited purse and a record with no trace of what it was credited for, and the same
+	 * milestone mints the money again on the way back. So the answer lives here, in the snapshot the
+	 * currency is in, written in the one commit that moves the currency. Either both landed or
+	 * neither did.
+	 *
+	 * <p>The ledger belongs to one run. A credit from a different run replaces it rather than
+	 * growing it, which is both the "every run earns the same milestones again" rule and the reason
+	 * this cannot grow without bound. Run ids are never reused — a run abandoned while it was being
+	 * built spends its id — so an old entry can never be mistaken for a current one.
+	 *
+	 * @param runId the run being played, which must not be {@code 0}
+	 * @param key what is being paid for, unique within a run and the caller's to compose
+	 * @return false if this key has already been paid for in this run, in which case nothing was
+	 *     written and nothing was charged
+	 * @throws PersistenceException if it did not reach the disk, in which case nothing changed
+	 */
+	public synchronized boolean creditOnce(int runId, String key, int amount) {
+		if (amount < 0) {
+			throw new IllegalArgumentException("Cannot credit a negative amount: " + amount);
+		}
+		if (hasPaid(runId, key)) {
+			return false;
+		}
+		// A different run starts the ledger again; the same run adds to it.
+		Set<String> nextKeys = runId == paidRun ? new TreeSet<>(paidKeys) : new TreeSet<>();
+		nextKeys.add(key);
+		commit(add(currency, amount), levels, runId, nextKeys);
+		return true;
+	}
+
+	/** Currency, added without wrapping round into a debt. */
+	private static int add(int total, int amount) {
+		return (int) Math.min(Integer.MAX_VALUE, (long) total + amount);
 	}
 
 	/**
@@ -188,7 +263,7 @@ public final class Progress {
 	public synchronized void setLevel(String id, int level) {
 		Map<String, Integer> next = new TreeMap<>(levels);
 		put(next, id, level);
-		commit(currency, next);
+		commit(currency, next, paidRun, paidKeys);
 	}
 
 	private static void put(Map<String, Integer> levels, String id, int level) {
@@ -205,7 +280,8 @@ public final class Progress {
 	 * <p>The order is the entire point. Changing memory first and writing afterwards is what leaves
 	 * a running game believing something the disk has never heard of.
 	 */
-	private synchronized void commit(int nextCurrency, Map<String, Integer> nextLevels) {
+	private synchronized void commit(int nextCurrency, Map<String, Integer> nextLevels,
+			int nextPaidRun, Set<String> nextPaidKeys) {
 		JsonObject root = new JsonObject();
 		root.addProperty(CURRENCY, nextCurrency);
 		JsonObject unlocks = new JsonObject();
@@ -213,6 +289,15 @@ public final class Progress {
 			unlocks.addProperty(entry.getKey(), entry.getValue());
 		}
 		root.add(UNLOCKS, unlocks);
+
+		JsonObject paid = new JsonObject();
+		paid.addProperty(PAID_RUN, nextPaidRun);
+		JsonArray entries = new JsonArray();
+		for (String key : nextPaidKeys) {
+			entries.add(key);
+		}
+		paid.add(PAID_ENTRIES, entries);
+		root.add(PAID, paid);
 
 		try {
 			AtomicFile.write(file, GSON.toJson(root));
@@ -222,6 +307,8 @@ public final class Progress {
 
 		currency = nextCurrency;
 		levels = Collections.unmodifiableMap(new TreeMap<>(nextLevels));
+		paidRun = nextPaidRun;
+		paidKeys = Collections.unmodifiableSet(new TreeSet<>(nextPaidKeys));
 	}
 
 	private synchronized void load() {
@@ -250,9 +337,49 @@ public final class Progress {
 			// that emptiness over something that could have been repaired.
 			currency = Math.max(0, wholeNumber(json, CURRENCY));
 			levels = Collections.unmodifiableMap(levelsIn(object(json, UNLOCKS)));
+			readPaidLedger(json);
 		} catch (IOException | RuntimeException e) {
 			throw failedToRead(file, e);
 		}
+	}
+
+	/**
+	 * The ledger, which a profile written before it existed simply does not have.
+	 *
+	 * <p>Absent is a real answer here and nowhere else in this file: it says nothing has been paid
+	 * for in a run yet, and the worst that reading it wrongly could do is pay for a milestone once
+	 * more. Absent currency or absent unlocks are the opposite — they claim purchases never
+	 * happened, and the next write makes that permanent. A ledger that is present and the wrong
+	 * shape is damaged, like everything else.
+	 *
+	 * @throws PersistenceException if it is there and is not a run and a list of keys
+	 */
+	private void readPaidLedger(JsonObject json) {
+		paidRun = 0;
+		paidKeys = Set.of();
+		JsonElement value = json.get(PAID);
+		if (value == null || value.isJsonNull()) {
+			return;
+		}
+		if (!value.isJsonObject()) {
+			throw malformed("'" + PAID + "' should be an object and is " + value);
+		}
+		JsonObject ledger = value.getAsJsonObject();
+		int run = wholeNumber(ledger, PAID_RUN);
+		JsonElement entries = ledger.get(PAID_ENTRIES);
+		if (!(entries instanceof JsonArray list)) {
+			throw malformed("'" + PAID + "." + PAID_ENTRIES + "' should be a list and is " + entries);
+		}
+		Set<String> keys = new TreeSet<>();
+		for (JsonElement entry : list) {
+			if (!(entry instanceof JsonPrimitive primitive) || !primitive.isString()) {
+				throw malformed("'" + PAID + "." + PAID_ENTRIES + "' should hold only keys and holds "
+						+ entry);
+			}
+			keys.add(primitive.getAsString());
+		}
+		paidRun = Math.max(0, run);
+		paidKeys = Collections.unmodifiableSet(keys);
 	}
 
 	/** @throws PersistenceException unless the field is there and holds a whole number. */
@@ -330,7 +457,7 @@ public final class Progress {
 
 		HardcoreRoguelite.LOGGER.info("Moving progression into one file: {} unlock(s) and {} currency from {}",
 				read.size(), total, directory);
-		commit(total, read);
+		commit(total, read, 0, Set.of());
 	}
 
 	/** @throws PersistenceException if the file is there and cannot be read whole. */

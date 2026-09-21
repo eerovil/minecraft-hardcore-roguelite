@@ -24,9 +24,13 @@ import org.slf4j.LoggerFactory;
  * and the advancement record being cleared as they cross it is half of the rule. The other half is
  * that the number is on the screen, which nothing without a screen can answer.
  *
- * <p>Two of the scenarios are about the same fact from opposite sides, and both are needed:
+ * <p>Three of the scenarios are about the same fact from different sides, and all three are needed:
  *
  * <ul>
+ *   <li><b>A crash cannot pay twice.</b> A player's advancements are saved on Minecraft's own
+ *       schedule rather than the wallet's, so the scenario reads the snapshot back off disk and
+ *       then revokes the advancement — which is what that record comes back as when a crash lands
+ *       between the two saves — and finishes it again.
  *   <li><b>An advancement pays once.</b> {@code story/obtain_armor} is finished by any one of four
  *       criteria, so the other three are granted to an advancement that is already done. A hook
  *       that merely watched for "this call changed something and the advancement is finished" would
@@ -71,6 +75,8 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 						() -> nothingIsEarnedOutsideARun(context, server, player, shop));
 				scenario(context, "the-next-run-earns-the-same-advancements-again",
 						() -> theNextRunEarnsTheSameAdvancementsAgain(context, server, player, shop));
+				scenario(context, "a-crash-cannot-mint-the-same-payout-twice",
+						() -> aCrashCannotMintTheSamePayoutTwice(context, server, player, shop));
 				scenario(context, "the-purse-is-on-the-screen-while-the-run-is-played",
 						() -> thePurseIsOnTheScreenWhileTheRunIsPlayed(context, server, player, shop));
 			}
@@ -180,6 +186,48 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 		check(afterRunTwo == afterRunOne + MINE_STONE_PAYS, "and run 2 must pay for it again,"
 				+ " because run 2 is a new world: the purse went from " + afterRunOne + " to "
 				+ afterRunTwo);
+	}
+
+	/**
+	 * The crash the advancement record cannot protect against, played out.
+	 *
+	 * <p>A player's advancements are saved on the player-save cycle; the purse is written the moment
+	 * it changes. Crash in between and the game comes back to a purse that has been paid and an
+	 * advancement record with no trace of the completion — so the player finishes it again, and
+	 * without a ledger it pays again.
+	 *
+	 * <p>That state is reproduced exactly here, and nothing has to be killed to get it: the snapshot
+	 * is read back off the file, which is what a restart does, and the advancement is revoked, which
+	 * is what an unsaved record comes back as. Finishing it again after that must pay nothing — and
+	 * the refusal has to survive reading the file again, or it only proves something in memory
+	 * remembered.
+	 */
+	private void aCrashCannotMintTheSamePayoutTwice(ClientGameTestContext context,
+			TestDedicatedServerContext server, TestPlayer player, TestShop shop) {
+		startFresh(context, server, player, shop);
+
+		int before = purse(server);
+		grant(player, MINE_STONE);
+		int afterPaying = purse(server);
+		check(afterPaying == before + MINE_STONE_PAYS, "setup: the first completion must pay "
+				+ MINE_STONE_PAYS + ": the purse went from " + before + " to " + afterPaying);
+
+		// The restart: everything the running game believes is thrown away and read back off disk.
+		int onDisk = server.computeOnServer(unused -> Wallet.reloadFromFile().balance());
+		check(onDisk == afterPaying, "setup: the payout has to be on the disk for this to be about a"
+				+ " crash: the file says " + onDisk + " and the game said " + afterPaying);
+
+		// And the advancement record, as it comes back having never been saved.
+		player.command("advancement revoke Player0 only " + MINE_STONE);
+
+		grant(player, MINE_STONE);
+		int afterReplay = purse(server);
+
+		check(afterReplay == afterPaying, "finishing it again after the record lost it must pay"
+				+ " nothing: the purse went from " + afterPaying + " to " + afterReplay);
+		int onDiskAfter = server.computeOnServer(unused -> Wallet.reloadFromFile().balance());
+		check(onDiskAfter == afterPaying, "and the file must say the same: it holds " + onDiskAfter
+				+ " rather than " + afterPaying);
 	}
 
 	/** What the player can see: the same number, on the client, without opening anything. */
