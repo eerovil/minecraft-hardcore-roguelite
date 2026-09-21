@@ -179,9 +179,9 @@ public final class LobbyIsland {
 	 * say it was owed. Kept until everything else is gone, it says the true thing the whole time:
 	 * while any of the old floor might remain, the marker is still there and the next arrival
 	 * sweeps again. Re-sweeping costs nothing, because a position that is already air is skipped.
-	 * The order is {@link LobbyFloorSweep}, which is plain arithmetic and unit-tested, because
-	 * "the marker is the last thing touched" is the whole of this fix and an interrupted sweep is
-	 * not something the gameplay harness can stage.
+	 * So the loop below steps over the marker, and the marker is cleared by the last statement in
+	 * this method — that ordering is the whole of what makes an interrupted upgrade recoverable,
+	 * and it is written here, where the blocks are actually changed.
 	 *
 	 * <p>Only bedrock, and only the bottom layer. The old lobby's floor was solid bedrock, so
 	 * nothing could be placed at that height without breaking bedrock first — which survival
@@ -198,8 +198,8 @@ public final class LobbyIsland {
 	 */
 	private static void clearLegacyFloor(ServerLevel lobby) {
 		int floor = lobby.getMinY();
-		if (!lobby.getBlockState(new BlockPos(TOP_CENTRE.getX(), floor, TOP_CENTRE.getZ()))
-				.is(LEGACY_FLOOR)) {
+		BlockPos marker = new BlockPos(TOP_CENTRE.getX(), floor, TOP_CENTRE.getZ());
+		if (!lobby.getBlockState(marker).is(LEGACY_FLOOR)) {
 			return;
 		}
 
@@ -207,19 +207,36 @@ public final class LobbyIsland {
 				+ " within {} blocks of the island", LEGACY_FLOOR.getName().getString(), floor,
 				LEGACY_SWEEP);
 		int cleared = 0;
-		int[] offsets = LobbyFloorSweep.offsets(LEGACY_SWEEP);
-		for (int i = 0; i < offsets.length; i += 2) {
-			BlockPos pos = new BlockPos(
-					TOP_CENTRE.getX() + offsets[i], floor, TOP_CENTRE.getZ() + offsets[i + 1]);
-			if (lobby.getBlockState(pos).is(LEGACY_FLOOR)) {
-				// UPDATE_CLIENTS and nothing else: there are no neighbours worth telling on a flat
-				// layer of bedrock, and a hundred thousand update cascades would be a server start
-				// nobody enjoys.
-				lobby.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
-				cleared++;
+		for (int x = -LEGACY_SWEEP; x <= LEGACY_SWEEP; x++) {
+			for (int z = -LEGACY_SWEEP; z <= LEGACY_SWEEP; z++) {
+				BlockPos pos = new BlockPos(TOP_CENTRE.getX() + x, floor, TOP_CENTRE.getZ() + z);
+				if (pos.equals(marker)) {
+					// Not here. It is what says the upgrade is still owed, so it goes last.
+					continue;
+				}
+				if (clear(lobby, pos)) {
+					cleared++;
+				}
 			}
 		}
+
+		// Last, and the last thing in the method. Everything above may be interrupted and picked
+		// up again; the moment this line runs, it says the floor is gone, and it has to be true.
+		if (clear(lobby, marker)) {
+			cleared++;
+		}
 		HardcoreRoguelite.LOGGER.info("Cleared {} block(s) of the lobby's old floor", cleared);
+	}
+
+	/** @return true if there was a block of the old floor here and there is not now. */
+	private static boolean clear(ServerLevel lobby, BlockPos pos) {
+		if (!lobby.getBlockState(pos).is(LEGACY_FLOOR)) {
+			return false;
+		}
+		// UPDATE_CLIENTS and nothing else: there are no neighbours worth telling on a flat layer of
+		// bedrock, and a hundred thousand update cascades would be a server start nobody enjoys.
+		lobby.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+		return true;
 	}
 
 	/**

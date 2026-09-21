@@ -92,9 +92,10 @@ into the lobby. Three things about it are deliberate:
   swept, so clearing it in its turn would write down "upgraded" while most of the plane was still
   standing, and a server stopped in that window would leave the rest behind for good. Kept until
   everything else is gone, it stays true the whole way: while any of the old floor might remain,
-  the next arrival sweeps again, and a position that is already air costs a read. The order is
-  `LobbyFloorSweep`, a class with no Minecraft in it so that `LobbyFloorSweepTest` can ask about it —
-  an interrupted sweep is not something the gameplay harness can stage;
+  the next arrival sweeps again, and a position that is already air costs a read. The sweep's loop
+  therefore steps over the marker and the last statement of `clearLegacyFloor` clears it. Nothing
+  can fail on that ordering if it is broken again — an interrupted sweep is not something the
+  gameplay harness can stage, and the half-swept scenario covers only that re-sweeping works;
 - **only bedrock, and only the bottom layer.** The old floor was solid bedrock, so nothing could be
   placed at that height without breaking bedrock first — which survival cannot do. Everything
   anybody left in the old lobby is above it;

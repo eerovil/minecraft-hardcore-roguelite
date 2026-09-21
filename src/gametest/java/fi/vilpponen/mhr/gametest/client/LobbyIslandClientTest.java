@@ -204,11 +204,12 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 	 * the rest of it still standing. Arriving has to finish the job rather than read the leftover
 	 * air as "nothing to do here".
 	 *
-	 * <p>Said plainly, because it matters for what this is worth: the ordering bug itself cannot be
-	 * staged from here — nothing in the harness can stop a sweep half-way through — and the code
-	 * that had it would pass this scenario too. What this pins down is the other half, that the
-	 * sweep is idempotent and does not give up at the first position that is already clear. The
-	 * ordering is asked about in {@code LobbyFloorSweepTest}, where it is plain arithmetic.
+	 * <p>Said plainly, because it matters for what this is worth: the ordering itself cannot be
+	 * staged from here — nothing in the harness can stop a sweep half-way through — and a sweep
+	 * that cleared the marker in its turn would pass this scenario too. What this pins down is the
+	 * other half, that the sweep is idempotent and does not give up at the first position already
+	 * clear. The ordering is held by the shape of {@code LobbyIsland.clearLegacyFloor} and by its
+	 * comment, and by nothing that can go red.
 	 */
 	private void theInterruptedSweepFinishes(
 			ClientGameTestContext context, TestDedicatedServerContext server) {
