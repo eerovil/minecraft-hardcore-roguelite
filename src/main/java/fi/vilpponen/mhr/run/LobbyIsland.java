@@ -80,6 +80,19 @@ public final class LobbyIsland {
 	 */
 	public static final int VOID_Y = 0;
 
+	/**
+	 * What the lobby used to generate as: one layer of this at the bottom of the dimension.
+	 *
+	 * <p>Public because the test that proves the upgrade works has to be able to stage it.
+	 */
+	public static final Block LEGACY_FLOOR = Blocks.BEDROCK;
+
+	/**
+	 * How far out the old floor is cleared, in blocks. Twelve chunks — a little more than the
+	 * chunks a player standing at the old spawn would have caused to generate.
+	 */
+	public static final int LEGACY_SWEEP = 192;
+
 	private LobbyIsland() {
 	}
 
@@ -119,6 +132,10 @@ public final class LobbyIsland {
 	 * nobody else can change it at all.
 	 */
 	public static void ensure(ServerLevel lobby) {
+		// Before the furnished check rather than after it. A save upgraded halfway — island built,
+		// old floor still underneath — is exactly the state this has to be able to finish.
+		clearLegacyFloor(lobby);
+
 		if (lobby.getBlockState(TOP_CENTRE).is(LAYERS[0])
 				&& lobby.getBlockState(SHOP_BLOCK).is(SHOP_BLOCK_TYPE)) {
 			return;
@@ -137,6 +154,61 @@ public final class LobbyIsland {
 			}
 		}
 		lobby.setBlockAndUpdate(SHOP_BLOCK, SHOP_BLOCK_TYPE.defaultBlockState());
+	}
+
+	/**
+	 * Take out the floor the lobby used to be generated with.
+	 *
+	 * <p>The lobby is the one dimension that is never deleted, and a generator only answers once:
+	 * changing {@code lobby.json} to make no layers at all gives empty void in chunks nobody has
+	 * visited yet, and leaves the old bedrock plane exactly where it is in every chunk somebody
+	 * has. A save that has been played therefore gets the island suspended over the floor it was
+	 * supposed to replace, which is not an island in a void — the drop lands on bedrock and the
+	 * room reads as a balcony.
+	 *
+	 * <p><b>The absence of the floor is the version marker.</b> Nothing generates bedrock in the
+	 * new lobby and nothing places it, so bedrock at the bottom of the dimension under the spawn
+	 * means one thing only: this lobby was made by the old recipe. That is one block read on every
+	 * arrival after the first, and it needs no file, no record field and no upgrade counter that
+	 * could disagree with the world it describes.
+	 *
+	 * <p>Only bedrock, and only the bottom layer. The old lobby's floor was solid bedrock, so
+	 * nothing could be placed at that height without breaking bedrock first — which survival
+	 * cannot do. Everything an operator or a player put in the old lobby was therefore put
+	 * <em>above</em> this layer and is left alone, and a block somebody deliberately swapped in at
+	 * the bottom is left alone too because it is not bedrock any more.
+	 *
+	 * <p>Bounded, and the bound is the honest part of this. Reading a block in a chunk that does
+	 * not exist yet generates it, so an unbounded sweep would conjure and save thousands of empty
+	 * chunks to look for a floor that was never there. {@link #LEGACY_SWEEP} is a little wider than
+	 * the view distance a player standing at the old spawn would have generated. A legacy lobby
+	 * somebody flew a long way out in keeps its distant bedrock, out of sight of the island and of
+	 * the drop; that is a knowingly accepted limit rather than an oversight.
+	 */
+	private static void clearLegacyFloor(ServerLevel lobby) {
+		int floor = lobby.getMinY();
+		if (!lobby.getBlockState(new BlockPos(TOP_CENTRE.getX(), floor, TOP_CENTRE.getZ()))
+				.is(LEGACY_FLOOR)) {
+			return;
+		}
+
+		HardcoreRoguelite.LOGGER.info("This lobby still has the old {} floor at y={}; clearing it"
+				+ " within {} blocks of the island", LEGACY_FLOOR.getName().getString(), floor,
+				LEGACY_SWEEP);
+		int cleared = 0;
+		for (int x = -LEGACY_SWEEP; x <= LEGACY_SWEEP; x++) {
+			for (int z = -LEGACY_SWEEP; z <= LEGACY_SWEEP; z++) {
+				BlockPos pos = new BlockPos(TOP_CENTRE.getX() + x, floor, TOP_CENTRE.getZ() + z);
+				if (lobby.getBlockState(pos).is(LEGACY_FLOOR)) {
+					// UPDATE_CLIENTS and nothing else: there are no neighbours worth telling on a
+					// flat layer of bedrock, and a hundred thousand update cascades would be a
+					// server start nobody enjoys.
+					lobby.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+					cleared++;
+				}
+			}
+		}
+		HardcoreRoguelite.LOGGER.info("Cleared {} block(s) of the lobby's old floor", cleared);
 	}
 
 	/**

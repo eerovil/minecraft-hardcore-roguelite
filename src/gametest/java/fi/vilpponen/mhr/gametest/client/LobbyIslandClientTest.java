@@ -63,6 +63,14 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 	private static final String REFUSAL = "No run could be started";
 
 	/**
+	 * How far out the staged legacy floor reaches, in blocks.
+	 *
+	 * <p>Inside {@link LobbyIsland#LEGACY_SWEEP} on purpose — the sweep's own bound is documented
+	 * there and this asks whether it clears what it promises to, not whether it clears more.
+	 */
+	private static final int STAGED_FLOOR_RADIUS = 24;
+
+	/**
 	 * Make the next run fail on the player's way into it, after they have already been moved.
 	 *
 	 * <p>This is the only way to reach the case the fix is about. Crossing into a run is a respawn,
@@ -82,11 +90,23 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 	@Override
 	public void runTest(ClientGameTestContext context) {
 		try (TestDedicatedServerContext server = context.worldBuilder().createServer()) {
+			// The save is made to look like one that was played before the lobby became an island,
+			// and then left, so the scenario after this is a real arrival at a legacy lobby rather
+			// than a helper called by hand.
+			try (TestDedicatedServerConnection connection = server.connect()) {
+				TestRuns.settleClient(context, connection);
+				TestRuns.waitForPlayerInTheLobby(context, server, connection);
+				layTheOldFloor(server);
+			}
+
 			try (TestDedicatedServerConnection connection = server.connect()) {
 				TestRuns.settleClient(context, connection);
 				TestRuns.waitForPlayerInTheLobby(context, server, connection);
 				TestPlayer player = new TestPlayer(context, server, connection);
 				registerEntryFault(server);
+
+				scenario(context, "arriving-at-a-legacy-lobby-takes-its-old-floor-out",
+						() -> theOldFloorIsGone(context, server));
 
 				// Said out loud rather than hoped for: a dig proves nothing about survival rules
 				// if the digger turns out to be in creative.
@@ -122,6 +142,47 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 	}
 
 	// --- the scenarios ---------------------------------------------------------------------
+
+	/**
+	 * A save played before the lobby was an island does not keep the floor it used to have.
+	 *
+	 * <p>The lobby is never deleted and a generator only answers once, so taking the bedrock layer
+	 * out of {@code lobby.json} does nothing whatever to a chunk that already exists. Without the
+	 * sweep, such a save gets the island hanging over the old plane: the drop lands on bedrock
+	 * instead of falling, and the room is a balcony rather than an island.
+	 *
+	 * <p>The floor was laid by the connection before this one and this is a fresh arrival, so what
+	 * is being asked is the real thing — a player logging in to a legacy lobby — and not a helper
+	 * called directly. Its positive control is {@link #layTheOldFloor}, which refuses to go on
+	 * unless the bedrock it staged is genuinely there; "no bedrock afterwards" would otherwise be
+	 * what a fill that silently did nothing also looks like.
+	 */
+	private void theOldFloorIsGone(ClientGameTestContext context, TestDedicatedServerContext server) {
+		int floor = server.computeOnServer(minecraftServer ->
+				minecraftServer.getLevel(Lobby.LEVEL).getMinY());
+
+		for (BlockPos pos : List.of(
+				new BlockPos(0, floor, 0),
+				new BlockPos(8, floor, -8),
+				new BlockPos(STAGED_FLOOR_RADIUS, floor, STAGED_FLOOR_RADIUS))) {
+			String held = blockOnServer(server, pos);
+			check(held.contains("air"), "arriving at a lobby that still has the old floor must take"
+					+ " it out, and " + pos + " still holds " + held);
+		}
+
+		// The sweep must not have taken the room with it.
+		String underfoot = blockOnServer(server, Lobby.SPAWN.below());
+		String shop = blockOnServer(server, LobbyIsland.SHOP_BLOCK);
+		check(underfoot.contains("grass") && shop.contains("emerald"),
+				"and it must leave the island alone: the spawn has " + underfoot + " under it and"
+						+ " the shop block is " + shop);
+
+		// What the player can actually see under their feet, which is the whole point of the
+		// change: an island over void rather than over a floor.
+		String drawn = blockOnClient(context, new BlockPos(0, floor, 0));
+		check(drawn.contains("air"), "and the client must have been told: it still draws " + drawn
+				+ " at the bottom of the lobby");
+	}
 
 	/**
 	 * Something underfoot, nothing under that, and nothing where the island stops.
@@ -489,6 +550,35 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 				}
 			});
 		});
+	}
+
+	/**
+	 * Make this save's lobby look like one generated before the island existed.
+	 *
+	 * <p>Filled rather than generated, because the old recipe cannot be asked for any more — the
+	 * dimension file is the new one. What a legacy save actually has is one layer of bedrock at the
+	 * bottom of the dimension in every chunk anybody visited, and that is what this puts there.
+	 *
+	 * <p>It asserts the fill landed before returning. A staging step that quietly did nothing would
+	 * make the scenario after it pass against any implementation at all, including none.
+	 */
+	private static void layTheOldFloor(TestDedicatedServerContext server) {
+		int floor = server.computeOnServer(minecraftServer ->
+				minecraftServer.getLevel(Lobby.LEVEL).getMinY());
+		int r = STAGED_FLOOR_RADIUS;
+		server.runCommand("execute in " + Lobby.LEVEL.identifier() + " run fill "
+				+ (-r) + " " + floor + " " + (-r) + " " + r + " " + floor + " " + r + " "
+				+ LobbyIsland.LEGACY_FLOOR.builtInRegistryHolder().key().identifier());
+		TestRuns.settle(server);
+
+		for (BlockPos pos : List.of(new BlockPos(0, floor, 0), new BlockPos(r, floor, r))) {
+			String held = blockOnServer(server, pos);
+			if (!held.contains("bedrock")) {
+				throw new AssertionError("could not stage a legacy lobby floor: " + pos
+						+ " holds " + held + " and the scenario that follows would prove nothing");
+			}
+		}
+		LOGGER.info("Staged a legacy lobby floor at y={}, {} blocks either way", floor, r);
 	}
 
 	/** Back to the middle of the island, facing north — away from the shop block. */

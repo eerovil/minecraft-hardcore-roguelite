@@ -78,6 +78,24 @@ Three rules go with it, and each is load-bearing:
   inside the tick that noticed them. A start that is refused puts the player back on the island and
   says why, rather than leaving them to fall into void damage.
 
+One thing had to be migrated, and it is the kind of thing that is easy to miss. **A generator only
+answers once**, so emptying the flat layers out of `lobby.json` gives void in chunks nobody has
+visited and leaves the old bedrock plane exactly where it is in every chunk somebody has. A save
+played before this change would get the island hanging over that plane — a balcony, not an island,
+with a drop that lands on bedrock. `LobbyIsland.clearLegacyFloor` takes that layer out on the way
+into the lobby. Three things about it are deliberate:
+
+- **the absence of the floor is the version marker.** Nothing generates or places bedrock in the
+  new lobby, so bedrock at the bottom of the dimension under the spawn means the old recipe and
+  nothing else. No upgrade file, no record field, nothing that can disagree with the world;
+- **only bedrock, and only the bottom layer.** The old floor was solid bedrock, so nothing could be
+  placed at that height without breaking bedrock first — which survival cannot do. Everything
+  anybody left in the old lobby is above it;
+- **it is bounded** to `LobbyIsland.LEGACY_SWEEP` blocks. Reading a block in a chunk that does not
+  exist generates it, so an unbounded sweep would conjure thousands of empty chunks looking for a
+  floor that was never there. A legacy lobby somebody flew a long way out in keeps its distant
+  bedrock, out of sight of the island. That is an accepted limit.
+
 The shop's half of the door is `shop/ShopBlock`. It asks `LobbyIsland.isShopBlock` about the
 **position**, not the block type: there is one shop and it is on the island, and an emerald block
 anywhere else is an emerald block.
