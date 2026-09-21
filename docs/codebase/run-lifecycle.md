@@ -28,7 +28,7 @@ Persistent save
 └── minecraft:the_end          disposable, this run only
 
 Outside the save, shared by every save on the installation:
-└── config/hardcore-roguelite-unlocks.json   permanent purchases
+└── config/hardcore-roguelite-progress.json  permanent purchases and currency
 ```
 
 **A run is the three vanilla dimensions; the lobby is the extra one**, not the other way round.
@@ -402,7 +402,7 @@ Before adding a field, decide which column it belongs in.
 
 | State | Lifetime | Home |
 | --- | --- | --- |
-| Purchased unlock / repeatable level | Across saves | `config/hardcore-roguelite-unlocks.json` |
+| Purchased unlock / repeatable level | Across saves | `config/hardcore-roguelite-progress.json` |
 | Future currency balance | Across saves unless design says otherwise | same file |
 | Starter item ownership | Across saves | same file |
 | Phase, run id, seed, run count, reward committed | The save, across runs | `<save>/hardcore-roguelite-run.json` |
@@ -469,6 +469,10 @@ it by putting a diamond block in each run dimension and requiring it to be gone 
   and the lobby and the purchases still standing at the end.
 - `src/gametest/.../client/StarterChestClientTest.java` — the run-start hook doing its job once per
   run, across a reconnect and across two runs.
+- `src/gametest/.../client/ProgressionCycleClientTest.java` — the loop as one player experience:
+  a restricted run, a death, currency spent on a real shop screen in the lobby, and a second run
+  that is both a fresh world and a better one. It is the only test that crosses all four seams in
+  one sequence, so its scenarios deliberately depend on each other in order.
 
 `a-run-cannot-start-without-all-three-of-its-dimensions` is the one that needs a save in a state no
 world preset can be asked for: the nether's `LevelStem` is lifted out of the frozen registry for the

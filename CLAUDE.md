@@ -62,6 +62,8 @@ Prefer extending the existing feature seam over creating a second path that owns
 - [dev environment](docs/dev-environment.md) — read before building, testing, changing GameTests,
   or touching Kubernetes.
 - [agent workflow](docs/agent-workflow.md) — read before implementing or reviewing a GitHub issue.
+- [manual smoke test](docs/manual-smoke-test.md) — the loop played by hand; keep it true when a
+  player-facing message, command or file path changes.
 - [progression](docs/codebase/progression.md) — read before touching permanent state, currency,
   purchases or repeatable upgrades. `Progress` owns the one snapshot all of it lives in.
 - [run lifecycle](docs/codebase/run-lifecycle.md) — read before death handling, starting/ending a

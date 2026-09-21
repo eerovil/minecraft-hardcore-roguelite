@@ -545,4 +545,58 @@ final class TestRuns {
 		server.runOnServer(unused -> {
 		});
 	}
+
+	/**
+	 * How long a client may take to follow the player somewhere, in client ticks.
+	 *
+	 * <p>The harness's own default is 200, ten seconds, and that is not enough here. A dimension
+	 * change has to survive the server's chunk-load handshake, which vanilla itself allows thirty
+	 * seconds for, on a pod that renders with llvmpipe and shares its CPU with whatever else is
+	 * running. Two minutes' worth is not a guess at how long it takes — it is far enough past the
+	 * longest observed arrival that a failure here means the client never arrived at all.
+	 */
+	static final int ARRIVAL_TIMEOUT = 20 * 120;
+
+	/**
+	 * Wait for a freshly connected client to be properly in the world.
+	 *
+	 * <p>Rendered chunks are not the whole of it: the "Loading terrain" screen is still up while the
+	 * server waits to hear that the client has loaded, and acting on a player before that has
+	 * finished races with their own arrival.
+	 */
+	static void settleClient(
+			ClientGameTestContext context, TestDedicatedServerConnection connection) {
+		connection.waitForChunksRender();
+		context.waitFor(client -> client.gui.screen() == null, ARRIVAL_TIMEOUT);
+		context.waitTicks(20);
+	}
+
+	/**
+	 * Assert that the client itself has arrived in a dimension and drawn it.
+	 *
+	 * <p>Not only evidence, though it is that too: the server deciding a player is somewhere is half
+	 * the claim and the player seeing it is the other half, so this is an assertion rather than a
+	 * best-effort wait.
+	 *
+	 * <p>Deliberately not {@code waitForChunksRender}. That waits for every chunk in render distance
+	 * to have geometry, and the lobby is one bedrock plane in an empty biome — there is nothing out
+	 * there to render, and waiting for it to appear is waiting for something that never happens.
+	 * What matters is that the client is in the right world with the loading screen gone.
+	 */
+	static void waitForClientIn(ClientGameTestContext context, String dimension) {
+		try {
+			context.waitFor(client -> client.player != null
+					&& client.player.level().dimension().identifier().toString().equals(dimension)
+					&& client.gui.screen() == null, ARRIVAL_TIMEOUT);
+			context.waitTicks(40);
+		} catch (Throwable stuck) {
+			String where = context.computeOnClient(client -> client.player == null
+					? "nowhere (no player)"
+					: client.player.level().dimension().identifier().toString());
+			String screen = context.computeOnClient(client ->
+					client.gui.screen() == null ? "none" : client.gui.screen().getClass().getSimpleName());
+			throw new AssertionError("The client never followed the player into " + dimension
+					+ ": it is in " + where + " with screen " + screen, stuck);
+		}
+	}
 }
