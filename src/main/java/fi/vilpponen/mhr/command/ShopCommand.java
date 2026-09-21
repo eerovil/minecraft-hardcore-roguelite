@@ -13,9 +13,10 @@ import net.minecraft.server.level.ServerPlayer;
 /**
  * {@code /mhr shop} to open the shop, and {@code /mhr currency} to look at or change the purse.
  *
- * <p>Opening the shop is a command rather than a key because the design's real entry point is the
- * death screen, and death handling is not built yet. When it is, it calls
- * {@link ShopServer#open(ServerPlayer)} — the same door this command uses.
+ * <p>This is the spare key, not the door. Normal play opens the shop by right-clicking the block
+ * on the lobby island — see {@code fi.vilpponen.mhr.shop.ShopBlock}. Both end in
+ * {@link ShopServer#open(ServerPlayer)}, and the command stays for operators and for tests, which
+ * need a shop they can open from anywhere.
  *
  * <p>{@code /mhr currency give} and {@code set} are the development stand-ins for earning.
  * <b>Nothing in gameplay pays out yet</b>, and deliberately so: how currency is earned is still

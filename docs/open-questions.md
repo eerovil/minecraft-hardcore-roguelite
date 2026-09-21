@@ -51,8 +51,6 @@ Settled since:
 ## Technical, once coding starts
 
 - How permanent unlocks are stored across worlds, and where that file lives.
-- What opens the shop in normal play. It is `/mhr shop` today; the design's own entry point is the
-  death screen, which waits on run/death handling.
 - How removed content (trees, ores, animals, villages) is actually suppressed in worldgen
   and spawning, per unlock.
 - Whether unlock state is meant to be shareable or resettable by the player.
@@ -64,3 +62,11 @@ Settled since:
   never means restarting the game. The between-runs state the shop opens into is
   `RunPhase.LOBBY`. Implemented in `fi.vilpponen.mhr.run`; see
   [run lifecycle](codebase/run-lifecycle.md).
+- What opens the shop in normal play: **a block in the lobby**. The lobby is a small island in the
+  void with an emerald block on it, and right-clicking that block opens the shop. The death screen
+  the design originally named is not available to be the entry point — the roguelite cancels
+  vanilla's death handling outright, so there is no game-over screen at all; death puts the player
+  back in the lobby, standing in front of the block. `/mhr shop` stays as the operator's and the
+  tests' spare key, and both doors end in `ShopServer.open`. Implemented in
+  `fi.vilpponen.mhr.shop.ShopBlock` and `fi.vilpponen.mhr.run.LobbyIsland`; see
+  [run lifecycle](codebase/run-lifecycle.md#the-lobby-is-a-room-not-a-floor).
