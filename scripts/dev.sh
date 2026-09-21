@@ -26,6 +26,8 @@ Usage: scripts/dev.sh <command>
   build         Run `gradle build` in the build pod (sync first)
   deploy        Put the freshly built jar in the server's mods/ and restart the server
   go            sync + build + deploy, the normal inner loop
+  client        sync + build, then install the mod jar and its Fabric API into the
+                Minecraft client's mods/ on this machine, for playing by hand
   gametest      Run the automated gameplay verification headless in a pod of its own:
                 unit tests, server GameTests, client GameTests. PASS/FAIL plus artifacts.
   gametest-shell  Shell in the gametest pod
@@ -37,6 +39,11 @@ Usage: scripts/dev.sh <command>
   status        What is running and how far along it is
   down          Delete the deployments but keep the volume
   nuke          Delete everything including the volume
+
+`client` installs into $HOME/Library/Application Support/minecraft/mods on a Mac. Any other
+launcher or instance, and any other operating system, needs the directory naming itself:
+
+  MHR_CLIENT_MODS_DIR=/path/to/instance/mods scripts/dev.sh client
 
 The cluster is shared. Commands that use a pod's workspace take that pod's lock and wait for it
 rather than running on top of each other; MHR_LOCK_WAIT (seconds) bounds the wait. `shell`,
@@ -436,6 +443,122 @@ cmd_build_pod() {
 	run_locked "$pod" build "" "$hold" <<<"set -euo pipefail"$'\n'"$body"
 }
 
+# --- the client jars ----------------------------------------------------------------------
+#
+# `client` is `build` with a different destination: the same sync, the same lock, the same gradle,
+# and then the finished jars come out to this machine instead of going to the server's mods/.
+# Nothing is built here — this machine only receives files.
+
+gradle_prop() {
+	grep "^$1=" "$REPO_ROOT/gradle.properties" | cut -d= -f2
+}
+
+# Where the finished jars go. The Mac's default launcher directory is the only path we are willing
+# to guess, and even that one has to exist already: every launcher keeps its instances somewhere of
+# its own, and a mods/ we invent is a directory nothing ever reads, which looks exactly like a mod
+# that does not work.
+client_mods_dir() {
+	local dir="${MHR_CLIENT_MODS_DIR:-}"
+	if [[ -z "$dir" ]]; then
+		if [[ "$(uname -s)" != Darwin ]]; then
+			cat >&2 <<EOF
+This is $(uname -s), not a Mac, so there is no launcher path worth guessing. Say where the mods go:
+  MHR_CLIENT_MODS_DIR=/path/to/instance/mods scripts/dev.sh client
+EOF
+			exit 1
+		fi
+		dir="$HOME/Library/Application Support/minecraft/mods"
+	fi
+	if [[ ! -d "$dir" ]]; then
+		cat >&2 <<EOF
+No such directory: $dir
+
+Nothing has been created, because a guessed instance is worse than none. Either start the
+launcher's Fabric $(gradle_prop minecraft_version) profile once so it makes its own mods/, or name the instance you
+actually play:
+  MHR_CLIENT_MODS_DIR=/path/to/instance/mods scripts/dev.sh client
+EOF
+		exit 1
+	fi
+	printf '%s\n' "$dir"
+}
+
+# The finished jars, collected into one file inside the critical section for the same reason the
+# gametest artifacts are: the workspace is shared, so another worker's build can replace
+# build/libs the moment the lock goes.
+#
+# Fabric API is cached on the volume rather than fetched every time. It only changes when
+# gradle.properties does, and the name carries the version, so a stale cache is not possible.
+remote_pack_client_jars() {
+	printf 'out=%q\nws=%q\nfabric_version=%q\n' \
+		"$1" "$WORKSPACE" "$(gradle_prop fabric_version)"
+	cat <<'EOF'
+cache=/pvc/fabric-api
+want="fabric-api-${fabric_version}.jar"
+mkdir -p "$cache"
+if [ ! -f "$cache/$want" ]; then
+	echo "Downloading $want"
+	curl -fsSL -o "$cache/$want.part" \
+		"https://maven.fabricmc.net/net/fabricmc/fabric-api/fabric-api/${fabric_version}/fabric-api-${fabric_version}.jar"
+	mv "$cache/$want.part" "$cache/$want"
+fi
+jar=$(ls -t "$ws"/build/libs/*.jar 2>/dev/null | grep -v -e "-sources" -e "-dev" | head -1)
+if [ -z "${jar:-}" ]; then echo "No built jar in $ws/build/libs" >&2; exit 1; fi
+d=$(mktemp -d)
+cp "$jar" "$cache/$want" "$d/"
+tar -C "$d" -cf "$out" .
+rm -rf "$d"
+echo "Packed $(basename "$jar") and $want"
+EOF
+}
+
+# Ours and the Fabric API are replaced; every other mod in the directory is somebody's choice and
+# is left alone. Both jars are copied in under names Minecraft does not load before anything is
+# removed, so a transfer that fails halfway leaves the client exactly as it was.
+install_client_jars() {
+	local dir="$1" from="$2" jar name
+	for jar in "$from"/*.jar; do
+		cp "$jar" "$dir/.mhr-incoming-$(basename "$jar")"
+	done
+	rm -f "$dir"/hardcore-roguelite*.jar "$dir"/fabric-api-*.jar
+	for jar in "$from"/*.jar; do
+		name="$(basename "$jar")"
+		mv "$dir/.mhr-incoming-$name" "$dir/$name"
+		echo "Installed $name"
+	done
+}
+
+cmd_client() {
+	local dir pod pack tmp
+	# Before the build, not after it: a destination nobody can write to is worth knowing about
+	# without waiting for gradle first.
+	dir="$(client_mods_dir)"
+	pod="$(require_build_pod)"
+	stage_source "$pod"
+	pack="$(</dev/null stage_in_pod "$pod" "" .tar)"
+
+	run_locked "$pod" build "" <<EOF
+set -euo pipefail
+$(remote_install_source "$WORKSPACE" "$STAGED_TARBALL")
+$(remote_gradle_build)
+$(remote_pack_client_jars "$pack")
+EOF
+
+	# Out of the pod after the lock has gone; the tarball is its own file, so the next run cannot
+	# pull it out from under this copy.
+	tmp="$(mktemp -d)"
+	kubectl -n "$NS" exec -i "$pod" -- bash -c "cat '$pack'; rm -f '$pack'" | tar -C "$tmp" -xf -
+	install_client_jars "$dir" "$tmp"
+	rm -rf "$tmp"
+
+	echo
+	echo "Into: $dir"
+	echo "Launch the Minecraft $(gradle_prop minecraft_version) profile with Fabric Loader $(gradle_prop loader_version) or newer."
+	echo "Then, to play against the dev server:"
+	echo "  kubectl -n $NS port-forward svc/mhr-server 25565:25565"
+	echo "and join localhost:25565 (offline mode, any username)."
+}
+
 rollout_server() {
 	kubectl -n "$NS" rollout restart deploy/mhr-server
 	kubectl -n "$NS" rollout status deploy/mhr-server --timeout=10m
@@ -736,6 +859,7 @@ case "${1:-}" in
 	build) cmd_build_pod sync build ;;
 	deploy) cmd_build_pod deploy ;;
 	go) cmd_build_pod sync build deploy ;;
+	client) cmd_client ;;
 	gametest) shift; cmd_gametest "$@" ;;
 	gametest-shell) cmd_gametest_shell ;;
 	logs) cmd_logs ;;
