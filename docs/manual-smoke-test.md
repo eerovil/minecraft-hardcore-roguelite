@@ -26,15 +26,22 @@ Gradle on your own machine at all.
 scripts/dev.sh client
 ```
 
-That is the whole step. It syncs the checkout to the build pod, runs the same gradle build there
-that `scripts/dev.sh build` does, and copies two jars back onto this machine — the mod, and the
-Fabric API version `gradle.properties` declares. The client needs both.
+That is the whole step **on a Mac**. It syncs the checkout to the build pod, runs the same gradle
+build there that `scripts/dev.sh build` does, and copies two jars back onto this machine — the mod,
+and the Fabric API version `gradle.properties` declares. The client needs both.
+
+On Linux or Windows the same command stops and asks you where the jars go, because there is no
+launcher path worth guessing outside macOS. Say it yourself and the step is the same:
+
+```sh
+MHR_CLIENT_MODS_DIR=/path/to/instance/mods scripts/dev.sh client
+```
 
 On a Mac it installs into `$HOME/Library/Application Support/minecraft/mods`, and **that directory
 has to exist already**: start the Fabric 26.3 profile once and the launcher makes it. A missing
 one is an error rather than something the script creates, because an invented mods directory is one
 no launcher reads — which looks exactly like a mod that does not work. For Prism, MultiMC or any
-second instance, name it yourself:
+second instance, name it yourself the same way:
 
 ```sh
 MHR_CLIENT_MODS_DIR="$HOME/Library/Application Support/PrismLauncher/instances/mhr/.minecraft/mods" \
@@ -50,52 +57,14 @@ destination. If you also want the dev server running your build, `scripts/dev.sh
 
 See `docs/dev-environment.md#getting-the-mod-into-your-own-client` for the details.
 
-## 2a. Play on the dev server
+## 2. Start from a clean profile
 
-This is the path the repository actually supports, and the one `scripts/dev.sh` is built around.
+Do this **before** you join or make a world, and do it on whichever side is running the mod's
+rules — the server in step 3a, your own instance in step 3b. Everything from step 5 on is written
+as what an empty profile looks like, and a profile carrying an earlier playtest's purchases makes
+those observations quietly wrong rather than obviously wrong.
 
-> Do [step 3](#3-start-from-a-clean-profile) before you join. Both paths end with joining, and
-> everything from step 5 on assumes a profile that has bought nothing.
-
-The server is not exposed outside the cluster, so forward it to whichever machine you are playing
-from:
-
-```sh
-kubectl --context eero-pc -n mhr-dev port-forward svc/mhr-server 25565:25565
-```
-
-Then, in a Fabric 26.3 client with both jars from step 1 in its `mods/` folder, add a server at
-`localhost:25565` and join. The client needs the mod too: the shop screen and the inventory
-padlocks are client-side.
-
-Op yourself, because every `/mhr` command needs permission level 2:
-
-```sh
-scripts/dev.sh rcon "op <your-minecraft-name>"
-```
-
-> The dev server runs `online-mode=false`. Do not put it on a real network.
-
-The cluster is shared. Somebody else's `scripts/dev.sh go` will restart the server under you with
-their jar.
-
-## 2b. Play in singleplayer
-
-Not a path the repository verifies, but there is nothing in the mod that needs a dedicated server.
-Make an ordinary Fabric 26.3 instance, point `scripts/dev.sh client` at its `mods/`, and create a
-**new world with cheats allowed** — without cheats you cannot run `/mhr` at all, and there is no
-other way to start a run yet.
-
-Hardcore is not required. The mod cancels vanilla's death handling itself, so the roguelite rules
-apply either way.
-
-> Same as above: do [step 3](#3-start-from-a-clean-profile) before you load the world.
-
-## 3. Start from a clean profile
-
-Do this **before** you join, and do it on whichever side is running the mod's rules. Everything
-from step 5 on is written as what an empty profile looks like, and a profile carrying an earlier
-playtest's purchases makes those observations quietly wrong rather than obviously wrong.
+On a profile that has never run the mod there is nothing to delete, so skip to step 3.
 
 Two things to know first.
 
@@ -116,15 +85,22 @@ again. Stop first.
 ### On the dev server
 
 The rules run on the *server*, so the files that matter are the server's — not your client
-instance's. The server has to be down while you delete them:
+instance's. The server has to be down while you delete them.
+
+`MHR_CONTEXT` below is the same cluster name `scripts/dev.sh` uses, so the jars you built in step 1
+and the files you delete here cannot end up on different clusters. It defaults to `eero-pc`; set it
+to `mac-docker-desktop` if that is the one you are on.
+
+> **This wipes the progression of everybody who plays on the dev server**, not only yours — it is
+> one shared profile. For a playtest of your own that nobody else notices, use singleplayer below.
 
 ```sh
-kubectl --context eero-pc -n mhr-dev scale deploy/mhr-server --replicas=0
-kubectl --context eero-pc -n mhr-dev wait --for=delete pod -l app=mhr-server --timeout=5m
+kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev scale deploy/mhr-server --replicas=0
+kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev wait --for=delete pod -l app=mhr-server --timeout=5m
 
-BUILD=$(kubectl --context eero-pc -n mhr-dev get pod -l app=mhr-build \
+BUILD=$(kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev get pod -l app=mhr-build \
   -o jsonpath='{.items[0].metadata.name}')
-kubectl --context eero-pc -n mhr-dev exec "$BUILD" -- \
+kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev exec "$BUILD" -- \
   rm -f /pvc/server/config/hardcore-roguelite-progress.json \
         /pvc/server/config/hardcore-roguelite-balance.json \
         /pvc/server/config/hardcore-roguelite-unlocks.json \
@@ -140,15 +116,51 @@ guide assumes.
 
 ### In singleplayer
 
-Quit to the title screen (or close the game), then delete those four files from your instance's
-`config/` directory and delete the save. To keep the world but forget which run it was on, delete
-`<save>/hardcore-roguelite-run.json` instead.
+If the game is up, quit to the title screen or close it, then delete those four files from your
+instance's `config/` directory. If an earlier playtest left a save behind, delete that too — or, to
+keep the world but forget which run it was on, delete `<save>/hardcore-roguelite-run.json` instead.
 
 ---
 
 A missing progress file is a new player with nothing. **A file that is there and cannot be read
 stops the game on purpose**, naming the path — that is not a crash to work around, it is the mod
 refusing to write an empty profile over a repairable one.
+
+## 3a. Play on the dev server
+
+This is the path the repository actually supports, and the one `scripts/dev.sh` is built around.
+
+The server is not exposed outside the cluster, so forward it to whichever machine you are playing
+from:
+
+```sh
+kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev port-forward svc/mhr-server 25565:25565
+```
+
+Then, in a Fabric 26.3 client with both jars from step 1 in its `mods/` folder, add a server at
+`localhost:25565` and join. The client needs the mod too: the shop screen and the inventory
+padlocks are client-side.
+
+Op yourself, because every `/mhr` command needs permission level 2:
+
+```sh
+scripts/dev.sh rcon "op <your-minecraft-name>"
+```
+
+> The dev server runs `online-mode=false`. Do not put it on a real network.
+
+The cluster is shared. Somebody else's `scripts/dev.sh go` will restart the server under you with
+their jar.
+
+## 3b. Play in singleplayer
+
+Not a path the repository verifies, but there is nothing in the mod that needs a dedicated server.
+Make an ordinary Fabric 26.3 instance, point `scripts/dev.sh client` at its `mods/`, and create a
+**new world with cheats allowed** — without cheats you cannot run `/mhr` at all, and there is no
+other way to start a run yet.
+
+Hardcore is not required. The mod cancels vanilla's death handling itself, so the roguelite rules
+apply either way.
 
 ## 4. First join: the lobby
 
@@ -277,7 +289,7 @@ That is the whole loop: the run was disposable, the purchases were not.
 
 Die or `/mhr run end`, spend, start. Each run is a fresh world and everything bought is still yours.
 
-To start the *whole thing* over, go back to [step 3](#3-start-from-a-clean-profile) — delete the
+To start the *whole thing* over, go back to [step 2](#2-start-from-a-clean-profile) — delete the
 progress file as well as the world. Deleting only the world keeps your purchases.
 
 ## When it goes wrong
@@ -307,6 +319,8 @@ Every command below was run in this order and the output is what is quoted in th
 /mhr shop          -> Only a player can open the shop.     (from the console; it needs a player)
 /mhr run end       -> Back in the lobby.
 /mhr currency      -> Currency: 20                          the run ended, the money did not
+/mhr unlock starter.bread                                   step 8, done the only way a console can
+/mhr unlock world.border.medium
 /mhr run start     -> Run 2 started on seed 7317067687666189064
 /mhr border        -> Border tier: medium (512 blocks across)
 ```
@@ -315,9 +329,9 @@ and the server log for that run 2 reads `Starter chest at 15 67 -49`, one block 
 So the loop, the currency surviving a run, the border tier changing the next run and the starter
 chest arriving are all confirmed on a real server rather than inferred.
 
-One difference from the steps above: those two unlocks were granted with `/mhr unlock` rather than
-bought by clicking, because the console has no shop screen. The clicking is covered by
-`ShopClientTest` and by `ProgressionCycleClientTest`, which buys both with a real mouse.
+The two `/mhr unlock` lines are the one substitution for the steps above: the console has no shop
+screen, so nothing was bought by clicking here. The clicking is covered by `ShopClientTest` and by
+`ProgressionCycleClientTest`, which buys both with a real mouse.
 
 **Checked against the code**: every file path, version number, price, quoted game message and
 command syntax on this page.

@@ -885,7 +885,7 @@ step never built. The steps:
   no more, with change left over so "the purse was emptied" cannot pass for "the price was taken".
 - **run-two-is-a-fresh-world-that-has-what-was-bought** — run 1's marker block gone from all three
   dimensions, and the two purchases showing up as things in the world: a chest holding sixteen bread,
-  and a border twice the size of run 1's.
+  and a border four times the width of run 1's — 512 blocks across against 128.
 - **progression-outlived-both-runs-and-the-runs-did-not** — both files re-read from disk.
 
 Both runs use a named seed, because the scenarios above assert what is standing around each run's
