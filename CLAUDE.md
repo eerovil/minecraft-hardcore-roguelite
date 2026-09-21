@@ -108,6 +108,10 @@ These have already cost implementation/debugging time.
   interaction feedback, not a replacement for server enforcement.
 - **A mixin is a hook, not a feature module.** Keep injections narrow and delegate to feature code
   so unrelated vanilla behaviour remains untouched.
+- **`scripts/dev.sh` has to run on bash 3.2**, because `client` runs on the Mac and that is the bash
+  macOS ships. No `exec {fd}<>`, no `mapfile`, no `declare -A`, and `"${arr[@]}"` on an empty array
+  is an unbound-variable error under `set -u` — write `${arr[@]+"${arr[@]}"}`. Checking it is one
+  command: `podman run --rm -v "$PWD:/w:ro" -w /w docker.io/library/bash:3.2 bash -n scripts/dev.sh`.
 
 ## Issue and agent workflow
 

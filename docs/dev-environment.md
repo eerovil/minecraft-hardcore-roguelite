@@ -851,6 +851,16 @@ server rather than a single-player world, port-forward it as below.
 `client` and `go` are separate on purpose: `go` is the server loop, `client` is the client
 install. Neither touches the other's destination.
 
+This is the command that actually runs on the Mac rather than on the Linux box, so `scripts/dev.sh`
+has to stay inside what bash 3.2 understands — macOS still ships bash 3.2 and `/usr/bin/env bash`
+finds it. Two things that work everywhere else do not work there: `exec {fd}<>file` (bash 4.1) and
+`"${arr[@]}"` on an empty array, which bash 3.2 calls an unbound variable under `set -u`. Both bit
+this script. Syntax is cheap to check:
+
+```sh
+podman run --rm -v "$PWD:/w:ro" -w /w docker.io/library/bash:3.2 bash -n scripts/dev.sh
+```
+
 ## Joining the server
 
 The server is not exposed outside the cluster. On the **Mac**:
