@@ -3,11 +3,18 @@ package fi.vilpponen.mhr.gametest.client;
 import fi.vilpponen.mhr.border.BorderTier;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.progression.Offer;
+import fi.vilpponen.mhr.shop.ShopServer;
+import fi.vilpponen.mhr.shop.ShopStatePayload;
+import fi.vilpponen.mhr.shop.client.ShopClient;
+import fi.vilpponen.mhr.shop.client.ShopScreen;
 import fi.vilpponen.mhr.starter.StarterItems;
+import net.minecraft.client.multiplayer.chat.GuiMessage;
 import net.minecraft.world.item.ItemStack;
 import java.util.ArrayList;
 import java.util.List;
+import fi.vilpponen.mhr.gametest.mixin.ChatComponentAccessor;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
@@ -46,7 +53,7 @@ public class ShopClientTest implements FabricClientGameTest {
 	/**
 	 * The screen and the purse, driven through {@link TestShop}.
 	 *
-	 * <p>A field rather than a parameter threaded through eleven scenarios. It is built once the
+	 * <p>A field rather than a parameter threaded through twelve scenarios. It is built once the
 	 * server and the connection exist, which is why it cannot be final.
 	 */
 	private TestShop shop;
@@ -81,6 +88,8 @@ public class ShopClientTest implements FabricClientGameTest {
 						() -> buyingABorderTierResizesTheWorld(context, player));
 				scenario(context, "a-smaller-border-tier-is-not-for-sale-once-a-bigger-one-is-owned",
 						() -> aSmallerBorderTierIsNotForSaleOnceABiggerOneIsOwned(context, player));
+				scenario(context, "a-client-that-cannot-be-sent-the-shop-is-told-why",
+						() -> aClientThatCannotBeSentTheShopIsToldWhy(context, player));
 			}
 		}
 
@@ -478,6 +487,55 @@ public class ShopClientTest implements FabricClientGameTest {
 		shop.resetProgression();
 	}
 
+	/**
+	 * The dedicated server takes anyone. So a player can ask for the shop from a client that has no
+	 * way of drawing one, and used to get nothing whatsoever back: the server checked whether it
+	 * could send the screen and returned when it could not, which from the chair looks exactly like
+	 * the shop being broken.
+	 *
+	 * <p>Played for real rather than faked: the client stops listening for the shop, which is what
+	 * having no mod amounts to on the wire, and the server is asked to confirm it has heard so
+	 * before the command is run. The channel is then taken back and the same command opens the shop
+	 * again — the control, without which this scenario would pass just as well if {@code /mhr shop}
+	 * had stopped working altogether.
+	 */
+	private void aClientThatCannotBeSentTheShopIsToldWhy(ClientGameTestContext context, TestPlayer player) {
+		shop.resetProgression();
+		closeAnyScreen(context);
+		check(!wasToldOnTheClient(context, CLIENT_MOD_REQUIRED),
+				"setup: nothing should have said this yet, or the check below would pass on an old message");
+
+		dropTheShopChannel(context, player);
+		try {
+			check(!canBeSentTheShop(player),
+					"setup: the server should have heard that this client no longer listens for the shop");
+
+			player.command("execute as Player0 run mhr shop");
+			context.waitTicks(20);
+			player.settle();
+
+			check(!shopIsOpen(context),
+					"no shop may open for a client that cannot be sent one, and the screen is "
+							+ screenName(context));
+			waitToBeToldOnTheClient(context, CLIENT_MOD_REQUIRED);
+			check(wasToldOnTheClient(context, CLIENT_MOD_REQUIRED),
+					"the player must be told why the shop did not open. Chat said: " + clientMessages(context));
+
+			// The evidence shot: what the player is left looking at. No screen, and a line in the
+			// chat saying why, taken on the passing path rather than on failure.
+			context.takeScreenshot("shop-client-mod-required");
+		} finally {
+			takeTheShopChannelBack(context, player);
+		}
+
+		check(canBeSentTheShop(player), "the control: the channel should be back");
+		shop.open();
+		check(shopIsOpen(context),
+				"and the same command must open the shop again, so the refusal was about the client and"
+						+ " nothing else");
+		closeAnyScreen(context);
+	}
+
 	// --- asking the feature the purchase is about ---------------------------------------------
 
 	/** How many the chest will actually hold, from the server's own catalogue. */
@@ -492,6 +550,82 @@ public class ShopClientTest implements FabricClientGameTest {
 		return player.onServerComputing(server -> server.overworld().getWorldBorder().getSize());
 	}
 
+
+	// --- playing a client without the mod -----------------------------------------------------
+
+	/** What a client with no mod of ours is told. Spelled out here, as the player reads it. */
+	private static final String CLIENT_MOD_REQUIRED =
+			"Hardcore Roguelite client mod is required to open the shop.";
+
+	/**
+	 * Stop listening for the shop, and wait until the server knows.
+	 *
+	 * <p>A registered receiver is what puts the channel in the list this client sends the server, so
+	 * taking it away is the same fact on the wire as never having had the mod. The announcement
+	 * travels, so the server is asked until it agrees rather than after a fixed wait.
+	 */
+	private void dropTheShopChannel(ClientGameTestContext context, TestPlayer player) {
+		context.runOnClient(client -> ClientPlayNetworking.unregisterGlobalReceiver(ShopStatePayload.TYPE.id()));
+		waitUntilTheServerAgrees(context, player, false);
+	}
+
+	private void takeTheShopChannelBack(ClientGameTestContext context, TestPlayer player) {
+		context.runOnClient(client -> ShopClient.registerReceiver());
+		waitUntilTheServerAgrees(context, player, true);
+	}
+
+	private void waitUntilTheServerAgrees(ClientGameTestContext context, TestPlayer player, boolean listening) {
+		for (int attempt = 0; attempt < 40; attempt++) {
+			if (canBeSentTheShop(player) == listening) {
+				return;
+			}
+			context.waitTicks(2);
+		}
+	}
+
+	/** The server's own answer to "can this client be shown the shop" — the check the command uses. */
+	private boolean canBeSentTheShop(TestPlayer player) {
+		return player.onServerComputing(server ->
+				ShopServer.canReceive(server.getPlayerList().getPlayers().get(0)));
+	}
+
+	private boolean shopIsOpen(ClientGameTestContext context) {
+		return context.computeOnClient(client -> client.gui.screen() instanceof ShopScreen);
+	}
+
+	private String screenName(ClientGameTestContext context) {
+		return context.computeOnClient(client -> String.valueOf(client.gui.screen()));
+	}
+
+	private void closeAnyScreen(ClientGameTestContext context) {
+		context.setScreen(() -> null);
+		context.waitTicks(2);
+	}
+
+	/** Give the client a while to be shown this. */
+	private void waitToBeToldOnTheClient(ClientGameTestContext context, String fragment) {
+		for (int attempt = 0; attempt < 60; attempt++) {
+			if (wasToldOnTheClient(context, fragment)) {
+				return;
+			}
+			context.waitTicks(2);
+		}
+	}
+
+	/** Has the client been shown a message containing this? */
+	private boolean wasToldOnTheClient(ClientGameTestContext context, String fragment) {
+		return clientMessages(context).contains(fragment);
+	}
+
+	private String clientMessages(ClientGameTestContext context) {
+		return context.computeOnClient(client -> {
+			StringBuilder said = new StringBuilder();
+			for (GuiMessage message : ((ChatComponentAccessor) client.gui.hud.getChat()).mhr$allMessages()) {
+				said.append(message.content().getString()).append(" | ");
+			}
+			return said.toString();
+		});
+	}
 
 	// --- plumbing --------------------------------------------------------------------------
 

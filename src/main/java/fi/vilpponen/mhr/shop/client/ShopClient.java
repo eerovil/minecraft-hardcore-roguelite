@@ -15,13 +15,24 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 public final class ShopClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
+		registerReceiver();
+
+		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> SyncedShop.forget());
+	}
+
+	/**
+	 * Start listening for the shop.
+	 *
+	 * <p>Its own method because this registration is also what tells a server that this client can
+	 * be shown the shop at all — so it is the one thing a test has to be able to take away again to
+	 * play a client without the mod.
+	 */
+	public static void registerReceiver() {
 		ClientPlayNetworking.registerGlobalReceiver(ShopStatePayload.TYPE, (payload, context) -> {
 			SyncedShop.accept(payload.currency(), payload.offers(), payload.rewards());
 			if (payload.open()) {
 				context.client().setScreenAndShow(new ShopScreen());
 			}
 		});
-
-		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> SyncedShop.forget());
 	}
 }
