@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drive the dev environment running in the Mac kubernetes cluster.
+# Drive the dev environment running in the eero-pc kubernetes cluster.
 #
 # Nothing here builds or runs Minecraft locally — the whole point is to keep that
 # off this machine. See docs/dev-environment.md.
@@ -7,6 +7,32 @@ set -euo pipefail
 
 NS=mhr-dev
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# --- which cluster ------------------------------------------------------------------------
+#
+# Named here rather than taken from whatever `kubectl config current-context` happens to say.
+# The ambient context is process-wide state that anything can change — another terminal, an
+# agent session, a half-finished experiment — and the failure it produces is a build or a
+# gametest run that quietly went to the wrong cluster and reported success. So every kubectl
+# call below carries the context explicitly.
+#
+#   eero-pc             the k3s box on the LAN. The default, and where the work happens.
+#   mac-docker-desktop  the older kind cluster on the MacBook Air. The fallback.
+#
+# MHR_CONTEXT= (empty) opts back out and uses the ambient context, for a cluster neither of
+# those names.
+MHR_CONTEXT="${MHR_CONTEXT-eero-pc}"
+
+# Shadowing the name is deliberate: there are some forty call sites and every one of them
+# wants the context. `command kubectl` is the real binary, so this does not recurse.
+kubectl() {
+	if [[ -n "$MHR_CONTEXT" ]]; then
+		command kubectl --context "$MHR_CONTEXT" "$@"
+	else
+		command kubectl "$@"
+	fi
+}
+
 # Where the source tree lands in the build pod. The volume is shared, so a test that must not be
 # disturbed by someone else's `go` can point at a directory of its own:
 #   MHR_WORKSPACE=/pvc/workspace-mine scripts/dev.sh build
@@ -20,7 +46,7 @@ usage() {
 Usage: scripts/dev.sh <command>
 
   image         Print the command that builds the gametest image and loads it into the
-                cluster node. It has to run on the Mac — see docs/dev-environment.md.
+                cluster node. It has to run on that node — see docs/dev-environment.md.
   up            Create the namespace, volume and both deployments, then wait for them
   sync          Copy the working tree into the build pod
   build         Run `gradle build` in the build pod (sync first)
@@ -44,6 +70,10 @@ Usage: scripts/dev.sh <command>
 launcher or instance, and any other operating system, needs the directory naming itself:
 
   MHR_CLIENT_MODS_DIR=/path/to/instance/mods scripts/dev.sh client
+
+Everything runs against the `eero-pc` kube context. The MacBook Air cluster is the fallback:
+
+  MHR_CONTEXT=mac-docker-desktop scripts/dev.sh gametest
 
 The cluster is shared. Commands that use a pod's workspace take that pod's lock and wait for it
 rather than running on top of each other; MHR_LOCK_WAIT (seconds) bounds the wait. `shell`,
@@ -297,15 +327,24 @@ require_build_pod() {
 	echo "$pod"
 }
 
-# The gametest image is built on the Mac, because the only cluster node is the Mac and it is
-# arm64 while this machine is x86_64. There is no registry anywhere: the built image is imported
-# straight into the node container's containerd, which is what `kind load docker-image` does and
-# what Docker Desktop's kind-based kubernetes leaves room for. containerd refuses plain-HTTP
-# registries even on localhost, so an in-cluster registry would need a certificate or a
-# node-level hosts.toml that Docker Desktop resets — this route needs neither.
+# The gametest image is built on the cluster node itself, and this command only prints the recipe
+# for doing it. That is not laziness about automating it: there is no registry anywhere, so the
+# image has to be handed to the node's containerd directly, and the node is never this machine.
+# containerd refuses plain-HTTP registries even on localhost, so standing one up would need a
+# certificate or node-level configuration on every cluster — this route needs neither. Run the
+# printed command on the node and come back.
 #
 # The command is generated rather than kept as a second file so that k8s/gametest.Dockerfile
 # stays the only copy of what goes into the image.
+#
+# Which node, and therefore which recipe, follows the context:
+#
+#   eero-pc             a k3s box. Build with podman and import with `k3s ctr`, which is the
+#                       supported way to put an image into k3s' own containerd.
+#   mac-docker-desktop  a kind cluster whose node is a container on the Mac's Docker, so the
+#                       import goes through `docker exec` into that container — which is exactly
+#                       what `kind load docker-image` does. arm64, because the node is Apple
+#                       Silicon while this machine is x86_64.
 cmd_image() {
 	local tag dockerfile
 	dockerfile="$REPO_ROOT/k8s/gametest.Dockerfile"
@@ -314,7 +353,10 @@ cmd_image() {
 		echo "No mhr-gametest tag in k8s/dev.yaml" >&2
 		exit 1
 	fi
-	cat <<EOF
+
+	if [[ "$MHR_CONTEXT" == mac-docker-desktop ]]; then
+		echo "# Run this on the Mac:" >&2
+		cat <<EOF
 set -eu
 # Build $tag for the cluster node and import it into that node's containerd.
 docker inspect --format 'node container: {{.State.Status}}' desktop-control-plane
@@ -327,6 +369,34 @@ rm -rf "\$ctx"
 docker save $tag | docker exec -i desktop-control-plane ctr -n k8s.io images import -
 # Prove it landed. grep fails the whole command if it did not.
 docker exec desktop-control-plane ctr -n k8s.io images ls | grep '$tag'
+EOF
+		return
+	fi
+
+	# The name has to be spelled out in full. containerd stores images under a normalized
+	# reference, and the kubelet asking for `mhr-gametest:1` is asking for
+	# `docker.io/library/mhr-gametest:1` — docker tags it that way implicitly, podman does not:
+	# it prefixes a locally-built image with `localhost/` instead. An image imported under the
+	# podman name lands in containerd perfectly and the pod still sits on ErrImageNeverPull,
+	# because the two are simply different images as far as the kubelet is concerned.
+	local ref="docker.io/library/$tag"
+	echo "# Run this on the $MHR_CONTEXT node itself (it needs that node's containerd):" >&2
+	cat <<EOF
+set -eu
+# k3s installs outside the PATH sudo keeps, so find it before needing root.
+k3s=\$(command -v k3s || ls /usr/local/bin/k3s /usr/bin/k3s /opt/bin/k3s 2>/dev/null | head -1)
+[ -n "\$k3s" ] || { echo "No k3s binary found — is this the right machine?" >&2; exit 1; }
+
+ctx=\$(mktemp -d)
+cat > "\$ctx/Dockerfile" <<'MHR_DOCKERFILE'
+$(cat "$dockerfile")
+MHR_DOCKERFILE
+# Rootless is fine for the build; only handing the result to containerd needs root.
+podman build -t $ref "\$ctx"
+rm -rf "\$ctx"
+podman save $ref | sudo "\$k3s" ctr -n k8s.io images import -
+# Prove it landed, under the name the kubelet will ask for. grep fails the whole command if not.
+sudo "\$k3s" ctr -n k8s.io images ls | grep '$ref'
 EOF
 }
 
@@ -844,8 +914,8 @@ cmd_newworld() {
 cmd_status() {
 	kubectl -n "$NS" get pods -o wide
 	echo
-	echo "Connect from the Mac with:"
-	echo "  kubectl -n $NS port-forward svc/mhr-server 25565:25565"
+	echo "Connect from the machine you play on with:"
+	echo "  kubectl${MHR_CONTEXT:+ --context $MHR_CONTEXT} -n $NS port-forward svc/mhr-server 25565:25565"
 	echo "then join localhost:25565 (offline mode, any username)."
 }
 
