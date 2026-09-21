@@ -178,8 +178,9 @@ regenerated from that seed and you are dropped into the new overworld.
 
 Look around. With nothing bought:
 
-- **No trees.** Not sparse — none at all. This is the most striking one and it is why `world.trees`
-  is the unlock to buy first.
+- **No trees.** Not sparse — none at all, in any biome. This direction is reliable: the unlock
+  suppresses every tree, so a treeless desert and a treeless forest look the same. (The other
+  direction is not — see step 9.)
 - **No starter chest** at your feet. With something bought there would be one within three blocks.
 - **A 128-block world.** Walk in any direction and the border stops you about 64 blocks out. That is
   the `tiny` tier, the one you get for having bought no tier at all.
@@ -227,17 +228,22 @@ One scrolling page: restoring vanilla at the top, Vanilla+ below it. Click a squ
 affordable square buys and charges at once; one you cannot afford does nothing; one already owned
 does nothing.
 
-Buy these two, three currency each:
+Buy these two, three currency each. They are the two whose effect you can check without
+walking anywhere:
 
 | Unlock | What it changes | When you see it |
 | --- | --- | --- |
-| `world.trees` | trees generate again | next run only — worldgen cannot rewrite chunks that exist |
 | `starter.bread` | 16 bread in a chest at the run's spawn | next run |
+| `world.border.medium` | the world goes from 128 blocks across to 512 | next run |
+
+Buy `world.trees` as well if you like — it is the most striking change — but do not use it as
+your pass/fail signal. See step 9.
 
 If you would rather see something change *immediately*, buy `player.slot.helmet` (also 3) and watch
 the padlock leave that square in your inventory.
 
-Close the shop. `/mhr list` should now show both as `[owned]` and 14 currency left.
+Close the shop. `/mhr list` should now show what you bought as `[owned]`, and the currency left
+should be 20 minus what you spent.
 
 ## 9. Start run 2 and confirm
 
@@ -248,12 +254,22 @@ Close the shop. `/mhr list` should now show both as `[owned]` and 14 currency le
 `Run 2 started on seed <a different seed>`. It is a genuinely new world — new seed, new chunks, run
 1's terrain deleted, not a teleport somewhere far away.
 
-You should see, right where you land:
+Two things confirm the purchases, and both are the same every time:
 
-- **Trees.** The thing you bought.
 - **A chest within a few blocks**, holding 16 bread, with a chat line saying where it is.
-- The border still 128 across, because you did not buy a tier. Buy `world.border.medium` (3) in the
-  shop between runs and the next run is 512 across.
+- **`/mhr border` now says `medium (512 blocks across)`** where before run 1 it said
+  `tiny (128 blocks across)`. Walk west until the border stops you if you want to see it.
+
+**Trees are not a reliable check, and this is the trap worth knowing.** The unlock restores
+*vanilla* tree generation — it does not plant trees for you. So run 2 puts you wherever its seed
+puts you, and a legitimate spawn in a desert, a plains or a snowy flat has few trees or none,
+with the unlock working perfectly. Seeing no trees at spawn is not a failure. If you want to
+check trees specifically, either walk to a forest, or start the run on a seed you have used
+before and compare the same place with the unlock and without:
+
+```
+/mhr run start 45000001        the seed argument exists for exactly this
+```
 
 That is the whole loop: the run was disposable, the purchases were not.
 
@@ -274,14 +290,45 @@ progress file as well as the world. Deleting only the world keeps your purchases
 | a run refuses to start | `/mhr run` says why — one is already in progress, or the save cannot describe all three run dimensions |
 | your purchases vanished | you deleted `config/hardcore-roguelite-progress.json`, or you are playing a different instance |
 
-## What this document is and is not
+## How much of this has actually been run
 
-Every command, message, file path and version above is taken from the code on this branch, and the
-sequence itself — lobby, restricted run, death, shop purchase, better second run — is the one
-`ProgressionCycleClientTest` drives against a real client and a real dedicated server on every
-`scripts/dev.sh gametest`.
+Three different levels of "verified", because they are not the same and the difference matters if
+a step here turns out to be wrong.
 
-What has **not** been done is somebody sitting at a keyboard following these steps, because the
-repository has no client on the machine the agents work from. So treat the *shape* as verified and
-the feel as untested: if a message is worded slightly differently or a chest is four blocks away
-rather than two, fix the line here.
+**Driven for real against the dev server**, through `scripts/dev.sh rcon` on this branch's build.
+Every command below was run in this order and the output is what is quoted in the steps above:
+
+```
+/mhr list          -> everything [locked], Currency: 0
+/mhr border        -> Border tier: tiny (128 blocks across)
+/mhr run start     -> Run 1 started on seed -2748112778258634698
+/mhr run           -> run 1 in progress (seed -2748112778258634698)
+/mhr currency give 20  -> Currency: 20
+/mhr shop          -> Only a player can open the shop.     (from the console; it needs a player)
+/mhr run end       -> Back in the lobby.
+/mhr currency      -> Currency: 20                          the run ended, the money did not
+/mhr run start     -> Run 2 started on seed 7317067687666189064
+/mhr border        -> Border tier: medium (512 blocks across)
+```
+
+and the server log for that run 2 reads `Starter chest at 15 67 -49`, one block from its spawn.
+So the loop, the currency surviving a run, the border tier changing the next run and the starter
+chest arriving are all confirmed on a real server rather than inferred.
+
+One difference from the steps above: those two unlocks were granted with `/mhr unlock` rather than
+bought by clicking, because the console has no shop screen. The clicking is covered by
+`ShopClientTest` and by `ProgressionCycleClientTest`, which buys both with a real mouse.
+
+**Checked against the code**: every file path, version number, price, quoted game message and
+command syntax on this page.
+
+**Not done by anyone yet** — and this is the honest gap: nobody has sat at a keyboard and played
+it. The agents working on this repository have no Minecraft client, so the parts that are only a
+person with a mouse remain unexercised:
+
+- `scripts/dev.sh client` actually landing the jars where your launcher reads them;
+- the port-forward, joining, and being opped;
+- the lobby, the padlocks and the shop as *drawn things* rather than as server state;
+- whether fifteen minutes of this is pleasant to follow.
+
+If you run it and a line is wrong, the game is right and this file is stale — fix the line.
