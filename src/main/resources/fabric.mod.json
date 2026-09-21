@@ -15,7 +15,8 @@
 		"main": ["fi.vilpponen.mhr.HardcoreRoguelite"],
 		"client": [
 			"fi.vilpponen.mhr.equipment.client.EquipmentLockClient",
-			"fi.vilpponen.mhr.shop.client.ShopClient"
+			"fi.vilpponen.mhr.shop.client.ShopClient",
+			"fi.vilpponen.mhr.earn.client.CurrencyHud"
 		]
 	},
 	"mixins": ["hardcore_roguelite.mixins.json"],
