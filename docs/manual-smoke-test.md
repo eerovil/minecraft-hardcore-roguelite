@@ -64,7 +64,7 @@ rules — the server in step 3a, your own instance in step 3b. Everything from s
 as what an empty profile looks like, and a profile carrying an earlier playtest's purchases makes
 those observations quietly wrong rather than obviously wrong.
 
-On a profile that has never run the mod there is nothing to delete, so skip to step 3.
+On a profile that has never run the mod there is nothing to delete, so go straight to step 3a or 3b.
 
 Two things to know first.
 
@@ -89,18 +89,24 @@ instance's. The server has to be down while you delete them.
 
 `MHR_CONTEXT` below is the same cluster name `scripts/dev.sh` uses, so the jars you built in step 1
 and the files you delete here cannot end up on different clusters. It defaults to `eero-pc`; set it
-to `mac-docker-desktop` if that is the one you are on.
+to `mac-docker-desktop` if that is the one you are on. Setting it to the empty string is how
+`scripts/dev.sh` opts out of naming a cluster at all — do the same here by dropping
+`--context "$CTX"` from each line and letting your ambient kubectl context decide.
+
+```sh
+CTX="${MHR_CONTEXT-eero-pc}"      # the same default scripts/dev.sh uses
+```
 
 > **This wipes the progression of everybody who plays on the dev server**, not only yours — it is
 > one shared profile. For a playtest of your own that nobody else notices, use singleplayer below.
 
 ```sh
-kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev scale deploy/mhr-server --replicas=0
-kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev wait --for=delete pod -l app=mhr-server --timeout=5m
+kubectl --context "$CTX" -n mhr-dev scale deploy/mhr-server --replicas=0
+kubectl --context "$CTX" -n mhr-dev wait --for=delete pod -l app=mhr-server --timeout=5m
 
-BUILD=$(kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev get pod -l app=mhr-build \
+BUILD=$(kubectl --context "$CTX" -n mhr-dev get pod -l app=mhr-build \
   -o jsonpath='{.items[0].metadata.name}')
-kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev exec "$BUILD" -- \
+kubectl --context "$CTX" -n mhr-dev exec "$BUILD" -- \
   rm -f /pvc/server/config/hardcore-roguelite-progress.json \
         /pvc/server/config/hardcore-roguelite-balance.json \
         /pvc/server/config/hardcore-roguelite-unlocks.json \
@@ -134,7 +140,8 @@ The server is not exposed outside the cluster, so forward it to whichever machin
 from:
 
 ```sh
-kubectl --context "${MHR_CONTEXT:-eero-pc}" -n mhr-dev port-forward svc/mhr-server 25565:25565
+CTX="${MHR_CONTEXT-eero-pc}"      # as in step 2, if this is a new shell
+kubectl --context "$CTX" -n mhr-dev port-forward svc/mhr-server 25565:25565
 ```
 
 Then, in a Fabric 26.3 client with both jars from step 1 in its `mods/` folder, add a server at
