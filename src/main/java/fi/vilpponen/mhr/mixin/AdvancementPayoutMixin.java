@@ -29,11 +29,18 @@ public class AdvancementPayoutMixin {
 	@Shadow
 	private ServerPlayer player;
 
-	@Inject(method = "award", at = @At(value = "INVOKE",
+	@Inject(method = "award", cancellable = true, at = @At(value = "INVOKE",
 			target = "Lnet/minecraft/advancements/AdvancementRewards;grant"
 					+ "(Lnet/minecraft/server/level/ServerPlayer;)V"))
 	private void hardcoreRoguelite$payForAdvancement(AdvancementHolder advancement, String criterion,
 			CallbackInfoReturnable<Boolean> callback) {
-		AdvancementPayouts.completed(player, advancement);
+		if (!AdvancementPayouts.completed(player, advancement, criterion)) {
+			// The payout could not be written down, so the completion has been revoked and this
+			// award is being undone. Stopping here is the rest of undoing it: vanilla is about to
+			// hand over the advancement's own rewards, pop a toast and announce it in chat, and none
+			// of that should happen for something the player still has to earn. False is the honest
+			// answer too — after the rollback, nothing about their progress changed.
+			callback.setReturnValue(false);
+		}
 	}
 }

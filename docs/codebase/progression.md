@@ -244,6 +244,14 @@ neither. The ledger belongs to one run: a credit from a later run replaces it, w
 "every run earns the same milestones again" rule and what stops it growing for ever. Run ids are
 never reused, so an old entry cannot be mistaken for a current one.
 
+**A payout the disk refuses un-earns what it was for.** The write failing is not the end of it,
+because the thing being paid for happens once: an advancement finished while the snapshot cannot be
+written would otherwise stand, and a disk that comes back a second later would never give that
+milestone another chance to pay. So `AdvancementPayouts` revokes the criterion that finished it and
+the mixin cancels the award — no currency, no vanilla reward, no toast, no announcement — and the
+player earns it again when the game can write. Any further earning rule has to answer the same
+question: what undoes the thing that triggered the payout, when the payout cannot be recorded?
+
 Two rules for any further earning rule:
 
 - **Anything gameplay pays out goes through `earnOnce`, not `earn`.** `Wallet.earn` and

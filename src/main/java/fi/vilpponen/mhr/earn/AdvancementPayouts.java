@@ -69,19 +69,26 @@ public final class AdvancementPayouts {
 	 * still possible — a crash can take the advancement record back to before it — and that is the
 	 * ledger's job rather than the hook's.
 	 *
-	 * <p>A payout that cannot be written down is not a payout. {@link Wallet} hands the whole
-	 * snapshot to the disk and refuses the change if it does not land, so the player is told rather
-	 * than being quietly given nothing — and the advancement stays earned, since taking it back
-	 * would be a second lie on top of the first.
+	 * <p><b>A payout that cannot be written down un-earns the advancement.</b> {@link Wallet} hands
+	 * the whole snapshot to the disk and refuses the change if it does not land, and leaving the
+	 * completion standing would then cost the player the reward for good: an advancement is finished
+	 * once, so a disk that comes back never gives that milestone another chance to pay. So the
+	 * criterion that finished it is revoked — which re-registers vanilla's own triggers — and the
+	 * caller cancels the award, leaving nothing behind: no currency, no vanilla reward, no toast and
+	 * no announcement for something that is going to have to be earned again. Finishing it once the
+	 * disk is writable then pays exactly once, like any other first time.
+	 *
+	 * @return false if the completion was rolled back and the award should be cancelled
 	 */
-	public static void completed(ServerPlayer player, AdvancementHolder advancement) {
+	public static boolean completed(ServerPlayer player, AdvancementHolder advancement,
+			String criterion) {
 		int runId = RunAdmission.of(player);
 		if (runId == RunAdmission.NO_RUN) {
-			return;
+			return true;
 		}
 		int reward = BalanceManager.get().advancementReward(advancement.id().toString());
 		if (reward <= 0) {
-			return;
+			return true;
 		}
 
 		// Vanilla's own name for it — the advancement's title, or its id when it has no display.
@@ -90,10 +97,11 @@ public final class AdvancementPayouts {
 		try {
 			paid = Wallet.get().earnOnce(runId, keyFor(player, advancement), reward);
 		} catch (PersistenceException failure) {
-			HardcoreRoguelite.LOGGER.error("Could not save the {} currency earned for {}",
-					reward, advancement.id(), failure);
+			HardcoreRoguelite.LOGGER.error("Could not save the {} currency earned for {}, so {} has"
+					+ " not been earned after all", reward, advancement.id(), advancement.id(), failure);
+			player.getAdvancements().revoke(advancement, criterion);
 			player.sendSystemMessage(Component.translatable("mhr.earn.not_saved", reward, name));
-			return;
+			return false;
 		}
 		if (!paid) {
 			// This run has already been paid for it, and the advancement record has since lost the
@@ -101,13 +109,14 @@ public final class AdvancementPayouts {
 			// nothing is right: the player was paid and told at the time.
 			HardcoreRoguelite.LOGGER.info("Run {} has already been paid for {}; not paying again",
 					runId, advancement.id());
-			return;
+			return true;
 		}
 
 		player.sendSystemMessage(
 				Component.translatable("mhr.earn.advancement", reward, name, Wallet.get().balance()));
 		// The clients' copy of the purse is the shop state packet, and the HUD draws from it.
 		ShopServer.sendToAll(server(player));
+		return true;
 	}
 
 	/**

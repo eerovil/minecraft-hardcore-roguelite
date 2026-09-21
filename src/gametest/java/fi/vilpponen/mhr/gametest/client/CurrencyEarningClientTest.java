@@ -1,13 +1,23 @@
 package fi.vilpponen.mhr.gametest.client;
 
+import fi.vilpponen.mhr.progression.Progress;
 import fi.vilpponen.mhr.progression.Wallet;
 import fi.vilpponen.mhr.run.RunPhase;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
+import net.minecraft.advancements.AdvancementHolder;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,7 +34,7 @@ import org.slf4j.LoggerFactory;
  * and the advancement record being cleared as they cross it is half of the rule. The other half is
  * that the number is on the screen, which nothing without a screen can answer.
  *
- * <p>Three of the scenarios are about the same fact from different sides, and all three are needed:
+ * <p>Four of the scenarios are about the same fact from different sides, and all four are needed:
  *
  * <ul>
  *   <li><b>A crash cannot pay twice.</b> A player's advancements are saved on Minecraft's own
@@ -37,6 +47,9 @@ import org.slf4j.LoggerFactory;
  *       pay four times for it.
  *   <li><b>The next run pays again.</b> Otherwise the whole economy stops after the first run,
  *       since a save's advancement record outlives the run it was earned in.
+ *   <li><b>A refused write does not spend the milestone.</b> An advancement is finished once, so a
+ *       payout the disk will not take has to un-earn it rather than leave it standing — otherwise
+ *       the player has spent the only chance that run had to pay for it.
  * </ul>
  */
 public class CurrencyEarningClientTest implements FabricClientGameTest {
@@ -45,6 +58,9 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 	/** A one-criterion advancement near the start of a run, worth 3 in the shipped catalogue. */
 	private static final String MINE_STONE = "minecraft:story/mine_stone";
 	private static final int MINE_STONE_PAYS = 3;
+
+	/** Its one criterion, for the scenarios that finish it the way a trigger does. */
+	private static final String MINE_STONE_CRITERION = "get_stone";
 
 	/** Four criteria, any one of which finishes it. Worth 10, once. */
 	private static final String OBTAIN_ARMOR = "minecraft:story/obtain_armor";
@@ -77,6 +93,9 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 						() -> theNextRunEarnsTheSameAdvancementsAgain(context, server, player, shop));
 				scenario(context, "a-crash-cannot-mint-the-same-payout-twice",
 						() -> aCrashCannotMintTheSamePayoutTwice(context, server, player, shop));
+				scenario(context, "a-payout-the-disk-refuses-leaves-the-advancement-to-be-earned-again",
+						() -> aPayoutTheDiskRefusesLeavesTheAdvancementToBeEarnedAgain(
+								context, server, player, shop));
 				scenario(context, "the-purse-is-on-the-screen-while-the-run-is-played",
 						() -> thePurseIsOnTheScreenWhileTheRunIsPlayed(context, server, player, shop));
 			}
@@ -230,6 +249,55 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 				+ " rather than " + afterPaying);
 	}
 
+	/**
+	 * A payout the disk refuses must not cost the player the milestone.
+	 *
+	 * <p>An advancement is finished once. If a failed write left the completion standing, the player
+	 * would have finished the only chance that run had to pay for it, and a disk that came back a
+	 * moment later would not give them another — the milestone would be spent for nothing. So a
+	 * refused write un-earns it: the criterion is revoked and the award is cancelled, which leaves no
+	 * currency, no vanilla reward and no announcement behind.
+	 *
+	 * <p>Nothing is faked here. The snapshot file has a directory put in its way, which is what makes
+	 * {@code AtomicFile} fail for real, and the advancement is finished through {@code
+	 * PlayerAdvancements.award} — the call a criterion trigger makes. The proof is in three parts:
+	 * nothing was paid, the advancement is not recorded as done, and once the file can be written the
+	 * same milestone pays once and only once.
+	 */
+	private void aPayoutTheDiskRefusesLeavesTheAdvancementToBeEarnedAgain(ClientGameTestContext context,
+			TestDedicatedServerContext server, TestPlayer player, TestShop shop) {
+		startFresh(context, server, player, shop);
+		int before = purse(server);
+
+		blockTheSnapshot(player);
+		try {
+			boolean awarded = finish(player, MINE_STONE, MINE_STONE_CRITERION);
+
+			check(purse(server) == before, "a payout the disk refuses must pay nothing: the purse"
+					+ " went from " + before + " to " + purse(server));
+			check(!isFinished(player, MINE_STONE), MINE_STONE + " must not be left finished by a"
+					+ " payout that never happened, or the player can never earn it again this run");
+			check(!awarded, "and the award must report that nothing changed, since it was undone");
+		} finally {
+			unblockTheSnapshot(player);
+		}
+
+		boolean awardedAgain = finish(player, MINE_STONE, MINE_STONE_CRITERION);
+		int afterRecovery = purse(server);
+
+		check(awardedAgain, "once the disk will take the write, finishing it again must stick");
+		check(afterRecovery == before + MINE_STONE_PAYS, "and must pay the " + MINE_STONE_PAYS
+				+ " that was refused earlier: the purse went from " + before + " to " + afterRecovery);
+		check(isFinished(player, MINE_STONE), "and the advancement must be finished this time");
+
+		finish(player, MINE_STONE, MINE_STONE_CRITERION);
+		check(purse(server) == afterRecovery, "and it must still pay only once: the purse went from "
+				+ afterRecovery + " to " + purse(server));
+		int onDisk = server.computeOnServer(unused -> Wallet.reloadFromFile().balance());
+		check(onDisk == afterRecovery, "with the file agreeing: it says " + onDisk + " rather than "
+				+ afterRecovery);
+	}
+
 	/** What the player can see: the same number, on the client, without opening anything. */
 	private void thePurseIsOnTheScreenWhileTheRunIsPlayed(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestPlayer player, TestShop shop) {
@@ -287,6 +355,80 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 
 	private int purse(TestDedicatedServerContext server) {
 		return server.computeOnServer(unused -> Wallet.get().balance());
+	}
+
+	/**
+	 * Finish an advancement the way a criterion trigger does, rather than through the command.
+	 *
+	 * <p>The command is the right tool everywhere else, but a completion that gets rolled back
+	 * leaves it with nothing to report and it says so as a command failure. This is the call the
+	 * trigger itself makes, and its answer — did anything change — is part of what is being checked.
+	 */
+	private boolean finish(TestPlayer player, String advancement, String criterion) {
+		return player.onServerComputing(server ->
+				live(server).getAdvancements().award(holder(server, advancement), criterion));
+	}
+
+	/** Does this player's own record say the advancement is done? */
+	private boolean isFinished(TestPlayer player, String advancement) {
+		return player.onServerComputing(server -> live(server).getAdvancements()
+				.getOrStartProgress(holder(server, advancement))
+				.isDone());
+	}
+
+	private static AdvancementHolder holder(MinecraftServer server, String advancement) {
+		AdvancementHolder found = server.getAdvancements().get(Identifier.parse(advancement));
+		if (found == null) {
+			throw new AssertionError("This game has no advancement called " + advancement);
+		}
+		return found;
+	}
+
+	private static ServerPlayer live(MinecraftServer server) {
+		for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+			if (!player.isRemoved()) {
+				return player;
+			}
+		}
+		throw new AssertionError("Nobody is connected, so there is no advancement record to ask");
+	}
+
+	/**
+	 * Make writing the progression snapshot fail, by putting a non-empty directory in its way.
+	 *
+	 * <p>Non-empty because renaming a file over an empty directory is allowed on some filesystems,
+	 * and the point is a write that genuinely cannot succeed.
+	 */
+	private void blockTheSnapshot(TestPlayer player) {
+		player.onServer(unused -> {
+			Path file = Progress.file();
+			try {
+				Files.deleteIfExists(file);
+				Files.createDirectories(file);
+				Files.writeString(file.resolve("in-the-way"), "", StandardCharsets.UTF_8);
+			} catch (IOException e) {
+				throw new UncheckedIOException("Could not block " + file, e);
+			}
+		});
+	}
+
+	private void unblockTheSnapshot(TestPlayer player) {
+		player.onServer(unused -> {
+			Path file = Progress.file();
+			try {
+				if (!Files.isDirectory(file)) {
+					return;
+				}
+				try (var entries = Files.list(file)) {
+					for (Path entry : entries.toList()) {
+						Files.deleteIfExists(entry);
+					}
+				}
+				Files.deleteIfExists(file);
+			} catch (IOException e) {
+				throw new UncheckedIOException("Could not unblock " + file, e);
+			}
+		});
 	}
 
 	private void scenario(ClientGameTestContext context, String name, Runnable body) {

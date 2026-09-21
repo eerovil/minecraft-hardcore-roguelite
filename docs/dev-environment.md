@@ -881,6 +881,12 @@ side of the economy, played on a real dedicated server with a real client:
   what a restart does, and the advancement is revoked, which is what a record that was never saved
   comes back as. Finishing it again pays nothing. Minecraft saves a player's advancements on its own
   schedule, so without the ledger in the snapshot this is a real way to mint currency.
+- **a-payout-the-disk-refuses-leaves-the-advancement-to-be-earned-again** — a directory is put in
+  the way of the progression snapshot, so the write genuinely fails, and the advancement is finished
+  through `PlayerAdvancements.award` rather than the command. Nothing is paid, the advancement is
+  not left recorded as done, and once the file can be written the same milestone pays once and only
+  once. An advancement is finished once, so leaving the completion standing would spend the only
+  chance that run had to be paid for it.
 - **the-purse-is-on-the-screen-while-the-run-is-played** — the client's own copy of the balance
   matches the server's with no screen open, and the shot `currency-hud-during-a-run` is the HUD
   drawing it. Thirteen is the two payouts that scenario makes, three and ten:
