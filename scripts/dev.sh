@@ -373,19 +373,30 @@ EOF
 		return
 	fi
 
+	# The name has to be spelled out in full. containerd stores images under a normalized
+	# reference, and the kubelet asking for `mhr-gametest:1` is asking for
+	# `docker.io/library/mhr-gametest:1` — docker tags it that way implicitly, podman does not:
+	# it prefixes a locally-built image with `localhost/` instead. An image imported under the
+	# podman name lands in containerd perfectly and the pod still sits on ErrImageNeverPull,
+	# because the two are simply different images as far as the kubelet is concerned.
+	local ref="docker.io/library/$tag"
 	echo "# Run this on the $MHR_CONTEXT node itself (it needs that node's containerd):" >&2
 	cat <<EOF
 set -eu
+# k3s installs outside the PATH sudo keeps, so find it before needing root.
+k3s=\$(command -v k3s || ls /usr/local/bin/k3s /usr/bin/k3s /opt/bin/k3s 2>/dev/null | head -1)
+[ -n "\$k3s" ] || { echo "No k3s binary found — is this the right machine?" >&2; exit 1; }
+
 ctx=\$(mktemp -d)
 cat > "\$ctx/Dockerfile" <<'MHR_DOCKERFILE'
 $(cat "$dockerfile")
 MHR_DOCKERFILE
 # Rootless is fine for the build; only handing the result to containerd needs root.
-podman build -t $tag "\$ctx"
+podman build -t $ref "\$ctx"
 rm -rf "\$ctx"
-podman save $tag | sudo k3s ctr -n k8s.io images import -
-# Prove it landed. grep fails the whole command if it did not.
-sudo k3s ctr -n k8s.io images ls | grep '$tag'
+podman save $ref | sudo "\$k3s" ctr -n k8s.io images import -
+# Prove it landed, under the name the kubelet will ask for. grep fails the whole command if not.
+sudo "\$k3s" ctr -n k8s.io images ls | grep '$ref'
 EOF
 }
 
