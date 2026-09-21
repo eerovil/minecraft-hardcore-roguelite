@@ -56,7 +56,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Both directions of the dimension change are asserted from the client as well as the server,
  * because "the server thinks you are in the lobby" is only half of being in the lobby. They are
- * given a long timeout rather than the harness default: see {@link #ARRIVAL_TIMEOUT}.
+ * given a long timeout rather than the harness default: see {@link TestRuns#ARRIVAL_TIMEOUT}.
  *
  * <p><b>Known failure.</b> {@code checkClientSeesTheLobby} is red on the two scenarios that return
  * from a run. Everything the server owns is right — the record, the phase, the player's dimension —
@@ -1318,63 +1318,19 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	// --- plumbing --------------------------------------------------------------------------
 
 	/**
-	 * Count run endings on the server, once per process.
-	 *
-	 * <p>{@link RunEvents} is a static registry and this test runs in the same JVM as the server it
-	 * drives, so registering twice would double every number this test asserts on.
-	 */
-	/**
-	 * How long a client may take to follow the player somewhere, in client ticks.
-	 *
-	 * <p>The harness's own default is 200, ten seconds, and that is not enough here. A dimension
-	 * change has to survive the server's chunk-load handshake, which vanilla itself allows thirty
-	 * seconds for, on a pod that renders with llvmpipe and shares its CPU with whatever else is
-	 * running. Two minutes' worth is not a guess at how long it takes — it is far enough past the
-	 * longest observed arrival that a failure here means the client never arrived at all.
-	 */
-	private static final int ARRIVAL_TIMEOUT = 20 * 120;
-
-	/**
 	 * Wait for a freshly connected client to be properly in the world.
 	 *
-	 * <p>Rendered chunks are not the whole of it: the "Loading terrain" screen is still up while the
-	 * server waits to hear that the client has loaded, and acting on a player before that has
-	 * finished races with their own arrival.
+	 * <p>The shared version, in {@link TestRuns}, so the arrival timeout this pod needs is decided in
+	 * one place.
 	 */
 	private static void settle(ClientGameTestContext context, TestDedicatedServerConnection connection) {
-		connection.waitForChunksRender();
-		context.waitFor(client -> client.gui.screen() == null, ARRIVAL_TIMEOUT);
-		context.waitTicks(20);
+		TestRuns.settleClient(context, connection);
 	}
 
-	/**
-	 * Assert that the client itself has arrived in a dimension and drawn it.
-	 *
-	 * <p>Not only evidence, though it is that too: the server deciding a player is in the lobby is
-	 * half the claim and the player seeing it is the other half, so this is an assertion rather
-	 * than a best-effort wait.
-	 *
-	 * <p>Deliberately not {@code waitForChunksRender}. That waits for every chunk in render distance
-	 * to have geometry, and the lobby is one bedrock plane in an empty biome — there is nothing out
-	 * there to render, and waiting for it to appear is waiting for something that never happens.
-	 * What matters is that the client is in the right world with the loading screen gone.
-	 */
+	/** Assert that the client itself has arrived in a dimension and drawn it. */
 	private static void waitForClientIn(ClientGameTestContext context,
 			TestDedicatedServerConnection connection, String dimension) {
-		try {
-			context.waitFor(client -> client.player != null
-					&& client.player.level().dimension().identifier().toString().equals(dimension)
-					&& client.gui.screen() == null, ARRIVAL_TIMEOUT);
-			context.waitTicks(40);
-		} catch (Throwable stuck) {
-			String where = context.computeOnClient(client -> client.player == null
-					? "nowhere (no player)"
-					: client.player.level().dimension().identifier().toString());
-			String screen = context.computeOnClient(client ->
-					client.gui.screen() == null ? "none" : client.gui.screen().getClass().getSimpleName());
-			throw new AssertionError("The client never followed the player into " + dimension
-					+ ": it is in " + where + " with screen " + screen, stuck);
-		}
+		TestRuns.waitForClientIn(context, dimension);
 	}
 
 	/**
@@ -1412,6 +1368,12 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 						+ " the player is standing in a lobby their client draws as empty void");
 	}
 
+	/**
+	 * Count run endings on the server, once per process.
+	 *
+	 * <p>{@link RunEvents} is a static registry and this test runs in the same JVM as the server it
+	 * drives, so registering twice would double every number this test asserts on.
+	 */
 	private static void countRunEndings(TestDedicatedServerContext server) {
 		server.runOnServer(unused -> {
 			if (listenersRegistered) {

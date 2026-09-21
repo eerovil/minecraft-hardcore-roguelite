@@ -316,6 +316,39 @@ An assertion message names what was expected in plain words, for example *"a loc
 must stay empty after a click that tries to fill it"*. The item-conservation ones also print the
 count they found.
 
+#### A red run with no failed scenario in it is the node, not the mod
+
+A client run can also die without any scenario failing at all. What that looks like:
+
+```
+A single server tick took 60.00 seconds (should be max 0.05)
+Considering it to be crashed, server will forcibly shutdown.
+```
+
+and a thread dump whose render thread is inside `glDrawArraysInstanced`. This is not a hang in
+anything the mod did. The client gametest API runs the client and the server **in lockstep**, so
+the server's tick does not finish until the client's frame does — and the client renders with
+llvmpipe on a shared node. A frame that takes a minute is therefore recorded as a crashed server
+tick, and Minecraft's own watchdog kills the server.
+
+It shows up in whichever client scenario happens to be drawing something heavy at the time, so the
+class named in the log means nothing. Check the node before touching any test:
+
+```sh
+kubectl --context eero-pc -n mhr-dev exec \
+  "$(kubectl --context eero-pc -n mhr-dev get pod -l app=mhr-gametest \
+    -o jsonpath='{.items[0].metadata.name}')" -- sh -c 'uptime; nproc'
+```
+
+A load average well above the core count is the whole explanation. On the MacBook Air cluster this
+was measured at 18 and then 21 against six cores, with the dev server and another worker's run on
+the same node, and it produced three red runs in a row in three different places. Wait for the node
+to be quiet and run it again rather than adding a timeout or a retry to a test.
+
+The same shape has a second face worth recognising: instead of the watchdog, the first client test
+dies with a `TimeoutException` out of `DedicatedServerImplUtil.start` having run no scenario at
+all. That is the same overloaded node failing to start a server inside the harness's own deadline.
+
 ### What is automated now
 
 #### The equipment slots
@@ -826,6 +859,42 @@ without `/mhr border`'s hand-picked override a purchase would put the bought-for
 test that had deliberately gone unbounded to generate far-away terrain. That override is cleared
 when a server starts, so it never outlives the world it was picked for. If a worldgen test suddenly
 finds empty chunks thousands of blocks out, look at the border before you look at worldgen.
+
+#### The whole cycle, as one player experience
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/ProgressionCycleClientTest.java` is the only
+test that crosses all four of the above in one sequence, and the seam it exists for is the one in
+the middle: money earned inside a run that is about to be deleted, spent on a screen in the world
+that is never deleted, and collected in the world after that. Everything else proves one piece.
+
+It is **one scenario**, `the-whole-roguelite-cycle-once-round`, walked in six named steps. A cycle
+is a sequence, and six scenarios that each re-established their own starting point would be
+testing the steps rather than the loop — so rather than bend the isolation rule, the loop is one
+scenario and the steps are its inside. The first step that fails ends the run there, naming
+itself in the failure and in the screenshot; nothing downstream is asserted against state that
+step never built. The steps:
+
+- **the-cycle-starts-in-the-lobby-with-an-empty-profile** — and empties the profile itself, because
+  permanent progression is shared by every test in this client's process.
+- **run-one-is-as-restricted-as-an-empty-profile-makes-it** — no starter chest at all, and the tiny
+  128-block border. This is the control for both of run 2's assertions.
+- **dying-ends-the-run-and-leaves-the-currency-behind** — a real `kill`. The run stops at the lobby
+  door and the money does not: the player arrives with nothing, the lobby holds nothing of theirs,
+  and the purse still has what the run paid when it is read back off the disk.
+- **the-shop-turns-that-currency-into-permanent-unlocks** — two real mouse clicks, charged twice and
+  no more, with change left over so "the purse was emptied" cannot pass for "the price was taken".
+- **run-two-is-a-fresh-world-that-has-what-was-bought** — run 1's marker block gone from all three
+  dimensions, and the two purchases showing up as things in the world: a chest holding sixteen bread,
+  and a border four times the width of run 1's — 512 blocks across against 128.
+- **progression-outlived-both-runs-and-the-runs-did-not** — both files re-read from disk.
+
+Both runs use a named seed, because the scenarios above assert what is standing around each run's
+spawn. Freshness is still never read off that argument — it is the record's own seed differing, the
+overworld reporting it, and run 1's markers being gone.
+
+| Run 1, with nothing bought | The shop, holding run 1's pay | Run 2, with what it bought |
+| -------------------------- | ----------------------------- | -------------------------- |
+| ![flat grass to the horizon, no trees anywhere](images/gametest-cycle-run-one-restricted.png) | ![the shop screen reading 14 to spend, Medium world owned](images/gametest-cycle-shop-after-buying.png) | ![a chest at the new run's spawn, chat listing both purchases](images/gametest-cycle-run-two.png) |
 
 ### What is still manual
 

@@ -93,6 +93,7 @@ without restarting. See [`docs/balance.md`](docs/balance.md).
 - [`docs/balance.md`](docs/balance.md) — how balance numbers are configured and reloaded
 - [`docs/open-questions.md`](docs/open-questions.md) — things the design deliberately hasn't settled
 - [`docs/dev-environment.md`](docs/dev-environment.md) — how to build and test it
+- [`docs/manual-smoke-test.md`](docs/manual-smoke-test.md) — playing one loop yourself, by hand
 - [`docs/codebase/run-lifecycle.md`](docs/codebase/run-lifecycle.md) — the lobby, the run loop and
   where permanent state lives
 
