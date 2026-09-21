@@ -43,9 +43,44 @@ run" true with no code at all. The lobby has no portals, so the only way into a 
 | `run/RunLifecycle` | The coordinator. The only thing allowed to change the phase. |
 | `run/RunWorlds` | Deleting and rebuilding the three run dimensions. The only Minecraft-internals part. |
 | `run/Lobby` | The persistent dimension and getting a player into it. |
+| `run/LobbyIsland` | What is in the lobby: the island, the shop block's position, the drop that starts a run. |
 | `run/RunEvents` | The seam features hook into: `RUN_STARTED`, `RUN_ENDED`. |
 | `run/RunCommand` | `/mhr run`, `/mhr run start [seed]`, `/mhr run end`. |
 | `mixin/MinecraftServerAccessor` | The four private server fields building a level out of band needs. |
+
+## The lobby is a room, not a floor
+
+The lobby dimension generates as **empty void** — an empty biome with no flat-generator layers at
+all. Everything a player can see in it is placed by `LobbyIsland`, and that is on purpose: the
+lobby is the one world that is never deleted, so what is in it is a decision the mod makes once and
+then keeps, not something a generator answers for.
+
+What is in it:
+
+- a 9x9 grass island tapering to a point, centred under `Lobby.SPAWN` at `y=65`;
+- an emerald block three paces south of the spawn, which opens the shop when it is right-clicked;
+- nothing else, in any direction.
+
+Three rules go with it, and each is load-bearing:
+
+- **The island is built on every way in.** `Lobby.require` calls `LobbyIsland.ensure`, so no path
+  can put a player into a lobby with no floor — which in a void dimension means dropping them into
+  the void and starting a run they never asked for. `ensure` reads two blocks and returns when the
+  room is already furnished, so calling it on every arrival costs nothing.
+- **Nothing in the lobby can be broken** unless the breaker is in creative. A player in the lobby
+  has empty hands by construction, and grass comes up by hand in under a second; a hole dug in the
+  lobby would be there for every future run.
+- **Falling past `LobbyIsland.VOID_Y` starts the next run.** That is the design's press-start, and
+  `/mhr run start` is now the operator's spare key rather than the only door. Two details are worth
+  keeping: it is watched from `END_SERVER_TICK` and not the lobby's level tick, because starting a
+  run replaces the server's other three levels and Minecraft is iterating that map during a level
+  tick; and the jumper needs nothing done about their fall, because `startRun` runs to completion
+  inside the tick that noticed them. A start that is refused puts the player back on the island and
+  says why, rather than leaving them to fall into void damage.
+
+The shop's half of the door is `shop/ShopBlock`. It asks `LobbyIsland.isShopBlock` about the
+**position**, not the block type: there is one shop and it is on the island, and an emerald block
+anywhere else is an emerald block.
 
 ## The state machine
 

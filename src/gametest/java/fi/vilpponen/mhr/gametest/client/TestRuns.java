@@ -595,7 +595,7 @@ final class TestRuns {
 	 * best-effort wait.
 	 *
 	 * <p>Deliberately not {@code waitForChunksRender}. That waits for every chunk in render distance
-	 * to have geometry, and the lobby is one bedrock plane in an empty biome — there is nothing out
+	 * to have geometry, and the lobby is one small island in empty void — there is nothing out
 	 * there to render, and waiting for it to appear is waiting for something that never happens.
 	 * What matters is that the client is in the right world with the loading screen gone.
 	 */

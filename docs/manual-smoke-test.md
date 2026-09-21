@@ -163,21 +163,26 @@ their jar.
 
 Not a path the repository verifies, but there is nothing in the mod that needs a dedicated server.
 Make an ordinary Fabric 26.3 instance, point `scripts/dev.sh client` at its `mods/`, and create a
-**new world with cheats allowed** — without cheats you cannot run `/mhr` at all, and there is no
-other way to start a run yet.
+**new world with cheats allowed**. The lobby's own controls — the shop block and the drop off the
+island — need no cheats, but every `/mhr` command in this document does.
 
 Hardcore is not required. The mod cancels vanilla's death handling itself, so the roguelite rules
 apply either way.
 
 ## 4. First join: the lobby
 
-You arrive on a bedrock plane under an empty sky, at about `y=-63`, in the dimension
+You arrive on a small grass island floating in empty void, at `y=65`, in the dimension
 `hardcore_roguelite:lobby`. Chat says:
 
-> No run in progress. Start one with /mhr run start.
+> No run in progress. Shop at the emerald block, then jump off the island to start one.
 
-That is the between-runs room. Nothing spawns there, there is no weather and there is nothing to
-mine. It is never deleted, so anything you leave in it stays for good.
+Look around and you should see the whole room: a 9x9 lawn, nothing above it, nothing below it, and
+an **emerald block three paces south** of where you landed. That is the shop. Right-click it and the
+shop screen opens — the same screen `/mhr shop` gives you.
+
+That is the between-runs room. Nothing spawns there, there is no weather, and you cannot dig it up:
+block breaking is refused in the lobby unless you are in creative. It is never deleted, so anything
+you leave in it stays for good.
 
 Check where you stand at any time with:
 
@@ -188,9 +193,9 @@ Check where you stand at any time with:
 
 ## 5. Start run 1 and see what is missing
 
-```
-/mhr run start
-```
+**Walk off the edge of the island.** That is how a run starts: there is nothing down there, and
+falling past `y=0` is the signal. `/mhr run start` does the same thing from the console and is what
+the tests and this document use when a named seed is wanted.
 
 Chat answers `Run 1 started on seed <seed>`. The overworld, nether and end are deleted and
 regenerated from that seed and you are dropped into the new overworld.
@@ -238,6 +243,8 @@ question — so for a playtest give it to yourself:
 ```
 
 ## 8. Buy something
+
+Right-click the emerald block on the island, or from anywhere:
 
 ```
 /mhr shop

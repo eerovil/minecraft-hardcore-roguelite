@@ -591,7 +591,8 @@ public final class RunLifecycle {
 					strippedInTheLobby(arrived);
 				}
 				player.sendSystemMessage(Component.literal(
-						"No run in progress. Start one with /mhr run start."));
+						"No run in progress. Shop at the emerald block, then jump off the island"
+								+ " to start one."));
 				return;
 			}
 			case LEFT_WHERE_THEY_ARE -> {

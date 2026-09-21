@@ -7,12 +7,7 @@
 			"lakes": false,
 			"features": false,
 			"structure_overrides": [],
-			"layers": [
-				{
-					"block": "minecraft:bedrock",
-					"height": 1
-				}
-			]
+			"layers": []
 		}
 	}
 }

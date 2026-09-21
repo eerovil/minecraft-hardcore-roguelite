@@ -22,23 +22,27 @@ import net.minecraft.world.level.storage.LevelData;
  * is not among them. It also means the client already knows about it when it logs in, so arriving
  * here is an ordinary dimension change rather than something that needs a reconnect.
  *
- * <p>Its terrain is one layer of bedrock over an empty biome, so there is a floor and nothing else
- * — no mobs, no weather worth the name, nothing to mine. The shop will furnish it later; this
- * issue only owes the lifecycle a safe place to stand.
+ * <p>Its terrain is nothing at all: an empty biome with no layers, so the generator produces open
+ * void and no mobs, no weather worth the name and nothing to mine. What the player stands on is
+ * built by {@link LobbyIsland} rather than generated — a small skyblock island with the shop block
+ * on it, and a drop off the edge that starts the next run.
  *
  * @see RunLifecycle
+ * @see LobbyIsland
  */
 public final class Lobby {
 	public static final ResourceKey<Level> LEVEL = ResourceKey.create(
 			Registries.DIMENSION, Identifier.fromNamespaceAndPath(HardcoreRoguelite.MOD_ID, "lobby"));
 
 	/**
-	 * Where the player stands.
+	 * Where the player stands: the middle of the island's top layer, one block above it.
 	 *
-	 * <p>One block above the floor. The lobby uses the overworld's dimension type, so its floor is
-	 * the layer the flat generator puts at the bottom of that range, at y = -64.
+	 * <p>High up on purpose. The whole dimension below the island is empty, and the drop is what
+	 * starts a run, so there has to be room to fall through: void damage only begins 64 blocks
+	 * under the dimension's floor, which for the overworld's dimension type is y = -128. Standing
+	 * at y = 65 leaves nearly two hundred blocks of it.
 	 */
-	public static final BlockPos SPAWN = new BlockPos(0, -63, 0);
+	public static final BlockPos SPAWN = new BlockPos(0, 65, 0);
 
 	private Lobby() {
 	}
@@ -86,12 +90,20 @@ public final class Lobby {
 				Set.of(), 0.0F, 0.0F, true);
 	}
 
+	/**
+	 * The lobby, with something in it to stand on.
+	 *
+	 * <p>Every way into the lobby goes through here, which is the point: the dimension generates as
+	 * open void, so a player who arrived before the island was built would fall out of it and start
+	 * a run they never asked for. Building is a no-op once the island is there.
+	 */
 	private static ServerLevel require(MinecraftServer server) {
 		ServerLevel lobby = level(server);
 		if (lobby == null) {
 			throw new IllegalStateException("there is no " + LEVEL.identifier()
 					+ " dimension — is the mod's data pack loaded?");
 		}
+		LobbyIsland.ensure(lobby);
 		return lobby;
 	}
 
