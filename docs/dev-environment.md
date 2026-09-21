@@ -335,13 +335,19 @@ It shows up in whichever client scenario happens to be drawing something heavy a
 class named in the log means nothing. Check the node before touching any test:
 
 ```sh
-kubectl -n mhr-dev exec "$(kubectl -n mhr-dev get pod -l app=mhr-gametest \
-  -o jsonpath='{.items[0].metadata.name}')" -- uptime
+kubectl --context eero-pc -n mhr-dev exec \
+  "$(kubectl --context eero-pc -n mhr-dev get pod -l app=mhr-gametest \
+    -o jsonpath='{.items[0].metadata.name}')" -- sh -c 'uptime; nproc'
 ```
 
-Six CPUs. A load average well above that — 18 has been seen, with the dev server and another
-worker's run on the same node — is the whole explanation. Wait for the node to be quiet and run it
-again rather than adding a timeout or a retry to a test.
+A load average well above the core count is the whole explanation. On the MacBook Air cluster this
+was measured at 18 and then 21 against six cores, with the dev server and another worker's run on
+the same node, and it produced three red runs in a row in three different places. Wait for the node
+to be quiet and run it again rather than adding a timeout or a retry to a test.
+
+The same shape has a second face worth recognising: instead of the watchdog, the first client test
+dies with a `TimeoutException` out of `DedicatedServerImplUtil.start` having run no scenario at
+all. That is the same overloaded node failing to start a server inside the harness's own deadline.
 
 ### What is automated now
 

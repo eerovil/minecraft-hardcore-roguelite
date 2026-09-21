@@ -16,61 +16,49 @@ in an issue.
 | Fabric API | 0.161.0+26.3 | `gradle.properties` — **required**, the mod does not run without it |
 | Java to play on | 21 or newer | `build.gradle` |
 
-Nothing here builds on your own machine. The mod is built in the cluster's build pod, the same as
-every other build in this project, and you copy the finished jars out — you do not need a JDK or a
-Gradle on the Mac at all.
+Nothing here builds on the machine you play on. The mod is built in the cluster's build pod, the
+same as every other build in this project, and the jars are copied back to you — no JDK and no
+Gradle on your own machine at all.
 
-## 1. Build it in the cluster and copy the jars out
-
-```sh
-scripts/dev.sh go          # sync + build + deploy + restart the dev server
-```
-
-`go` is `sync` + `build` + `deploy`. If you only want the jar and not a server restart,
-`scripts/dev.sh build` is enough.
-
-That leaves two jars on the cluster's volume, and the client needs **both** of them:
-
-| | Where it lands in the cluster |
-| --- | --- |
-| the mod | `/pvc/workspace/build/libs/hardcore-roguelite-0.1.0.jar` in the build pod |
-| Fabric API | `/pvc/server/mods/fabric-api-0.161.0+26.3.jar` in the build pod, put there by `deploy` |
-
-Copy them to your Minecraft instance's `mods/` folder. On the Mac:
+## 1. Build it in the cluster and put it in your client
 
 ```sh
-MODS=~/Library/Application\ Support/minecraft/mods      # or your launcher's instance
-mkdir -p "$MODS"
-
-BUILD=$(kubectl -n mhr-dev get pod -l app=mhr-build -o jsonpath='{.items[0].metadata.name}')
-
-kubectl -n mhr-dev cp \
-  "$BUILD:/pvc/workspace/build/libs/hardcore-roguelite-0.1.0.jar" \
-  "$MODS/hardcore-roguelite-0.1.0.jar"
-
-kubectl -n mhr-dev cp \
-  "$BUILD:/pvc/server/mods/fabric-api-0.161.0+26.3.jar" \
-  "$MODS/fabric-api-0.161.0+26.3.jar"
+scripts/dev.sh client
 ```
 
-Two things to know about those paths. `deploy` is what downloads Fabric API, so run `go` rather
-than `build` the first time or the second copy has nothing to fetch. And if you build into a
-workspace of your own — `MHR_WORKSPACE=/pvc/workspace-mine scripts/dev.sh build` — the jar is under
-that directory instead.
+That is the whole step. It syncs the checkout to the build pod, runs the same gradle build there
+that `scripts/dev.sh build` does, and copies two jars back onto this machine — the mod, and the
+Fabric API version `gradle.properties` declares. The client needs both.
 
-Ignore the `-sources` jar next to the mod; it is not a mod.
+On a Mac it installs into `$HOME/Library/Application Support/minecraft/mods`, and **that directory
+has to exist already**: start the Fabric 26.3 profile once and the launcher makes it. A missing
+one is an error rather than something the script creates, because an invented mods directory is one
+no launcher reads — which looks exactly like a mod that does not work. For Prism, MultiMC or any
+second instance, name it yourself:
 
-Each time you change the code, run `scripts/dev.sh go` and copy the mod jar again. Fabric API only
-changes when `gradle.properties` does.
+```sh
+MHR_CLIENT_MODS_DIR="$HOME/Library/Application Support/PrismLauncher/instances/mhr/.minecraft/mods" \
+  scripts/dev.sh client
+```
+
+Run it again after every code change. It replaces `hardcore-roguelite*.jar` and `fabric-api-*.jar`
+and leaves your other mods alone, so old builds cannot pile up and win load order over the one you
+just made.
+
+`client` is the client install and `go` is the server loop; neither touches the other's
+destination. If you also want the dev server running your build, `scripts/dev.sh go` as well.
+
+See `docs/dev-environment.md#getting-the-mod-into-your-own-client` for the details.
 
 ## 2a. Play on the dev server
 
 This is the path the repository actually supports, and the one `scripts/dev.sh` is built around.
 
-On the Mac that runs the cluster:
+The server is not exposed outside the cluster, so forward it to whichever machine you are playing
+from:
 
 ```sh
-kubectl -n mhr-dev port-forward svc/mhr-server 25565:25565
+kubectl --context eero-pc -n mhr-dev port-forward svc/mhr-server 25565:25565
 ```
 
 Then, in a Fabric 26.3 client with both jars from step 1 in its `mods/` folder, add a server at
@@ -91,9 +79,9 @@ their jar.
 ## 2b. Play in singleplayer
 
 Not a path the repository verifies, but there is nothing in the mod that needs a dedicated server.
-Make an ordinary Fabric 26.3 instance, put the two jars you copied in step 1 in its `mods/`, and
-create a **new world with cheats allowed** —
-without cheats you cannot run `/mhr` at all, and there is no other way to start a run yet.
+Make an ordinary Fabric 26.3 instance, point `scripts/dev.sh client` at its `mods/`, and create a
+**new world with cheats allowed** — without cheats you cannot run `/mhr` at all, and there is no
+other way to start a run yet.
 
 Hardcore is not required. The mod cancels vanilla's death handling itself, so the roguelite rules
 apply either way.
