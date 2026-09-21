@@ -31,6 +31,8 @@
 	"mhr.shop.refused.too_expensive": "%s costs %s and you have %s.",
 	"mhr.shop.refused.not_saved": "Could not buy %s: your progress could not be saved. Nothing was charged. Check the game log.",
 
+	"mhr.shop.client_mod_required": "Hardcore Roguelite client mod is required to open the shop.",
+
 	"mhr.shop.unlock.world.trees": "Trees",
 	"mhr.shop.unlock.world.trees.desc": "New worlds grow trees again.",
 	"mhr.shop.unlock.world.village": "Villages",

@@ -48,8 +48,9 @@ public final class ShopCommand {
 			context.getSource().sendFailure(Component.literal("Only a player can open the shop."));
 			return 0;
 		}
-		ShopServer.open(player);
-		return 1;
+		// A client without the mod cannot be shown a shop, and has already been told so by the
+		// door it knocked on. Nothing to add here but the failing exit code.
+		return ShopServer.open(player) ? 1 : 0;
 	}
 
 	private static int showBalance(CommandContext<CommandSourceStack> context) {
