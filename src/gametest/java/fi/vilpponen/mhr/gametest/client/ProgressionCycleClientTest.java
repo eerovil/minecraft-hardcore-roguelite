@@ -43,9 +43,13 @@ import org.slf4j.LoggerFactory;
  * <p>So the scenarios run <b>in order and depend on each other on purpose</b>, which is the one
  * place this repository's usual rule has to bend: a cycle is a sequence, and a scenario that
  * re-established its own starting point would be testing the step rather than the loop. The first
- * scenario is the only one that establishes state, and it establishes it for all of them. Each of
- * the rest checks the previous step actually happened before asking its own question, so a failure
- * names the step that broke rather than cascading as five unrelated ones.
+ * scenario is the only one that establishes state, and it establishes it for all of them.
+ *
+ * <p>Each of the rest opens by checking that the previous step actually happened, and what that buys
+ * is <em>readable</em> cascade rather than no cascade. One broken step still fails every step after
+ * it and the run still reports them all — but the ones after it say "the run never ended, so there
+ * is no shop step to take" instead of asserting against half-built state and reporting something
+ * that looks like an unrelated second bug. The first failure in the list is the real one.
  *
  * <p>Three claims are asked the hard way, because each has a way of passing for the wrong reason:
  *

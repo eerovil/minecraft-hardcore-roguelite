@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.ToIntFunction;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 
 /**
@@ -131,7 +132,7 @@ final class TestShop {
 	 * Vanilla+ section is below the fold on a 1280x720 client. A test that could click it anyway
 	 * would be clicking something the player cannot.
 	 */
-	void bringIntoView(String unlockId) {
+	private void bringIntoView(String unlockId) {
 		if (isClickable(unlockId)) {
 			return;
 		}
@@ -220,7 +221,7 @@ final class TestShop {
 		return fieldOnScreen(unlockId, Offer::price);
 	}
 
-	private int fieldOnScreen(String unlockId, java.util.function.ToIntFunction<Offer> field) {
+	private int fieldOnScreen(String unlockId, ToIntFunction<Offer> field) {
 		return context.computeOnClient(client -> {
 			for (Offer offer : SyncedShop.offers()) {
 				if (offer.id().equals(unlockId)) {

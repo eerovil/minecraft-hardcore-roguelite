@@ -550,7 +550,6 @@ public class ShopClientTest implements FabricClientGameTest {
 		return player.onServerComputing(server -> server.overworld().getWorldBorder().getSize());
 	}
 
-
 	// --- playing a client without the mod -----------------------------------------------------
 
 	/** What a client with no mod of ours is told. Spelled out here, as the player reads it. */

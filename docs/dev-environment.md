@@ -860,6 +860,39 @@ test that had deliberately gone unbounded to generate far-away terrain. That ove
 when a server starts, so it never outlives the world it was picked for. If a worldgen test suddenly
 finds empty chunks thousands of blocks out, look at the border before you look at worldgen.
 
+#### The whole cycle, as one player experience
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/ProgressionCycleClientTest.java` is the only
+test that crosses all four of the above in one sequence, and the seam it exists for is the one in
+the middle: money earned inside a run that is about to be deleted, spent on a screen in the world
+that is never deleted, and collected in the world after that. Everything else proves one piece.
+
+Its six scenarios run **in order and depend on each other on purpose** — a cycle is a sequence, and
+a scenario that re-established its own starting point would be testing the step rather than the
+loop. Only the first establishes state.
+
+- **the-cycle-starts-in-the-lobby-with-an-empty-profile** — and empties the profile itself, because
+  permanent progression is shared by every test in this client's process.
+- **run-one-is-as-restricted-as-an-empty-profile-makes-it** — no starter chest at all, and the tiny
+  128-block border. This is the control for both of run 2's assertions.
+- **dying-ends-the-run-and-leaves-the-currency-behind** — a real `kill`. The run stops at the lobby
+  door and the money does not: the player arrives with nothing, the lobby holds nothing of theirs,
+  and the purse still has what the run paid when it is read back off the disk.
+- **the-shop-turns-that-currency-into-permanent-unlocks** — two real mouse clicks, charged twice and
+  no more, with change left over so "the purse was emptied" cannot pass for "the price was taken".
+- **run-two-is-a-fresh-world-that-has-what-was-bought** — run 1's marker block gone from all three
+  dimensions, and the two purchases showing up as things in the world: a chest holding sixteen bread,
+  and a border twice the size of run 1's.
+- **progression-outlived-both-runs-and-the-runs-did-not** — both files re-read from disk.
+
+Both runs use a named seed, because the scenarios above assert what is standing around each run's
+spawn. Freshness is still never read off that argument — it is the record's own seed differing, the
+overworld reporting it, and run 1's markers being gone.
+
+| Run 1, with nothing bought | The shop, holding run 1's pay | Run 2, with what it bought |
+| -------------------------- | ----------------------------- | -------------------------- |
+| ![flat grass to the horizon, no trees anywhere](images/gametest-cycle-run-one-restricted.png) | ![the shop screen reading 14 to spend, Medium world owned](images/gametest-cycle-shop-after-buying.png) | ![a chest at the new run's spawn, chat listing both purchases](images/gametest-cycle-run-two.png) |
+
 ### What is still manual
 
 - The padlock **artwork**. The tests screenshot the inventory with the helmet slot locked and again

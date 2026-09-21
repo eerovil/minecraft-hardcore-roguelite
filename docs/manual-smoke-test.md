@@ -54,6 +54,9 @@ See `docs/dev-environment.md#getting-the-mod-into-your-own-client` for the detai
 
 This is the path the repository actually supports, and the one `scripts/dev.sh` is built around.
 
+> Do [step 3](#3-start-from-a-clean-profile) before you join. Both paths end with joining, and
+> everything from step 5 on assumes a profile that has bought nothing.
+
 The server is not exposed outside the cluster, so forward it to whichever machine you are playing
 from:
 
@@ -86,10 +89,18 @@ other way to start a run yet.
 Hardcore is not required. The mod cancels vanilla's death handling itself, so the roguelite rules
 apply either way.
 
+> Same as above: do [step 3](#3-start-from-a-clean-profile) before you load the world.
+
 ## 3. Start from a clean profile
 
-Permanent progression lives **outside every world**, so making a new world does not reset it. Delete
-these from the instance you are playing on:
+Do this **before** you join, and do it on whichever side is running the mod's rules. Everything
+from step 5 on is written as what an empty profile looks like, and a profile carrying an earlier
+playtest's purchases makes those observations quietly wrong rather than obviously wrong.
+
+Two things to know first.
+
+**Permanent progression is not in the world.** It sits in the Fabric config directory, so making a
+new world does not reset it. These are the files:
 
 ```
 config/hardcore-roguelite-progress.json     purchases and currency
@@ -98,12 +109,46 @@ config/hardcore-roguelite-unlocks.json      only on a profile from an older buil
 config/hardcore-roguelite-currency.json     only on a profile from an older build
 ```
 
+**Deleting them under a running game does nothing.** The process holds its own copy from launch to
+exit and writes it through on every change, so a file deleted while the game is up is simply written
+again. Stop first.
+
+### On the dev server
+
+The rules run on the *server*, so the files that matter are the server's — not your client
+instance's. The server has to be down while you delete them:
+
+```sh
+kubectl --context eero-pc -n mhr-dev scale deploy/mhr-server --replicas=0
+kubectl --context eero-pc -n mhr-dev wait --for=delete pod -l app=mhr-server --timeout=5m
+
+BUILD=$(kubectl --context eero-pc -n mhr-dev get pod -l app=mhr-build \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl --context eero-pc -n mhr-dev exec "$BUILD" -- \
+  rm -f /pvc/server/config/hardcore-roguelite-progress.json \
+        /pvc/server/config/hardcore-roguelite-balance.json \
+        /pvc/server/config/hardcore-roguelite-unlocks.json \
+        /pvc/server/config/hardcore-roguelite-currency.json
+
+scripts/dev.sh newworld      # brings the server back up on a fresh world
+```
+
+`scripts/dev.sh newworld` on its own is **not** enough: it deletes the three world directories and
+nothing else, so your purchases and currency survive it. That is correct — permanent progression is
+meant to outlive a world — but it means a world reset alone does not give you the fresh profile this
+guide assumes.
+
+### In singleplayer
+
+Quit to the title screen (or close the game), then delete those four files from your instance's
+`config/` directory and delete the save. To keep the world but forget which run it was on, delete
+`<save>/hardcore-roguelite-run.json` instead.
+
+---
+
 A missing progress file is a new player with nothing. **A file that is there and cannot be read
 stops the game on purpose**, naming the path — that is not a crash to work around, it is the mod
 refusing to write an empty profile over a repairable one.
-
-Then delete the world, or delete just `<save>/hardcore-roguelite-run.json` to forget which run the
-save was on. On the dev server: `scripts/dev.sh newworld`.
 
 ## 4. First join: the lobby
 
@@ -140,7 +185,10 @@ Look around. With nothing bought:
   the `tiny` tier, the one you get for having bought no tier at all.
 - **Padlocks in the inventory.** Open it: the armour and offhand squares you have not bought are
   locked, and an item put in one is handed straight back.
-- **No iron, gold, redstone, lapis or diamond** in the stone, and no villages.
+- **No ore at all** — not coal, copper, iron, gold, redstone, lapis or diamond. Every one of the
+  seven is sold separately.
+- **No animals.** Cows, pigs, sheep, chickens, horses and wolves are each sold separately too, so
+  an empty profile means an empty countryside. And no villages.
 
 Nether and end portals still work and still lead to *this* run's nether and end.
 
