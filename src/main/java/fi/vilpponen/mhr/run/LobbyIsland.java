@@ -1,13 +1,16 @@
 package fi.vilpponen.mhr.run;
 
 import fi.vilpponen.mhr.HardcoreRoguelite;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.UUID;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
@@ -94,7 +97,7 @@ public final class LobbyIsland {
 		ServerTickEvents.END_SERVER_TICK.register(server -> {
 			ServerLevel lobby = Lobby.level(server);
 			if (lobby != null) {
-				watchForJumpers(lobby);
+				watchForJumpers(server, lobby);
 			}
 		});
 
@@ -139,47 +142,94 @@ public final class LobbyIsland {
 	/**
 	 * Anybody who has fallen off the island starts the next run.
 	 *
-	 * <p>The player list is copied first because starting a run moves everyone out of the lobby,
-	 * and that is a change to the very list this is walking.
+	 * <p><b>A run start is one event, not one per jumper.</b> Two players stepping off together is
+	 * the ordinary case, and {@code startRun} takes everybody who is connected into the run it
+	 * builds — so the first successful start is the end of this tick's work and the loop stops
+	 * there. Carrying on would be worse than redundant: getting a player into a run is a
+	 * <em>respawn</em>, which destroys the {@link ServerPlayer} this loop is holding and builds a
+	 * new one, so a second jumper handled after the first start would be handled as an object that
+	 * no longer exists. The ids are collected first and nothing but an id survives the start.
 	 *
 	 * <p>Nothing has to be done about the fall itself. {@code startRun} runs to completion on this
 	 * thread — worlds deleted, rebuilt, players moved — so the jumper is in the new run before the
 	 * next tick could drop them another block.
 	 */
-	private static void watchForJumpers(ServerLevel lobby) {
-		if (lobby.players().isEmpty()) {
+	private static void watchForJumpers(MinecraftServer server, ServerLevel lobby) {
+		List<UUID> fallen = null;
+		for (ServerPlayer player : lobby.players()) {
+			if (hasFallenOff(player)) {
+				if (fallen == null) {
+					fallen = new ArrayList<>();
+				}
+				fallen.add(player.getUUID());
+			}
+		}
+		if (fallen == null) {
 			return;
 		}
-		for (ServerPlayer player : List.copyOf(lobby.players())) {
-			if (player.getY() > VOID_Y || player.isSpectator() || !player.isAlive()) {
-				continue;
-			}
-			jumped(player);
+
+		String refused = startTheNextRun();
+		if (refused == null) {
+			// The run started. Everybody who was falling is standing in it, as somebody else's
+			// object; there is nobody left here to do anything to.
+			return;
+		}
+		for (UUID id : fallen) {
+			putBack(server, id, refused);
 		}
 	}
 
-	private static void jumped(ServerPlayer player) {
+	private static boolean hasFallenOff(ServerPlayer player) {
+		return player.getY() <= VOID_Y && player.isAlive() && !player.isSpectator();
+	}
+
+	/** @return null if a run started, or why it did not. */
+	private static String startTheNextRun() {
 		RunLifecycle lifecycle = RunLifecycle.get();
 		if (lifecycle.record().phase() != RunPhase.LOBBY) {
 			// Somebody is in the lobby while the loop is somewhere else — a run winding up, a save
-			// that has stopped. There is no run to start for them, and leaving them to fall would
-			// end in void damage, so they go back on the island.
-			putBack(player, "the save is not between runs: " + lifecycle.describe());
-			return;
+			// that has stopped. There is no run to start for them.
+			return "the save is not between runs: " + lifecycle.describe();
 		}
 
 		try {
 			lifecycle.startRun(OptionalLong.empty());
-		} catch (IllegalStateException e) {
-			putBack(player, e.getMessage());
+			return null;
+		} catch (IllegalStateException refused) {
+			return refused.getMessage();
 		}
 	}
 
-	private static void putBack(ServerPlayer player, String why) {
+	/**
+	 * Catch a jumper the loop could not start a run for, so the fall ends on the island rather
+	 * than in void damage.
+	 *
+	 * <p>Looked up by id rather than kept from the scan, and this is the whole reason the ids are
+	 * what get collected. A start can fail <em>after</em> it has already moved people: the failure
+	 * path takes them back out of the half-built run, and both crossings are respawns, so the
+	 * object that was standing here two calls ago has been destroyed and replaced — possibly
+	 * twice. Moving that object moves nobody and leaves a dead entity where a live one should be.
+	 *
+	 * <p>Three things are asked of whoever comes back, and all three are reasons to do nothing:
+	 * they have logged out, the failure path has already put them somewhere else, or they are back
+	 * on the island and have been told by the lifecycle itself.
+	 *
+	 * <p>Deliberately not conditional on the phase. Nothing here writes to the record — it is a
+	 * teleport inside the one dimension that is never deleted — and a save that has stopped is the
+	 * last place to leave somebody falling.
+	 */
+	private static void putBack(MinecraftServer server, UUID id, String why) {
+		ServerPlayer player = server.getPlayerList().getPlayer(id);
+		if (player == null || !Lobby.isLobby(player.level()) || !hasFallenOff(player)) {
+			return;
+		}
+
 		HardcoreRoguelite.LOGGER.warn("{} jumped into the lobby's void and no run could start: {}",
 				player.getGameProfile().name(), why);
 		player.setDeltaMovement(0.0, 0.0, 0.0);
 		player.resetFallDistance();
+		// Within the lobby, so this is the teleport branch and not the respawn one: the object
+		// below is still the one that was just moved.
 		Lobby.send(player);
 		player.sendSystemMessage(Component.translatable("mhr.lobby.no_run_started", why));
 	}

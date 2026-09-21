@@ -1,17 +1,22 @@
 package fi.vilpponen.mhr.gametest.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import fi.vilpponen.mhr.gametest.mixin.ChatComponentAccessor;
 import fi.vilpponen.mhr.run.Lobby;
 import fi.vilpponen.mhr.run.LobbyIsland;
+import fi.vilpponen.mhr.run.RunEvents;
 import fi.vilpponen.mhr.run.RunPhase;
 import fi.vilpponen.mhr.run.RunRecord;
 import fi.vilpponen.mhr.shop.client.ShopScreen;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerConnection;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestDedicatedServerContext;
+import net.minecraft.client.multiplayer.chat.GuiMessage;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
@@ -36,6 +41,12 @@ import org.slf4j.LoggerFactory;
  *       and not merely being in the lobby that presses start.
  * </ul>
  *
+ * <p>Two more scenarios ask what happens when the jump does <b>not</b> end in a run: one where the
+ * lifecycle refuses before it has touched anything, and one where it fails after the jumper has
+ * already been respawned into the half-built run. Both end in the same place — the player standing
+ * on the island, unhurt, with the save saying something true — and the second is the one that
+ * catches a watcher still holding the player object it started the tick with.
+ *
  * <p>The player walks off the edge with the real movement key rather than being teleported into the
  * air. Being put in the void by a command would prove the watcher fires; it would not prove a
  * player can reach the void from where the game puts them, which is the whole of the feature.
@@ -48,6 +59,24 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 	/** How far off the island's edge the void has to be empty for it to be an island at all. */
 	private static final int CLEARANCE = 12;
 
+	/** What the player is told when their jump could not start a run. From the lang file. */
+	private static final String REFUSAL = "No run could be started";
+
+	/**
+	 * Make the next run fail on the player's way into it, after they have already been moved.
+	 *
+	 * <p>This is the only way to reach the case the fix is about. Crossing into a run is a respawn,
+	 * so by the time this throws the player object the jump watcher was holding has been destroyed
+	 * and replaced — and the failure path then respawns them a second time on the way back out. A
+	 * watcher that kept the object it scanned with would be acting on a corpse.
+	 *
+	 * <p>{@link RunEvents} is a static registry shared by every server this client process drives,
+	 * so the listener is registered once and does nothing at all unless this test has armed it.
+	 */
+	private static final AtomicBoolean FAIL_PLAYER_ENTRY = new AtomicBoolean();
+
+	private static boolean entryFaultRegistered;
+
 	private final List<String> failures = new ArrayList<>();
 
 	@Override
@@ -57,6 +86,7 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 				TestRuns.settleClient(context, connection);
 				TestRuns.waitForPlayerInTheLobby(context, server, connection);
 				TestPlayer player = new TestPlayer(context, server, connection);
+				registerEntryFault(server);
 
 				// Said out loud rather than hoped for: a dig proves nothing about survival rules
 				// if the digger turns out to be in creative.
@@ -73,6 +103,10 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 						() -> theIslandCannotBeDugAway(context, server, player));
 				scenario(context, "standing-on-the-island-starts-no-run",
 						() -> standingStartsNothing(context, server));
+				scenario(context, "a-refused-run-start-puts-the-jumper-back",
+						() -> aRefusedStartPutsTheJumperBack(context, server, connection));
+				scenario(context, "a-failure-after-the-jumper-moved-still-leaves-them-safe",
+						() -> aLateFailureLeavesTheJumperSafe(context, server, connection));
 				scenario(context, "walking-off-the-island-starts-a-run",
 						() -> walkingOffStartsARun(context, server, connection));
 				scenario(context, "the-same-dig-works-inside-a-run",
@@ -253,6 +287,94 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 	}
 
 	/**
+	 * A jump the lifecycle refuses outright leaves the jumper standing on the island, told why.
+	 *
+	 * <p>The refusal is a save that cannot describe the nether, which `startRun` checks before it
+	 * destroys anything — so nothing has moved and the player the watcher scanned with is still the
+	 * player it has to catch. Falling on is the wrong answer: there is nothing down there but void
+	 * damage, and the save is unchanged, so there is nothing to recover from either.
+	 */
+	private void aRefusedStartPutsTheJumperBack(ClientGameTestContext context,
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		sendBackToSpawn(server);
+		RunRecord before = TestRuns.record(server);
+
+		TestRuns.withNoNetherStem(server, () ->
+				walkOffTheEdge(context, () -> wasToldOnTheClient(context, REFUSAL)));
+
+		check(wasToldOnTheClient(context, REFUSAL), "a jumper whose run cannot start must be told"
+				+ " so, and nothing saying '" + REFUSAL + "' reached the client");
+
+		RunRecord after = TestRuns.record(server);
+		check(after.phase() == RunPhase.LOBBY && after.runId() == before.runId(),
+				"a start refused before anything is destroyed must leave the save exactly as it"
+						+ " was — it was " + before.describe() + " and it is now " + after.describe());
+
+		check(TestRuns.playerIsInTheLobby(server, connection),
+				"the jumper must still be in the lobby, and they are in "
+						+ TestRuns.playerDimension(server, connection));
+		check(isOnTheIsland(server), "the jumper must have been put back on the island rather than"
+				+ " left falling, and they are at " + playerPosition(server));
+		check(TestRuns.playerHealth(server, connection) == 20.0F,
+				"and they must not have been hurt doing it: they have "
+						+ TestRuns.playerHealth(server, connection));
+	}
+
+	/**
+	 * A run start that fails <b>after</b> the jumper has already been moved into it.
+	 *
+	 * <p>This is the case the jump watcher is easiest to get wrong in. Crossing into a run is a
+	 * respawn and so is the failure path's evacuation, so between the watcher noticing the fall and
+	 * the refusal coming back, the player object it scanned with has been destroyed and replaced
+	 * twice. A watcher that reused it would be teleporting a corpse: the real player stays wherever
+	 * the failure left them, and a dead entity gets moved about in the one dimension that is never
+	 * rebuilt.
+	 *
+	 * <p>So the claims are about the live player, asked of the server by id and of the client by
+	 * what it can see. The lobby drawing as empty void is what a broken lobby registration looks
+	 * like from the inside.
+	 */
+	private void aLateFailureLeavesTheJumperSafe(ClientGameTestContext context,
+			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
+		sendBackToSpawn(server);
+		int before = TestRuns.record(server).runId();
+
+		FAIL_PLAYER_ENTRY.set(true);
+		try {
+			walkOffTheEdge(context, () -> TestRuns.record(server).runId() != before);
+		} finally {
+			FAIL_PLAYER_ENTRY.set(false);
+		}
+
+		TestRuns.waitForPhase(context, server, RunPhase.LOBBY);
+		TestRuns.settleClient(context, connection);
+
+		RunRecord after = TestRuns.record(server);
+		check(after.runId() != before, "the jump must actually have tried to start a run — the"
+				+ " record still says " + after.describe() + ", so the entry fault never fired and"
+				+ " this scenario proved nothing");
+		check(after.phase() == RunPhase.LOBBY && after.completedRuns() == 0,
+				"a run that could not be entered is a run that never started, and the record says "
+						+ after.describe());
+
+		check(TestRuns.playerIsInTheLobby(server, connection),
+				"the jumper must end up back in the lobby, and they are in "
+						+ TestRuns.playerDimension(server, connection)
+						+ " — players: " + TestRuns.describePlayers(server));
+		check(isOnTheIsland(server), "and on the island rather than still falling through the"
+				+ " void, and they are at " + playerPosition(server));
+		check(TestRuns.playerHealth(server, connection) == 20.0F,
+				"and unhurt, and they have " + TestRuns.playerHealth(server, connection));
+
+		// The client's own copy of the lobby. A watcher that had moved the destroyed entity would
+		// leave a live-looking registration behind, and the symptom of that is a player standing in
+		// a lobby their client draws as nothing at all.
+		String drawn = blockOnClient(context, Lobby.SPAWN.below());
+		check(drawn.contains("grass"), "the jumper must be able to see the island they are standing"
+				+ " on, and their client has " + drawn + " under them");
+	}
+
+	/**
 	 * Walk north off the edge, fall, and land in a run.
 	 *
 	 * <p>The walk is the real forward key. The fall needs nothing: {@code startRun} runs to
@@ -265,12 +387,9 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 		check(TestRuns.phase(server) == RunPhase.LOBBY,
 				"the jump must start from a save between runs, and it says "
 						+ TestRuns.record(server).describe());
+		int before = TestRuns.record(server).runId();
 
-		// Held in bursts so the walk stops the moment the fall has been noticed, rather than
-		// pressing forward into a world the player has already arrived in.
-		for (int burst = 0; burst < 8 && TestRuns.phase(server) == RunPhase.LOBBY; burst++) {
-			context.getInput().holdKeyFor(options -> options.keyUp, 20);
-		}
+		walkOffTheEdge(context, () -> TestRuns.phase(server) != RunPhase.LOBBY);
 		check(TestRuns.phase(server) != RunPhase.LOBBY,
 				"walking off the island must start the next run, and after eight seconds of"
 						+ " walking the save still says " + TestRuns.record(server).describe()
@@ -280,8 +399,8 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 		TestRuns.settleClient(context, connection);
 
 		RunRecord record = TestRuns.record(server);
-		check(record.runId() == 1, "the jump must have started the save's first run, and the record"
-				+ " says " + record.describe());
+		check(record.runId() > before, "the jump must have started a run of its own, and the record"
+				+ " still says " + record.describe());
 
 		String where = TestRuns.playerDimension(server, connection);
 		check(where.equals(Level.OVERWORLD.identifier().toString()),
@@ -312,6 +431,64 @@ public class LobbyIslandClientTest implements FabricClientGameTest {
 				+ (block.getX() + 0.5) + " " + (block.getY() + 1) + " " + (block.getZ() + 0.5)
 				+ " 0 90");
 		player.settle();
+	}
+
+	/**
+	 * Hold the real forward key until something has come of it, or give up after eight seconds.
+	 *
+	 * <p>Held in bursts rather than in one long press so the walk stops the moment the fall has
+	 * been dealt with, instead of pressing forward into whatever the player has arrived in. What
+	 * counts as dealt with is the caller's, because the three jump scenarios are each waiting for a
+	 * different thing to happen.
+	 */
+	private static void walkOffTheEdge(ClientGameTestContext context, BooleanSupplier settled) {
+		for (int burst = 0; burst < 8 && !settled.getAsBoolean(); burst++) {
+			context.getInput().holdKeyFor(options -> options.keyUp, 20);
+		}
+	}
+
+	/** Is the player standing on the island rather than somewhere under it? */
+	private static boolean isOnTheIsland(TestDedicatedServerContext server) {
+		return server.computeOnServer(minecraftServer -> {
+			if (minecraftServer.getPlayerList().getPlayers().isEmpty()) {
+				return false;
+			}
+			return minecraftServer.getPlayerList().getPlayers().getFirst().getY()
+					>= (double) LobbyIsland.VOID_Y;
+		});
+	}
+
+	/** Has the client been shown a message containing this? */
+	private static boolean wasToldOnTheClient(ClientGameTestContext context, String fragment) {
+		return context.computeOnClient(client -> {
+			StringBuilder said = new StringBuilder();
+			for (GuiMessage message : ((ChatComponentAccessor) client.gui.hud.getChat()).mhr$allMessages()) {
+				said.append(message.content().getString()).append(" | ");
+			}
+			return said.toString();
+		}).contains(fragment);
+	}
+
+	/**
+	 * Arm-able failure on the way into a run, registered once for this client process.
+	 *
+	 * <p>{@link RunEvents} is static and every dedicated server this process drives shares it, so
+	 * registering per server would stack listeners and registering unconditionally would fail
+	 * other tests' runs. It is therefore registered once and inert until {@link #FAIL_PLAYER_ENTRY}
+	 * is set, which only happens inside the one scenario that wants it.
+	 */
+	private static void registerEntryFault(TestDedicatedServerContext server) {
+		server.runOnServer(unused -> {
+			if (entryFaultRegistered) {
+				return;
+			}
+			entryFaultRegistered = true;
+			RunEvents.PLAYER_ENTERED_RUN.register((minecraftServer, player, run) -> {
+				if (FAIL_PLAYER_ENTRY.get()) {
+					throw new IllegalStateException("deliberate player-entry failure");
+				}
+			});
+		});
 	}
 
 	/** Back to the middle of the island, facing north — away from the shop block. */
