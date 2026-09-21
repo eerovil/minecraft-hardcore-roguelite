@@ -244,6 +244,15 @@ neither. The ledger belongs to one run: a credit from a later run replaces it, w
 "every run earns the same milestones again" rule and what stops it growing for ever. Run ids are
 never reused, so an old entry cannot be mistaken for a current one.
 
+**The ledger is also what says a run's advancements were reset.** Crossing into a run clears the
+player's advancements and writes down which run they are in — two different files, saved at
+different times. A crash can leave the admission durable and the cleared advancements not, and the
+player comes back admitted to this run carrying the last run's completions, with nothing firing
+again because the lifecycle thinks they never left. So the admission mark is not taken as proof that
+the reset landed: every join reconciles the *paying* advancements against the ledger, revoking any
+with progress this run has not paid for and leaving the ones it has. Doing that twice is doing it
+once, which is the point — the boundary is replayable rather than once-only.
+
 **A payout the disk refuses un-earns what it was for.** The write failing is not the end of it,
 because the thing being paid for happens once: an advancement finished while the snapshot cannot be
 written would otherwise stand, and a disk that comes back a second later would never give that

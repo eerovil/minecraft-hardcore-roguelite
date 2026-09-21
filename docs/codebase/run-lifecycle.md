@@ -267,6 +267,15 @@ Three listeners exist today and are the model to copy:
 - `earn/AdvancementPayouts` clears the arriving player's advancements, on the player hook, so the
   run they are entering can earn them again.
 
+That last one has a second half, and it is worth knowing before relying on `RunAdmission` for
+anything similar. **The admission mark is not proof that what happened beside it reached the disk.**
+It is persistent player data; a player's advancements are a different file, saved on a different
+schedule. A crash between the two brings the player back admitted to this run with the last run's
+advancements, and `RunArrival` correctly answers `LEFT_WHERE_THEY_ARE`, so the player hook never
+fires again. `AdvancementPayouts` therefore also reconciles on every join, against the payout ledger
+in the progression snapshot rather than against the mark. Anything else that has to be true once per
+run should be made replayable the same way rather than trusting the mark.
+
 None of them is called by name from `RunLifecycle`, and `RunLifecycle` imports none of them.
 
 ## What `RunWorlds` actually does

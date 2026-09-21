@@ -9,10 +9,12 @@ import fi.vilpponen.mhr.run.RunEvents;
 import fi.vilpponen.mhr.shop.ShopServer;
 import java.util.ArrayList;
 import java.util.List;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.advancements.AdvancementProgress;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.PlayerAdvancements;
 import net.minecraft.server.level.ServerPlayer;
@@ -48,6 +50,12 @@ import net.minecraft.server.level.ServerPlayer;
  *
  * <p>Nothing pays in the lobby. Payment needs a player who has crossed into a run — the same mark
  * the lifecycle uses — so the shop's own between-runs world cannot be farmed.
+ *
+ * <p><b>The ledger is also what says a run's advancements were reset</b>, not the admission mark
+ * beside them. The two are different files saved at different times, so a crash can leave a player
+ * admitted to this run with the last run's completions still on disk — and nothing fires again for
+ * somebody the lifecycle thinks never left. Every join therefore reconciles the paying advancements
+ * against the ledger rather than assuming the reset landed. See {@code reconcile}.
  */
 public final class AdvancementPayouts {
 	private AdvancementPayouts() {
@@ -58,6 +66,80 @@ public final class AdvancementPayouts {
 		// The person, not the place, and after the fresh-run reset: this is about what one player's
 		// advancement record says, and a player who joins a run already in progress needs it too.
 		RunEvents.PLAYER_ENTERED_RUN.register((server, player, run) -> clearAdvancements(player));
+
+		// And again on every join, because the line above is not durable on its own. Registered
+		// after RunLifecycle's own join handling — the mod initializer registers that first — so
+		// this sees the player where they have ended up.
+		ServerPlayConnectionEvents.JOIN.register(
+				(handler, sender, server) -> reconcile(handler.player));
+	}
+
+	/**
+	 * Make the paying advancements say what the ledger says, for the run this player is in.
+	 *
+	 * <p>This exists because the reset above is not enough by itself, and the reason is worth
+	 * knowing before changing either. Crossing into a run clears the player's advancements, and
+	 * their admission to that run is written down beside it — but those are two different files
+	 * that Minecraft saves at different times. A crash can leave the admission durable and the
+	 * cleared advancements not, and the player comes back admitted to this run carrying the last
+	 * one's completions. Nothing fires again for them, because as far as the lifecycle is concerned
+	 * they never left, and every paying advancement they had already finished is now unearnable for
+	 * the rest of the run.
+	 *
+	 * <p>So the admission mark is not treated as proof that the reset landed. The proof is the
+	 * ledger, which is in the same file and the same write as the currency it goes with:
+	 *
+	 * <ul>
+	 *   <li>this run has paid for it — leave it finished, so nothing is earned or announced twice;
+	 *   <li>this run has not — revoke what has been obtained, so it is there to be earned again.
+	 * </ul>
+	 *
+	 * <p>Only the advancements that pay are looked at. The rest are the fresh-world nicety the reset
+	 * does, and nothing about the economy depends on them. Running this on every join makes the
+	 * boundary replayable rather than once-only: doing it twice is doing it once, and doing it
+	 * never is the only thing that costs anybody anything.
+	 */
+	private static void reconcile(ServerPlayer player) {
+		int runId = RunAdmission.of(player);
+		if (runId == RunAdmission.NO_RUN) {
+			return;
+		}
+		MinecraftServer server = server(player);
+		if (server == null) {
+			return;
+		}
+
+		PlayerAdvancements record = player.getAdvancements();
+		int givenBack = 0;
+		for (String id : BalanceManager.get().advancementRewards().keySet()) {
+			AdvancementHolder advancement = advancement(server, id);
+			if (advancement == null) {
+				continue;
+			}
+			AdvancementProgress progress = record.getOrStartProgress(advancement);
+			// Partial progress counts: half of a multi-criterion advancement carried over from the
+			// last run is half of this run's work already done.
+			if (!progress.hasProgress()
+					|| Wallet.get().hasEarned(runId, keyFor(player, advancement))) {
+				continue;
+			}
+			for (String criterion : completedCriteria(progress)) {
+				record.revoke(advancement, criterion);
+			}
+			givenBack++;
+		}
+
+		if (givenBack > 0) {
+			record.flushDirty(player, false);
+			HardcoreRoguelite.LOGGER.info("Run {} has not paid {} for {} advancement(s) their record"
+					+ " says they finished, so those are theirs to earn again", runId,
+					player.getName().getString(), givenBack);
+		}
+	}
+
+	private static AdvancementHolder advancement(MinecraftServer server, String id) {
+		Identifier parsed = Identifier.tryParse(id);
+		return parsed == null ? null : server.getAdvancements().get(parsed);
 	}
 
 	/**

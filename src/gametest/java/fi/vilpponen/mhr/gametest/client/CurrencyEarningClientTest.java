@@ -34,7 +34,7 @@ import org.slf4j.LoggerFactory;
  * and the advancement record being cleared as they cross it is half of the rule. The other half is
  * that the number is on the screen, which nothing without a screen can answer.
  *
- * <p>Four of the scenarios are about the same fact from different sides, and all four are needed:
+ * <p>Five of the scenarios are about the same fact from different sides, and all five are needed:
  *
  * <ul>
  *   <li><b>A crash cannot pay twice.</b> A player's advancements are saved on Minecraft's own
@@ -50,6 +50,10 @@ import org.slf4j.LoggerFactory;
  *   <li><b>A refused write does not spend the milestone.</b> An advancement is finished once, so a
  *       payout the disk will not take has to un-earn it rather than leave it standing — otherwise
  *       the player has spent the only chance that run had to pay for it.
+ *   <li><b>A stale advancement file does not either.</b> The reset that clears a run's advancements
+ *       and the note saying which run the player is in are two files saved at different times, so a
+ *       crash can leave the note durable and the reset not. Joining reconciles the paying
+ *       advancements against the ledger rather than believing the note.
  * </ul>
  */
 public class CurrencyEarningClientTest implements FabricClientGameTest {
@@ -99,6 +103,11 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 				scenario(context, "the-purse-is-on-the-screen-while-the-run-is-played",
 						() -> thePurseIsOnTheScreenWhileTheRunIsPlayed(context, server, player, shop));
 			}
+
+			// Its own connection, twice over: the point of it is logging back in.
+			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "a-stale-advancement-file-does-not-cost-this-run-its-payouts",
+					() -> aStaleAdvancementFileDoesNotCostThisRunItsPayouts(context, server));
 		}
 
 		if (!failures.isEmpty()) {
@@ -316,6 +325,101 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 
 		// The HUD draws that number, so the shot is of a client that has just been paid twice.
 		context.takeScreenshot("currency-hud-during-a-run");
+	}
+
+	/**
+	 * The state a crash at a run boundary leaves, and what it must not cost the player.
+	 *
+	 * <p>Crossing into a run clears the player's advancements and writes down which run they are in.
+	 * Those are two files, saved at different times, so a crash can make the admission durable and
+	 * the cleared advancements not. The player comes back admitted to this run carrying the last
+	 * one's completions, and nothing fires again for them — as far as the lifecycle is concerned
+	 * they never left. Every paying advancement they had already finished would be unearnable for
+	 * the rest of the run.
+	 *
+	 * <p>So the state is built here exactly as the disk would hold it, and then a real reconnect is
+	 * made to walk the real join path:
+	 *
+	 * <ul>
+	 *   <li><b>the advancement file</b> — finished, by earning it normally in this run;
+	 *   <li><b>the admission</b> — this run, which it already is;
+	 *   <li><b>the progression snapshot</b> — written back as the <em>previous</em> run's, which is
+	 *       what it still says at the moment a new run begins and before its first payout.
+	 * </ul>
+	 *
+	 * <p>What must happen on that join is the milestone becoming earnable again, and then paying
+	 * exactly once.
+	 */
+	private void aStaleAdvancementFileDoesNotCostThisRunItsPayouts(ClientGameTestContext context,
+			TestDedicatedServerContext server) {
+		int carried;
+		int runId;
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			TestRuns.settleClient(context, connection);
+			TestPlayer player = new TestPlayer(context, server, connection);
+			TestShop shop = new TestShop(context, player);
+			startFresh(context, server, player, shop);
+
+			grant(player, MINE_STONE);
+			carried = purse(server);
+			check(carried == MINE_STONE_PAYS, "setup: this run must have paid " + MINE_STONE_PAYS
+					+ " for " + MINE_STONE + ", and the purse holds " + carried);
+			check(isFinished(player, MINE_STONE), "setup: and the advancement must be finished");
+
+			runId = TestRuns.record(server).runId();
+			staleLedger(player, runId, carried);
+			check(purse(server) == carried, "setup: rewinding the ledger must not move the purse,"
+					+ " and it holds " + purse(server) + " rather than " + carried);
+		}
+		TestRuns.waitForNobodyConnected(context, server);
+
+		try (TestDedicatedServerConnection returned = server.connect()) {
+			TestRuns.settleClient(context, returned);
+			TestPlayer player = new TestPlayer(context, server, returned);
+
+			check(TestRuns.admittedRunOf(server) == runId, "setup: the player must come back admitted"
+					+ " to run " + runId + ", which is the half of this the crash left durable, and"
+					+ " they are admitted to " + TestRuns.admittedRunOf(server));
+			check(!isFinished(player, MINE_STONE), MINE_STONE + " must be given back on joining:"
+					+ " this run's ledger has never paid for it, so the record saying it is finished"
+					+ " is the last run's and would cost this one the payout");
+			check(purse(server) == carried, "and giving it back must not move the purse: it holds "
+					+ purse(server) + " rather than " + carried);
+
+			finish(player, MINE_STONE, MINE_STONE_CRITERION);
+			int afterEarningAgain = purse(server);
+			check(afterEarningAgain == carried + MINE_STONE_PAYS, "and the milestone must pay when it"
+					+ " is finished again: the purse went from " + carried + " to " + afterEarningAgain);
+
+			finish(player, MINE_STONE, MINE_STONE_CRITERION);
+			check(purse(server) == afterEarningAgain, "exactly once, though: the purse went from "
+					+ afterEarningAgain + " to " + purse(server));
+		}
+	}
+
+	/**
+	 * Write the progression snapshot as it stands at the start of a run: the purse as it is, and a
+	 * ledger still belonging to the run before this one.
+	 *
+	 * <p>Written to the file and read back, rather than poked into memory, because what is being
+	 * reproduced is a durable state — the one thing that survives the crash this is about.
+	 */
+	private void staleLedger(TestPlayer player, int runId, int currency) {
+		player.onServer(server -> {
+			String uuid = live(server).getUUID().toString();
+			String snapshot = """
+					{
+					  "currency": %d,
+					  "unlocks": {},
+					  "paidAdvancements": { "run": %d, "entries": ["%s|%s"] }
+					}""".formatted(currency, runId - 1, uuid, MINE_STONE);
+			try {
+				Files.writeString(Progress.file(), snapshot, StandardCharsets.UTF_8);
+			} catch (IOException e) {
+				throw new UncheckedIOException("Could not write " + Progress.file(), e);
+			}
+			Progress.reloadFromFile();
+		});
 	}
 
 	/**

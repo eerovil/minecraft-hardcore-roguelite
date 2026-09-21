@@ -887,6 +887,12 @@ side of the economy, played on a real dedicated server with a real client:
   not left recorded as done, and once the file can be written the same milestone pays once and only
   once. An advancement is finished once, so leaving the completion standing would spend the only
   chance that run had to be paid for it.
+- **a-stale-advancement-file-does-not-cost-this-run-its-payouts** — the durable state a crash at a
+  run boundary leaves, built as the disk would hold it: the advancement finished, the player
+  admitted to this run, and the progression snapshot still holding the previous run's ledger. A real
+  disconnect and reconnect then walks the real join path, and the milestone is given back and pays
+  exactly once. This is the scenario for the rule that the admission mark is not proof the
+  advancement reset landed.
 - **the-purse-is-on-the-screen-while-the-run-is-played** — the client's own copy of the balance
   matches the server's with no screen open, and the shot `currency-hud-during-a-run` is the HUD
   drawing it. Thirteen is the two payouts that scenario makes, three and ten:
