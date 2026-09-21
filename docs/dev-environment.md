@@ -883,7 +883,9 @@ side of the economy, played on a real dedicated server with a real client:
   schedule, so without the ledger in the snapshot this is a real way to mint currency.
 - **the-purse-is-on-the-screen-while-the-run-is-played** — the client's own copy of the balance
   matches the server's with no screen open, and the shot `currency-hud-during-a-run` is the HUD
-  drawing it.
+  drawing it. Thirteen is the two payouts that scenario makes, three and ten:
+
+![the purse in the corner of the screen, reading 13](images/gametest-currency-hud-during-a-run.png)
 
 Every scenario reads the purse immediately before the thing it is testing and asserts the
 difference. Asserting a total instead would pass or fail on anything else that happened to pay in
