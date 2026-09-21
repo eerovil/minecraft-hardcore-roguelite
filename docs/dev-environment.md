@@ -286,6 +286,33 @@ An assertion message names what was expected in plain words, for example *"a loc
 must stay empty after a click that tries to fill it"*. The item-conservation ones also print the
 count they found.
 
+#### A red run with no failed scenario in it is the node, not the mod
+
+A client run can also die without any scenario failing at all. What that looks like:
+
+```
+A single server tick took 60.00 seconds (should be max 0.05)
+Considering it to be crashed, server will forcibly shutdown.
+```
+
+and a thread dump whose render thread is inside `glDrawArraysInstanced`. This is not a hang in
+anything the mod did. The client gametest API runs the client and the server **in lockstep**, so
+the server's tick does not finish until the client's frame does — and the client renders with
+llvmpipe on a shared node. A frame that takes a minute is therefore recorded as a crashed server
+tick, and Minecraft's own watchdog kills the server.
+
+It shows up in whichever client scenario happens to be drawing something heavy at the time, so the
+class named in the log means nothing. Check the node before touching any test:
+
+```sh
+kubectl -n mhr-dev exec "$(kubectl -n mhr-dev get pod -l app=mhr-gametest \
+  -o jsonpath='{.items[0].metadata.name}')" -- uptime
+```
+
+Six CPUs. A load average well above that — 18 has been seen, with the dev server and another
+worker's run on the same node — is the whole explanation. Wait for the node to be quiet and run it
+again rather than adding a timeout or a retry to a test.
+
 ### What is automated now
 
 #### The equipment slots
