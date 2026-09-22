@@ -893,6 +893,11 @@ side of the economy, played on a real dedicated server with a real client:
   disconnect and reconnect then walks the real join path, and the milestone is given back and pays
   exactly once. This is the scenario for the rule that the admission mark is not proof the
   advancement reset landed.
+- **an-advancement-priced-at-nothing-is-left-alone-on-joining** — a balance override prices an
+  existing entry at zero. It pays nothing when finished, so the ledger can never hold a payment for
+  it, and joining must not read that absence as "unpaid" and take the player's progress away. The
+  control for the scenario above: the reconcile has to skip what does not pay, or it would revoke
+  the same advancement on every join for ever.
 - **the-purse-is-on-the-screen-while-the-run-is-played** — the client's own copy of the balance
   matches the server's with no screen open, and the shot `currency-hud-during-a-run` is the HUD
   drawing it. Thirteen is the two payouts that scenario makes, three and ten:

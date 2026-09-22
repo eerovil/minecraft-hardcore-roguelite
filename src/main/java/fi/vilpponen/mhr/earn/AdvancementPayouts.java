@@ -9,6 +9,7 @@ import fi.vilpponen.mhr.run.RunEvents;
 import fi.vilpponen.mhr.shop.ShopServer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.advancements.Advancement;
 import net.minecraft.advancements.AdvancementHolder;
@@ -94,8 +95,10 @@ public final class AdvancementPayouts {
 	 *   <li>this run has not — revoke what has been obtained, so it is there to be earned again.
 	 * </ul>
 	 *
-	 * <p>Only the advancements that pay are looked at. The rest are the fresh-world nicety the reset
-	 * does, and nothing about the economy depends on them. Running this on every join makes the
+	 * <p>Only the advancements that pay are looked at, and "listed" is not the same as "pays": a
+	 * balance override may price an existing entry at zero, and those are skipped here exactly as
+	 * they are when one is finished. The rest are the fresh-world nicety the reset does, and nothing
+	 * about the economy depends on them. Running this on every join makes the
 	 * boundary replayable rather than once-only: doing it twice is doing it once, and doing it
 	 * never is the only thing that costs anybody anything.
 	 */
@@ -111,8 +114,15 @@ public final class AdvancementPayouts {
 
 		PlayerAdvancements record = player.getAdvancements();
 		int givenBack = 0;
-		for (String id : BalanceManager.get().advancementRewards().keySet()) {
-			AdvancementHolder advancement = advancement(server, id);
+		for (Map.Entry<String, Integer> priced : BalanceManager.get().advancementRewards().entrySet()) {
+			// Listed at nothing is listed at nothing: a balance override may price an existing entry
+			// at zero, and one of those never pays and so never reaches the ledger. Walking it here
+			// would read that absence as "this run has not paid for it" and take the player's
+			// progress away on every join, for an advancement the economy is not interested in.
+			if (priced.getValue() <= 0) {
+				continue;
+			}
+			AdvancementHolder advancement = advancement(server, priced.getKey());
 			if (advancement == null) {
 				continue;
 			}

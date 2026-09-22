@@ -104,10 +104,14 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 						() -> thePurseIsOnTheScreenWhileTheRunIsPlayed(context, server, player, shop));
 			}
 
-			// Its own connection, twice over: the point of it is logging back in.
+			// Their own connections, twice over: the point of both is logging back in.
 			TestRuns.waitForNobodyConnected(context, server);
 			scenario(context, "a-stale-advancement-file-does-not-cost-this-run-its-payouts",
 					() -> aStaleAdvancementFileDoesNotCostThisRunItsPayouts(context, server));
+
+			TestRuns.waitForNobodyConnected(context, server);
+			scenario(context, "an-advancement-priced-at-nothing-is-left-alone-on-joining",
+					() -> anAdvancementPricedAtNothingIsLeftAloneOnJoining(context, server));
 		}
 
 		if (!failures.isEmpty()) {
@@ -394,6 +398,60 @@ public class CurrencyEarningClientTest implements FabricClientGameTest {
 			finish(player, MINE_STONE, MINE_STONE_CRITERION);
 			check(purse(server) == afterEarningAgain, "exactly once, though: the purse went from "
 					+ afterEarningAgain + " to " + purse(server));
+		}
+	}
+
+	/**
+	 * An advancement the balance data prices at nothing is not the reconcile's business.
+	 *
+	 * <p>Being in the price list and paying are two different things: an override may set an
+	 * existing entry to zero, and one of those pays nothing and so is never written into the ledger.
+	 * The reconcile on joining asks the ledger what this run has paid for, and an entry that can
+	 * never be there would have it take the player's progress away — every single join, for an
+	 * advancement the economy has been told to ignore.
+	 *
+	 * <p>So the same rule as when it is finished: nothing to pay, nothing to do. The override is
+	 * removed again afterwards however this ends, because the balance file is one per server and
+	 * every other scenario is priced by the shipped one.
+	 */
+	private void anAdvancementPricedAtNothingIsLeftAloneOnJoining(ClientGameTestContext context,
+			TestDedicatedServerContext server) {
+		int purseBefore;
+		try (TestDedicatedServerConnection connection = server.connect()) {
+			TestRuns.settleClient(context, connection);
+			TestPlayer player = new TestPlayer(context, server, connection);
+			TestShop shop = new TestShop(context, player);
+			startFresh(context, server, player, shop);
+
+			shop.writeOverride("{\"currency\": {\"advancements\": {\"" + MINE_STONE + "\": 0}}}");
+			try {
+				purseBefore = purse(server);
+				finish(player, MINE_STONE, MINE_STONE_CRITERION);
+
+				check(purse(server) == purseBefore, "setup: an advancement priced at nothing must pay"
+						+ " nothing, and the purse went from " + purseBefore + " to " + purse(server));
+				check(isFinished(player, MINE_STONE), "setup: and must still be finished, since"
+						+ " nothing about it failed");
+			} catch (Throwable failure) {
+				shop.removeOverride();
+				throw failure;
+			}
+		}
+		TestRuns.waitForNobodyConnected(context, server);
+
+		try (TestDedicatedServerConnection returned = server.connect()) {
+			TestRuns.settleClient(context, returned);
+			TestPlayer player = new TestPlayer(context, server, returned);
+			TestShop shop = new TestShop(context, player);
+			try {
+				check(isFinished(player, MINE_STONE), MINE_STONE + " is priced at nothing, so joining"
+						+ " must leave it alone: the ledger can never hold a payment for it, and"
+						+ " taking it back would happen on every join for ever");
+				check(purse(server) == purseBefore, "and the purse must not have moved: it holds "
+						+ purse(server) + " rather than " + purseBefore);
+			} finally {
+				shop.removeOverride();
+			}
 		}
 	}
 
