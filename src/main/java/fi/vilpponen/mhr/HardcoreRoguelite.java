@@ -9,9 +9,11 @@ import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
 import fi.vilpponen.mhr.progression.Wallet;
+import fi.vilpponen.mhr.run.LobbyIsland;
 import fi.vilpponen.mhr.run.RunAdmission;
 import fi.vilpponen.mhr.run.RunCommand;
 import fi.vilpponen.mhr.run.RunLifecycle;
+import fi.vilpponen.mhr.shop.ShopBlock;
 import fi.vilpponen.mhr.shop.ShopServer;
 import fi.vilpponen.mhr.starter.RunStart;
 import net.fabricmc.api.ModInitializer;
@@ -45,6 +47,8 @@ public class HardcoreRoguelite implements ModInitializer {
 		WorldBorders.init();
 		RunStart.register();
 		ShopServer.register();
+		LobbyIsland.register();
+		ShopBlock.register();
 
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			UnlockCommand.register(dispatcher);

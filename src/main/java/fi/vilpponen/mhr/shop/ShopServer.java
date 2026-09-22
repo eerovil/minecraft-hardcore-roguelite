@@ -48,7 +48,8 @@ public final class ShopServer {
 	}
 
 	/**
-	 * Put the screen in front of one player. {@code /mhr shop} is the only caller today.
+	 * Put the screen in front of one player. Two callers: the lobby's shop block, which is how a
+	 * player opens it, and {@code /mhr shop}, which is the operator's and the tests' spare key.
 	 *
 	 * <p>The dedicated server is joinable without the client mod, so a player can ask for a screen
 	 * their client has no way of drawing. That gets said out loud rather than dropped: asking for

@@ -26,6 +26,7 @@
 			"fi.vilpponen.mhr.gametest.client.VillageWorldgenClientTest",
 			"fi.vilpponen.mhr.gametest.client.StarterChestClientTest",
 			"fi.vilpponen.mhr.gametest.client.ShopClientTest",
+			"fi.vilpponen.mhr.gametest.client.LobbyIslandClientTest",
 			"fi.vilpponen.mhr.gametest.client.RunLifecycleClientTest",
 			"fi.vilpponen.mhr.gametest.client.ProgressionCycleClientTest"
 		]

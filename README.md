@@ -5,9 +5,10 @@ A Minecraft mod that turns Hardcore into a roguelite.
 One run, one life. Death ends the run for good — and then opens a shop. What you buy in the shop
 is permanent and carries into every future run, which starts in a brand new world.
 
-You play out of a save that keeps a persistent lobby. The run's overworld, nether and end are
-thrown away and generated again from a new seed every time you start a run, without leaving the
-game or the save.
+You play out of a save that keeps a persistent lobby: a small skyblock island in an empty void,
+with the shop sitting on it as an emerald block you right-click. Jumping off the island starts the
+next run. The run's overworld, nether and end are thrown away and generated again from a new seed
+every time, without leaving the game or the save.
 
 The twist is that a fresh save is missing things vanilla Minecraft normally gives you. No trees,
 no ores, no animals, no villages, locked armor and offhand slots, a small world border. You buy

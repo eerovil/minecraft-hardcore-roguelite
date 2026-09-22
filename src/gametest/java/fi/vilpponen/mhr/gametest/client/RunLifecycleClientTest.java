@@ -258,8 +258,9 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		boolean floor = server.computeOnServer(minecraftServer -> minecraftServer
 				.getLevel(Lobby.LEVEL)
 				.getBlockState(Lobby.SPAWN.below())
-				.is(Blocks.BEDROCK));
-		check(floor, "the lobby must have generated a floor under its spawn, and there is none");
+				.is(Blocks.GRASS_BLOCK));
+		check(floor, "the lobby island must have been built under its spawn, and there is nothing"
+				+ " there — see LobbyIsland");
 
 		TestRuns.mark(server, Lobby.LEVEL, LOBBY_MARK, MARKER);
 		frameTheLobby(context, server);
@@ -555,8 +556,8 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 		boolean floor = server.computeOnServer(minecraftServer -> minecraftServer
 				.getLevel(Lobby.LEVEL)
 				.getBlockState(Lobby.SPAWN.below())
-				.is(Blocks.BEDROCK));
-		check(floor, "the lobby floor must still be there");
+				.is(Blocks.GRASS_BLOCK));
+		check(floor, "the lobby island must still be there");
 
 		TestRuns.end(server);
 		check(TestRuns.playerIsInTheLobby(server, connection),
@@ -1336,9 +1337,9 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	/**
 	 * Point the camera at the lobby floor before photographing it.
 	 *
-	 * <p>Arriving leaves the player looking level, and the lobby's horizon is a bedrock plane under
-	 * an empty biome — which photographs as most of a sky and a grey band. Looking down at a block
-	 * a few paces away puts the floor in the picture, which is the thing worth seeing.
+	 * <p>Arriving leaves the player looking level, and the lobby's horizon is empty void — which
+	 * photographs as nothing but sky. Looking down at a block a few paces away puts the island in
+	 * the picture, which is the thing worth seeing.
 	 */
 	private static void frameTheLobby(ClientGameTestContext context, TestDedicatedServerContext server) {
 		server.runCommand("time set noon");
@@ -1362,8 +1363,8 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 				client.level.getBlockState(Lobby.SPAWN.below().offset(4, 0, 4)).getBlock().toString());
 		LOGGER.info("Lobby as the client has it: under the player {}, four paces on {}", under, ahead);
 
-		check(under.contains("bedrock") && ahead.contains("bedrock"),
-				"the client must have been sent the lobby's floor, and where it should be bedrock it"
+		check(under.contains("grass") && ahead.contains("grass"),
+				"the client must have been sent the lobby island, and where its lawn should be it"
 						+ " has " + under + " under the player and " + ahead + " four paces on —"
 						+ " the player is standing in a lobby their client draws as empty void");
 	}
