@@ -28,9 +28,13 @@ Currency and ownership are one file because they are one purchase. The persisted
     "player.slot.helmet": 1,
     "player.craft.enchant": 3,
     "starter.bread": 1
-  }
+  },
+  "paidAdvancements": { "run": 7, "entries": ["<player uuid>|minecraft:story/mine_stone"] }
 }
 ```
+
+The third field is what the current run has already been paid for; see
+[Currency and purchasing](#currency-and-purchasing).
 
 An unlock's value is the purchased level. Missing means level 0 / not owned.
 
@@ -212,9 +216,63 @@ rather than replacing either:
 - `Purchase.buy(id)` — the one operation that turns currency into ownership. The shop screen's click
   and `/mhr unlock` both end up here or in `UnlockState` directly; nothing else moves currency.
 
-**Currency is still not earned.** Nothing in gameplay pays into the wallet, because how it is earned
-is the blocking open question in `docs/open-questions.md`. `/mhr currency give` is a development
-stand-in. Do not add an earning rule as a side effect of another change.
+**Currency is earned by finishing advancements**, in `fi.vilpponen.mhr.earn.AdvancementPayouts`:
+one narrow hook on `PlayerAdvancements.award` tells it when an advancement is completed, and it
+pays what `currency.advancements` prices that advancement at. Nothing pays outside a run, and
+`/mhr currency give` stays as the development stand-in for putting a number where a test wants it.
+
+The part to understand before changing it is **where "already paid" is written down**, because the
+obvious answer is wrong. A player's advancements look like the ledger — an advancement is completed
+once, and they are cleared as the player crosses into a run — but Minecraft saves them on the
+player-save cycle rather than when the purse is written. Crash between the two and the game comes
+back with the money paid and no trace of what it was paid for, and finishing the milestone again
+pays again.
+
+So the ledger is a third field in the snapshot, written by the same commit as the balance:
+
+```json
+{
+  "currency": 35,
+  "unlocks": { "world.trees": 1 },
+  "paidAdvancements": { "run": 7, "entries": ["<player uuid>|minecraft:story/mine_stone"] }
+}
+```
+
+`Progress.creditOnce(runId, key, amount)` is the one operation that moves currency into the purse
+from gameplay, and `Wallet.earnOnce` is the view of it. It pays and records together or does
+neither. The ledger belongs to one run: a credit from a later run replaces it, which is both the
+"every run earns the same milestones again" rule and what stops it growing for ever. Run ids are
+never reused, so an old entry cannot be mistaken for a current one.
+
+**The ledger is also what says a run's advancements were reset.** Crossing into a run clears the
+player's advancements and writes down which run they are in — two different files, saved at
+different times. A crash can leave the admission durable and the cleared advancements not, and the
+player comes back admitted to this run carrying the last run's completions, with nothing firing
+again because the lifecycle thinks they never left. So the admission mark is not taken as proof that
+the reset landed: every join reconciles the *paying* advancements against the ledger, revoking any
+with progress this run has not paid for and leaving the ones it has. Doing that twice is doing it
+once, which is the point — the boundary is replayable rather than once-only.
+
+**A payout the disk refuses un-earns what it was for.** The write failing is not the end of it,
+because the thing being paid for happens once: an advancement finished while the snapshot cannot be
+written would otherwise stand, and a disk that comes back a second later would never give that
+milestone another chance to pay. So `AdvancementPayouts` revokes the criterion that finished it and
+the mixin cancels the award — no currency, no vanilla reward, no toast, no announcement — and the
+player earns it again when the game can write. Any further earning rule has to answer the same
+question: what undoes the thing that triggered the payout, when the payout cannot be recorded?
+
+Two rules for any further earning rule:
+
+- **Anything gameplay pays out goes through `earnOnce`, not `earn`.** `Wallet.earn` and
+  `/mhr currency give` are for a hand putting a number in, where there is no outside record to get
+  out of step with.
+- **The key is the caller's to compose and has to be unique within a run.** Advancements use
+  `<player uuid>|<advancement id>`: per player, because the purse is shared and two people finishing
+  the same thing is two people's work.
+
+Unlike `currency` and `unlocks`, the ledger is optional when read: a profile written before it
+existed has none, and "nothing paid for yet" is the one missing-field reading that cannot cost
+anybody anything. A ledger that is there and the wrong shape is damaged like everything else.
 
 `Purchase.buy` makes one authoritative decision:
 
@@ -239,7 +297,8 @@ adding machinery to the gap before the gap itself was removed. **There is now on
 ```json
 {
   "currency": 35,
-  "unlocks": { "world.trees": 1, "player.craft.enchant": 2 }
+  "unlocks": { "world.trees": 1, "player.craft.enchant": 2 },
+  "paidAdvancements": { "run": 7, "entries": ["<player uuid>|minecraft:story/mine_stone"] }
 }
 ```
 
@@ -264,6 +323,9 @@ Rules to keep:
   screen draws its icon, count and name from it. Do not write any of those facts into
   `shop-layout.json` or the language file as well — `ShopLayoutTest` fails if you do, because the
   two copies drift the moment anybody retunes a count.
+- **Earning is one write too.** A payout and the note saying what it was for go in together, for
+  the same reason a purchase's two halves do — and here the alternative is worse than an
+  inconsistent file, because the other half lives in a file Minecraft saves on its own schedule.
 - **One writer.** `Progress` writes; nothing else does. `Wallet` and `UnlockState` are views over it
   and own nothing. Do not add a second file for a new kind of permanent progression — add a key to
   the snapshot.
@@ -357,6 +419,7 @@ Examples:
 - an unknown owned id is preserved;
 - a starter catalogue entry needs no enum constant;
 - currency purchase conserves currency and cannot double-buy on one action;
+- an earned payout cannot be earned twice after the snapshot is read again from the file;
 - a purchase whose snapshot cannot be written changes nothing, on the disk or in memory;
 - a refused write leaves the previous snapshot wholly intact;
 - both halves of a purchase are in the file together after a reload;

@@ -22,12 +22,22 @@ public final class SyncedShop {
 	private static volatile Map<String, Reward> rewards = Map.of();
 	private static volatile int currency;
 
+	/**
+	 * Has this server said anything at all?
+	 *
+	 * <p>Nothing here can tell "the player has no currency" from "nobody has told us", and the HUD
+	 * has to: a client on a vanilla server would otherwise draw a purse of zero for a game that has
+	 * no purse in it.
+	 */
+	private static volatile boolean known;
+
 	private SyncedShop() {
 	}
 
 	/** Called on the client when the server sends the shop. */
 	public static void accept(int newCurrency, List<Offer> newOffers, Map<String, Reward> newRewards) {
 		currency = newCurrency;
+		known = true;
 		offers = List.copyOf(newOffers);
 		rewards = Map.copyOf(newRewards);
 	}
@@ -37,6 +47,12 @@ public final class SyncedShop {
 		currency = 0;
 		offers = List.of();
 		rewards = Map.of();
+		known = false;
+	}
+
+	/** See {@link #known}. */
+	public static boolean isKnown() {
+		return known;
 	}
 
 	/**

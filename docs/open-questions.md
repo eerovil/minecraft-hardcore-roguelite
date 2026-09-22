@@ -3,25 +3,39 @@
 Things the design document does not answer yet. Each of these needs a decision before the
 matching part of the mod can be built.
 
-## Currency — how is it earned? (blocking)
+## Currency — how is it earned? (settled)
 
-**Still open.** The spending half is built — there is a permanent purse in
-`fi.vilpponen.mhr.progression.Wallet`, and the shop takes currency out of it through one purchase
-operation — but nothing in gameplay puts any in. `/mhr currency give` is a development stand-in, not
-an answer, and `currency.advancements` in the balance file is a price list waiting for the rule
-rather than the rule itself.
+**Advancements pay.** Finishing a vanilla advancement inside a run pays whatever
+`currency.advancements` in the balance file prices it at, and most advancements are not listed and
+pay nothing. Implemented in `fi.vilpponen.mhr.earn`.
 
-The whole economy in section 13 of the design doc assumes a currency, but nothing says where it
-comes from. This is the biggest gap: prices, the "about five runs to get back to vanilla" target,
-and the 10–50× vanilla+ multiplier are all meaningless until the earning rate exists.
+What that settles, question by question:
 
-Things to decide:
+- **What the payout is based on** — milestones, which Minecraft already has a good list of. They are
+  visible, they are the player's own goals rather than the mod's, and their price list was already
+  in the balance file waiting for this.
+- **Whether a bad run still pays** — yes. An advancement pays the moment it is finished, so a run
+  keeps everything it banked before it went wrong. Dying ends the run, not the reward.
+- **Whether the payout is shown live** — yes, twice: a chat line as each one pays, and the purse
+  drawn in the corner of the screen the whole time.
+- **Whether currency can be banked without dying** — the question stops applying. There is nothing
+  to bank; it is already permanent the moment it is paid.
 
-- What the payout is based on — time survived, depth reached, biomes visited, bosses killed,
-  items crafted, milestones hit, or some mix.
-- Whether a run that ends badly still pays something.
-- Whether the payout is shown live during the run or only on the death screen.
-- Whether there is any way to bank currency without dying.
+One consequence is worth knowing before changing anything near it: **a player's advancements are
+cleared as they cross into a run**, because a run is meant to be a fresh world and a fresh world has
+none. That is what makes the same advancement earnable in every run.
+
+What it does **not** do is decide what has already been paid for. Minecraft saves a player's
+advancements on its own schedule, not when the purse is written, so a crash in between comes back to
+money paid and no record of what it was paid for — and the milestone mints it again. The note saying
+what a run has been paid for therefore lives in the progression snapshot beside the balance, written
+by the same commit. See [progression](codebase/progression.md#currency-and-purchasing).
+
+Still open, and now worth playtesting rather than deciding on paper:
+
+- Whether the shipped payouts actually land on "about five reasonable runs restores vanilla".
+- Whether anything besides advancements should pay — the design's own list mentioned depth, biomes
+  and time survived, and none of them is ruled out by this.
 
 ## Balance numbers
 

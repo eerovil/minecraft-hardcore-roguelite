@@ -234,8 +234,19 @@ is still going.
 
 ## 7. Get some currency
 
-Nothing in gameplay pays out yet. That is deliberate — how currency is earned is still an open design
-question — so for a playtest give it to yourself:
+Currency is earned by finishing advancements inside a run. Mine some stone with a wooden pickaxe
+during step 5 and watch two things happen at once: a chat line saying what it paid, and the number
+in the purse at the top left of the screen going up. Most advancements pay nothing; what each one is
+worth is `currency.advancements` in the balance data.
+
+Two things are worth checking by hand here, because they are the rule rather than the payout:
+
+- the purse is on screen the whole time, in the lobby as well as in a run;
+- an advancement you finished in the last run pays again in this one — a run is a new world, and
+  your advancements are cleared as you enter it.
+
+For a playtest that wants to get to the shop quickly, the dev command still puts currency in by
+hand:
 
 ```
 /mhr currency give 20
@@ -329,7 +340,7 @@ Every command below was run in this order and the output is what is quoted in th
 /mhr border        -> Border tier: tiny (128 blocks across)
 /mhr run start     -> Run 1 started on seed -2748112778258634698
 /mhr run           -> run 1 in progress (seed -2748112778258634698)
-/mhr currency give 20  -> Currency: 20
+/mhr currency give 20  -> Currency: 20                     step 7's shortcut, not its main path
 /mhr shop          -> Only a player can open the shop.     (from the console; it needs a player)
 /mhr run end       -> Back in the lobby.
 /mhr currency      -> Currency: 20                          the run ended, the money did not
@@ -342,6 +353,11 @@ Every command below was run in this order and the output is what is quoted in th
 and the server log for that run 2 reads `Starter chest at 15 67 -49`, one block from its spawn.
 So the loop, the currency surviving a run, the border tier changing the next run and the starter
 chest arriving are all confirmed on a real server rather than inferred.
+
+Earning currency from an advancement is the one step above that this transcript does not cover: a
+console has no advancements to finish. It is covered by `CurrencyEarningClientTest`, which plays a
+real client on a real dedicated server and asserts the payout, the once-per-run rule and the number
+reaching the screen.
 
 The two `/mhr unlock` lines are the one substitution for the steps above: the console has no shop
 screen, so nothing was bought by clicking here. The clicking is covered by `ShopClientTest` and by

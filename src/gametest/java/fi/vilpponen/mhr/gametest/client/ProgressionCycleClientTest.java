@@ -105,7 +105,7 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 	/** What sixteen bread looks like in a chest. From the bundled catalogue. */
 	private static final Map<String, Integer> BREAD_IN_A_CHEST = Map.of("minecraft:bread", 16);
 
-	/** How much a run pays in this test. Enough for both purchases and some change. */
+	/** What the purse holds when run 1 ends. Enough for both purchases and some change. */
 	private static final int EARNED_IN_RUN_ONE = 20;
 
 	/**
@@ -191,10 +191,12 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 	 * the control for the matching assertion in run 2. A test that only asked run 2 "is there a chest"
 	 * would pass just as happily against a mod that put a chest at every run start.
 	 *
-	 * <p>The currency is granted through {@code /mhr currency give}, which is the supported stand-in:
-	 * nothing in gameplay pays out yet, deliberately, because how currency is earned is still an open
-	 * design question. What the cycle needs from it is only that the money arrives while the run that
-	 * is about to be destroyed is the one in progress.
+	 * <p>The run pays for itself now — the five diamonds handed over below finish
+	 * {@code story/mine_diamond}, which is in the price list — so the purse is <em>set</em> to the
+	 * amount this cycle is priced around rather than added to. What the cycle is about is the money
+	 * outliving the world it was earned in and buying something in the next one, and that needs a
+	 * known amount; earning the exact figure by playing would make this scenario a test of the
+	 * payout table instead. The payout table is {@link CurrencyEarningClientTest}'s.
 	 */
 	private void runOneIsRestricted(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
@@ -245,8 +247,9 @@ public class ProgressionCycleClientTest implements FabricClientGameTest {
 		check(!carried.equals(TestRuns.NOTHING_CARRIED),
 				"setup: the run has to give the player something to lose, and they have " + carried);
 
-		// And the one thing it gives them that is not the run's: the money.
-		server.runCommand("mhr currency give " + EARNED_IN_RUN_ONE);
+		// And the one thing it gives them that is not the run's: the money. Set, not given — the
+		// diamonds above have already paid for an advancement.
+		server.runCommand("mhr currency set " + EARNED_IN_RUN_ONE);
 		TestRuns.settle(server);
 		int purse = server.computeOnServer(unused -> Wallet.get().balance());
 		check(purse == EARNED_IN_RUN_ONE,

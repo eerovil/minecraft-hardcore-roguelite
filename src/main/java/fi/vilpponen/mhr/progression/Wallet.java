@@ -8,7 +8,8 @@ import fi.vilpponen.mhr.core.PersistenceException;
  * <p>A view over {@link Progress}, which owns everything permanent. What this adds is the two
  * questions currency gets asked — how much is there, and is it enough — and the one way it is set.
  *
- * <p><b>Nothing here earns it.</b> See {@link Progress} for why that is still open.
+ * <p>What earns it is {@link fi.vilpponen.mhr.earn.AdvancementPayouts}, which calls
+ * {@link #earn(int)} when a run finishes an advancement the balance data prices.
  */
 public final class Wallet {
 	private static final Wallet INSTANCE = new Wallet();
@@ -41,6 +42,32 @@ public final class Wallet {
 			throw new IllegalArgumentException("Cannot earn a negative amount: " + amount);
 		}
 		set(balance() + amount);
+	}
+
+	/**
+	 * Earn something a run can only be paid for once, and record that it has been.
+	 *
+	 * <p>This is what gameplay earns through, and {@link #earn(int)} is not: an earning rule reacts
+	 * to something the game records in its own files, and those are not written when this one is. A
+	 * crash in between would otherwise let the same milestone mint the money twice on the way back.
+	 * So the money and the note saying what it was for go into one write — see
+	 * {@link Progress#creditOnce}.
+	 *
+	 * @param runId the run being played
+	 * @param key what is being paid for, unique within a run and the caller's to compose
+	 * @return false if this run has already been paid for this key, in which case nothing changed
+	 * @throws PersistenceException if it did not reach the disk, in which case nothing changed
+	 */
+	public boolean earnOnce(int runId, String key, int amount) {
+		if (amount < 0) {
+			throw new IllegalArgumentException("Cannot earn a negative amount: " + amount);
+		}
+		return Progress.get().creditOnce(runId, key, amount);
+	}
+
+	/** Has this run already been paid for this key? */
+	public boolean hasEarned(int runId, String key) {
+		return Progress.get().hasPaid(runId, key);
 	}
 
 	/**

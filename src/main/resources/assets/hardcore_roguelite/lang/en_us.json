@@ -1,4 +1,7 @@
 {
+	"mhr.earn.advancement": "+%s for %s. You now have %s.",
+	"mhr.earn.not_saved": "%s for %s could not be saved, so it has not been earned yet. Earn it again once the game can write your progress. Check the game log.",
+
 	"mhr.shop.title": "Shop",
 	"mhr.shop.currency": "%s to spend",
 

@@ -180,8 +180,13 @@ owed and calls the listeners again for the same run id.
 
 The lifecycle cannot close that window on its own; only the store being written to can. **A listener
 that grants permanent progression must therefore be idempotent for `run.runId()`**: credit against
-the id and make a repeat call a no-op. When currency arrives, that means a ledger of paid run ids
-next to the balance, not a bare "add N".
+the id and make a repeat call a no-op — a ledger of paid run ids next to the balance, not a bare
+"add N".
+
+Currency has since arrived and deliberately does not come through here. An advancement pays when it
+is finished, inside the run, so there is no end-of-run payout to make idempotent; see
+`fi.vilpponen.mhr.earn.AdvancementPayouts`. The rule above still stands for whatever is the first
+thing to hand something over at the end of a run.
 
 The other side is enforced here: a listener that throws is **not** swallowed. The run stays in
 `ENDING_RUN` with the reward still outstanding, `/mhr run end` retries it, and the next server start
@@ -255,12 +260,23 @@ in them, so a listener can change the world the player is about to arrive in. Th
 handed is **a different object from the previous run's** — a listener that cached the old one is
 holding a closed level.
 
-Two listeners exist today and are the model to copy, both on the world hook:
+Three listeners exist today and are the model to copy:
 
 - `border/WorldBorders` puts the selected tier on the run's three new dimensions;
-- `starter/RunStart` places the starter chest at the run's overworld spawn.
+- `starter/RunStart` places the starter chest at the run's overworld spawn;
+- `earn/AdvancementPayouts` clears the arriving player's advancements, on the player hook, so the
+  run they are entering can earn them again.
 
-Neither is called by name from `RunLifecycle`, and `RunLifecycle` does not import either.
+That last one has a second half, and it is worth knowing before relying on `RunAdmission` for
+anything similar. **The admission mark is not proof that what happened beside it reached the disk.**
+It is persistent player data; a player's advancements are a different file, saved on a different
+schedule. A crash between the two brings the player back admitted to this run with the last run's
+advancements, and `RunArrival` correctly answers `LEFT_WHERE_THEY_ARE`, so the player hook never
+fires again. `AdvancementPayouts` therefore also reconciles on every join, against the payout ledger
+in the progression snapshot rather than against the mark. Anything else that has to be true once per
+run should be made replayable the same way rather than trusting the mark.
+
+None of them is called by name from `RunLifecycle`, and `RunLifecycle` imports none of them.
 
 ## What `RunWorlds` actually does
 

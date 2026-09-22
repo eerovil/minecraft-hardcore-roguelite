@@ -860,6 +860,59 @@ test that had deliberately gone unbounded to generate far-away terrain. That ove
 when a server starts, so it never outlives the world it was picked for. If a worldgen test suddenly
 finds empty chunks thousands of blocks out, look at the border before you look at worldgen.
 
+#### Earning the currency
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/CurrencyEarningClientTest.java` is the income
+side of the economy, played on a real dedicated server with a real client:
+
+- **an-advancement-pays-what-the-balance-table-says** — finishing `story/mine_stone` in a run adds
+  the balance file's price for it, and the new total is in the progression snapshot on disk rather
+  than only in memory.
+- **an-advancement-finished-once-pays-once** — granting the same advancement again pays nothing, and
+  neither does a second criterion of `story/obtain_armor`, which any one of four criteria finishes.
+  That second half is the one a careless hook fails: it would pay four times for one advancement.
+- **an-advancement-the-table-does-not-list-pays-nothing** — most advancements are not in the price
+  list, and the control proves the hook is reading it rather than paying for everything.
+- **nothing-is-earned-outside-a-run** — the same advancement finished in the lobby pays nothing.
+- **the-next-run-earns-the-same-advancements-again** — the scenario the whole economy rests on. A
+  run's advancements are cleared as the player crosses into it, so run 2 pays for `mine_stone` just
+  as run 1 did.
+- **a-crash-cannot-mint-the-same-payout-twice** — the snapshot is read back off the file, which is
+  what a restart does, and the advancement is revoked, which is what a record that was never saved
+  comes back as. Finishing it again pays nothing. Minecraft saves a player's advancements on its own
+  schedule, so without the ledger in the snapshot this is a real way to mint currency.
+- **a-payout-the-disk-refuses-leaves-the-advancement-to-be-earned-again** — a directory is put in
+  the way of the progression snapshot, so the write genuinely fails, and the advancement is finished
+  through `PlayerAdvancements.award` rather than the command. Nothing is paid, the advancement is
+  not left recorded as done, and once the file can be written the same milestone pays once and only
+  once. An advancement is finished once, so leaving the completion standing would spend the only
+  chance that run had to be paid for it.
+- **a-stale-advancement-file-does-not-cost-this-run-its-payouts** — the durable state a crash at a
+  run boundary leaves, built as the disk would hold it: the advancement finished, the player
+  admitted to this run, and the progression snapshot still holding the previous run's ledger. A real
+  disconnect and reconnect then walks the real join path, and the milestone is given back and pays
+  exactly once. This is the scenario for the rule that the admission mark is not proof the
+  advancement reset landed.
+- **an-advancement-priced-at-nothing-is-left-alone-on-joining** — a balance override prices an
+  existing entry at zero. It pays nothing when finished, so the ledger can never hold a payment for
+  it, and joining must not read that absence as "unpaid" and take the player's progress away. The
+  control for the scenario above: the reconcile has to skip what does not pay, or it would revoke
+  the same advancement on every join for ever.
+- **the-purse-is-on-the-screen-while-the-run-is-played** — the client's own copy of the balance
+  matches the server's with no screen open, and the shot `currency-hud-during-a-run` is the HUD
+  drawing it. Thirteen is the two payouts that scenario makes, three and ten:
+
+![the purse in the corner of the screen, reading 13](images/gametest-currency-hud-during-a-run.png)
+
+Every scenario reads the purse immediately before the thing it is testing and asserts the
+difference. Asserting a total instead would pass or fail on anything else that happened to pay in
+the same run.
+
+The storage side of the same rule is in `ShopPurchaseGameTest`, which owns the progression snapshot
+for the server batch: a credit survives the file being read again and is refused the second time, a
+later run is paid for the same milestone again, and a credit the disk will not take leaves neither
+the money nor the note behind.
+
 #### The whole cycle, as one player experience
 
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/ProgressionCycleClientTest.java` is the only

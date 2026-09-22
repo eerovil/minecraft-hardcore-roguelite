@@ -40,6 +40,13 @@ import org.slf4j.LoggerFactory;
  * <p>Currency and what is owned are one file, so the scenarios that used to be about two writes
  * getting out of step are now about one write either happening or not.
  *
+ * <p>The last three scenarios are about the other operation that writes that file — earning, which
+ * pays a run for a milestone once and records that it has. They live here rather than in a class of
+ * their own for the same reason everything else does: the snapshot is one per server, GameTest runs
+ * a batch side by side, and two tests writing it at once would fail each other. What a real
+ * advancement finishing looks like end to end is
+ * {@code fi.vilpponen.mhr.gametest.client.CurrencyEarningClientTest}'s.
+ *
  * <p>Nothing here buys a border tier. Owning one resizes the world the moment it is bought, and
  * these scenarios share a world with every other server test in the batch; that path is proven in
  * the client test, which has a dedicated server to itself.
@@ -55,6 +62,10 @@ public class ShopPurchaseGameTest {
 
 	/** A second plain unlock, for the scenarios that need two purchases to be told apart. */
 	private static final String VILLAGE = "world.village";
+
+	/** A run id and one thing paid for in it, for the ledger scenarios. */
+	private static final int RUN = 4;
+	private static final String MILESTONE = "11111111-2222-3333-4444-555555555555|minecraft:story/mine_stone";
 
 	/** Three of the four border tiers, smallest first. The run gets the largest one owned. */
 	private static final String TINY_BORDER = "world.border.tiny";
@@ -105,6 +116,12 @@ public class ShopPurchaseGameTest {
 					this::anUnreadableLegacyUnlockFileStopsTheMigration);
 			scenario(failures, "an-unreadable-legacy-currency-file-stops-it-too",
 					this::anUnreadableLegacyCurrencyFileStopsItToo);
+			scenario(failures, "a-run-is-paid-once-for-a-milestone-even-after-a-restart",
+					this::aRunIsPaidOnceForAMilestoneEvenAfterARestart);
+			scenario(failures, "the-next-run-is-paid-for-the-same-milestone-again",
+					this::theNextRunIsPaidForTheSameMilestoneAgain);
+			scenario(failures, "a-credit-the-disk-will-not-take-pays-nothing-and-remembers-nothing",
+					this::aCreditTheDiskWillNotTakePaysNothingAndRemembersNothing);
 		} finally {
 			removeOverride(helper);
 			unblock(Progress.file());
@@ -555,6 +572,82 @@ public class ShopPurchaseGameTest {
 		check(!Files.exists(Progress.file()), "and must write no snapshot");
 
 		startFromNothing();
+	}
+
+	// --- earning, and paying for a milestone exactly once -------------------------------------
+
+	/**
+	 * The gap this closes: a player's advancements are saved on the player-save cycle, and the purse
+	 * is written the moment it changes. Crash in between and the game comes back with the money paid
+	 * and no record of what it was paid for, and the same milestone can be finished — and paid for —
+	 * again.
+	 *
+	 * <p>So the note saying what has been paid for is in the snapshot, written by the same commit as
+	 * the balance. Reading the snapshot again from scratch is this process's nearest thing to a
+	 * restart, and the second credit has to be refused on the strength of the <em>file</em> rather
+	 * than anything still in memory.
+	 */
+	private void aRunIsPaidOnceForAMilestoneEvenAfterARestart() {
+		startFromNothing();
+		reset();
+
+		check(Wallet.get().earnOnce(RUN, MILESTONE, 10),
+				"setup: the first credit should pay");
+		check(balance() == 10, "and should leave 10 in the purse, which holds " + balance());
+
+		Progress.reloadFromFile();
+
+		check(balance() == 10, "the credit must be on the disk: after reading the snapshot again the"
+				+ " purse holds " + balance());
+		check(Wallet.get().hasEarned(RUN, MILESTONE),
+				"and so must the note saying what it was for, which is what a restart has to find");
+		check(!Wallet.get().earnOnce(RUN, MILESTONE, 10),
+				"a second credit for the same milestone in the same run must be refused");
+		check(balance() == 10,
+				"and must pay nothing: the purse went from 10 to " + balance());
+
+		reset();
+	}
+
+	/** The other side of the same rule: a new run is a new world, and earns it all again. */
+	private void theNextRunIsPaidForTheSameMilestoneAgain() {
+		startFromNothing();
+		reset();
+
+		check(Wallet.get().earnOnce(RUN, MILESTONE, 10), "setup: run " + RUN + " should be paid");
+		check(Wallet.get().earnOnce(RUN + 1, MILESTONE, 10),
+				"the next run must be paid for the same milestone, and it was refused");
+		check(balance() == 20,
+				"so two runs must have paid 10 each, and the purse holds " + balance());
+		check(!Wallet.get().hasEarned(RUN, MILESTONE),
+				"and the previous run's ledger must be gone rather than kept for ever");
+
+		reset();
+	}
+
+	/** A credit is one write like every other, so a write that fails leaves neither half behind. */
+	private void aCreditTheDiskWillNotTakePaysNothingAndRemembersNothing() {
+		startFromNothing();
+		reset();
+		block(Progress.file());
+
+		boolean refused = false;
+		try {
+			Wallet.get().earnOnce(RUN, MILESTONE, 10);
+		} catch (PersistenceException expected) {
+			refused = true;
+		}
+		check(refused, "a credit that cannot be written must say so rather than report success");
+		check(balance() == 0, "and must not move the purse, which holds " + balance());
+
+		unblock(Progress.file());
+
+		check(Wallet.get().earnOnce(RUN, MILESTONE, 10),
+				"and must not have been written down either: the same credit has to pay once the"
+						+ " disk will take it");
+		check(balance() == 10, "and the purse holds " + balance() + " rather than 10");
+
+		reset();
 	}
 
 	// --- plumbing --------------------------------------------------------------------------
