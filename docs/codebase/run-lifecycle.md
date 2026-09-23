@@ -21,15 +21,15 @@ A new run therefore no longer needs restarting Minecraft or re-opening the save.
 ```
 Persistent save
 ├── hardcore_roguelite:lobby   persistent, never deleted
-├── hardcore-roguelite-run.json  the loop's own state, in the save root
+├── hardcore-roguelite-run.json       the loop's own state, in the save root
+├── hardcore-roguelite-progress.json  permanent purchases and currency, in the save root
 │
 ├── minecraft:overworld        disposable, this run only
 ├── minecraft:the_nether       disposable, this run only
 └── minecraft:the_end          disposable, this run only
-
-Outside the save, shared by every save on the installation:
-└── config/hardcore-roguelite-progress.json  permanent purchases and currency
 ```
+
+One save is one roguelite profile. Nothing the mod keeps is shared between saves on an installation.
 
 **A run is the three vanilla dimensions; the lobby is the extra one**, not the other way round.
 That is deliberate and load-bearing: vanilla hard-codes which dimension a nether portal and an end
@@ -479,9 +479,9 @@ Before adding a field, decide which column it belongs in.
 
 | State | Lifetime | Home |
 | --- | --- | --- |
-| Purchased unlock / repeatable level | Across saves | `config/hardcore-roguelite-progress.json` |
-| Future currency balance | Across saves unless design says otherwise | same file |
-| Starter item ownership | Across saves | same file |
+| Purchased unlock / repeatable level | The save, across runs | `<save>/hardcore-roguelite-progress.json` |
+| Currency balance, paid-advancement ledger | The save, across runs | same file |
+| Starter item ownership | The save, across runs | same file |
 | Phase, run id, seed, run count, reward committed | The save, across runs | `<save>/hardcore-roguelite-run.json` |
 | Generated chunks/entities | One run | the run's dimensions, deleted between runs |
 | Player inventory, ender chest, cursor, XP, hunger, respawn point, effects | One run | `RunLifecycle.stripRunState`, as the player **leaves** the run |
@@ -501,7 +501,7 @@ If yes, it is run-local. If no, it belongs in the run record or in permanent pro
 
 The shop is the lobby's screen, and the between-runs state is `RunPhase.LOBBY`. It should:
 
-- read and write permanent progression (the unlock file, and currency when it exists);
+- read and write permanent progression (the save's progress snapshot);
 - call `RunLifecycle.get().startRun(OptionalLong.empty())` for "start next run", and show the
   `IllegalStateException` message if that refuses;
 - read `RunLifecycle.get().record()` for what to display — runs completed, last run's seed;
@@ -516,7 +516,7 @@ RunLifecycle -> RunEvents.RUN_STARTED -> features read permanent state and confi
 
 ## Multiplayer assumption
 
-Unchanged: one progression profile for the running installation, not per-Minecraft-account
+Unchanged: one progression profile for the save being played, not per-Minecraft-account
 profiles. `RunLifecycle` moves **every** connected player at a run boundary and any player's death
 during a run ends it. If per-player or shared co-op progression is wanted later, that is a
 product-level migration that has to redefine who owns currency and unlocks, whose death ends a run,

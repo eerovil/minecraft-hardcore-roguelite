@@ -268,7 +268,9 @@ Two consequences worth knowing:
 
 Nothing carries over between runs. Loom wipes `build/run/clientGameTest` before each one, and that
 directory is the client's *and* the dedicated server's game directory, so the world, the config
-directory, `hardcore-roguelite-progress.json` and the player's inventory all start empty. On top of
+directory, each save's `hardcore-roguelite-progress.json` and the player's inventory all start empty.
+Every `worldBuilder()` call is a new save, so it is also a new roguelite profile with nothing
+bought. On top of
 that every scenario sets up the state it depends on rather than inheriting it — the equipment ones
 lock all five slots and empty the player, the tree ones set `world.trees` to what they need and
 clear their own patch of ground, the animal ones lock all six species — so one scenario cannot make
@@ -927,8 +929,8 @@ scenario and the steps are its inside. The first step that fails ends the run th
 itself in the failure and in the screenshot; nothing downstream is asserted against state that
 step never built. The steps:
 
-- **the-cycle-starts-in-the-lobby-with-an-empty-profile** — and empties the profile itself, because
-  permanent progression is shared by every test in this client's process.
+- **the-cycle-starts-in-the-lobby-with-an-empty-profile** — and empties the profile itself rather
+  than trusting the save to be new, because every scenario establishes the state it depends on.
 - **run-one-is-as-restricted-as-an-empty-profile-makes-it** — no starter chest at all, and the tiny
   128-block border. This is the control for both of run 2's assertions.
 - **dying-ends-the-run-and-leaves-the-currency-behind** — a real `kill`. The run stops at the lobby
@@ -948,6 +950,27 @@ overworld reporting it, and run 1's markers being gone.
 | Run 1, with nothing bought | The shop, holding run 1's pay | Run 2, with what it bought |
 | -------------------------- | ----------------------------- | -------------------------- |
 | ![flat grass to the horizon, no trees anywhere](images/gametest-cycle-run-one-restricted.png) | ![the shop screen reading 14 to spend, Medium world owned](images/gametest-cycle-shop-after-buying.png) | ![a chest at the new run's spawn, chat listing both purchases](images/gametest-cycle-run-two.png) |
+
+#### One save is one roguelite profile
+
+`src/gametest/java/fi/vilpponen/mhr/gametest/client/SaveProfileClientTest.java` creates two real
+singleplayer saves from the client — singleplayer rather than the dedicated server, because a
+dedicated server is one save for its whole life — and gives them different currency and unlocks
+(35 and `world.trees`; 4 and `world.village`). Before either exists it leaves an old-style
+installation-wide `config/hardcore-roguelite-progress.json` holding 999 currency and both unlocks.
+
+- **a-new-save-starts-with-nothing** / **a-second-new-save-does-not-see-the-first** — no currency,
+  nothing owned, and the snapshot is at that save's root. Not reset first: a new save has to *be*
+  empty. The installation-wide leftover showing up here would read 999.
+- **reopening-save-a-brings-back-only-its-own-profile** / **reopening-save-b-…** — each save,
+  reopened after the other was played, comes back with its own purse and unlock and not the other's,
+  read back off its own file. The HUD is screenshotted showing each save's purse.
+- **the-installation-keeps-no-progression** — the leftover is byte-for-byte what was put there, and
+  each save holds its own snapshot.
+
+The fast version of the same rule is `ProgressSaveScopeTest` (JUnit, two temporary save roots), and
+`ShopPurchaseGameTest`'s **progression-lives-in-the-save-and-not-in-the-installation** checks the
+server GameTest's own save.
 
 ### What is still manual
 
@@ -1063,8 +1086,9 @@ scripts/dev.sh rcon "fill 0 100 0 8 100 8 minecraft:dirt"
 scripts/dev.sh rcon "place feature minecraft:oak 4 101 4"
 ```
 
-Locked, that answers "Failed to place feature". After `mhr unlock world.trees` it answers "Placed". The progression file lives at `/server/config/hardcore-roguelite-progress.json`
-on the volume — outside the world, because unlocks are meant to survive it.
+Locked, that answers "Failed to place feature". After `mhr unlock world.trees` it answers "Placed". The progression file lives at `/server/world/hardcore-roguelite-progress.json`
+on the volume — at the root of the save, which a new run's dimensions do not touch. One save is one
+roguelite profile, so `scripts/dev.sh newworld`, which deletes the whole save, starts a fresh one.
 
 ## Testing the villages unlock
 
@@ -1308,7 +1332,7 @@ scripts/dev.sh rcon "mhr lock player.craft.enchant"
 ```
 
 The levels are kept in the same file as everything else,
-`/server/config/hardcore-roguelite-progress.json`, whose shape is the currency and a map of unlock
+`/server/world/hardcore-roguelite-progress.json`, whose shape is the currency and a map of unlock
 id to level:
 
 ```json

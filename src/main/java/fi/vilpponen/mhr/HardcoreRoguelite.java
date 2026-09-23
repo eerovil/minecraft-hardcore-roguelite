@@ -9,7 +9,7 @@ import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceManager;
 import fi.vilpponen.mhr.earn.AdvancementPayouts;
 import fi.vilpponen.mhr.equipment.EquipmentSlots;
-import fi.vilpponen.mhr.progression.Wallet;
+import fi.vilpponen.mhr.progression.Progress;
 import fi.vilpponen.mhr.run.LobbyIsland;
 import fi.vilpponen.mhr.run.RunAdmission;
 import fi.vilpponen.mhr.run.RunCommand;
@@ -33,10 +33,12 @@ public class HardcoreRoguelite implements ModInitializer {
 		// numbers. See BalanceManager.
 		Balance balance = BalanceManager.load();
 
-		UnlockState state = UnlockState.get();
-		LOGGER.info("Hardcore Roguelite loaded. Unlocked: {}. Currency: {}."
-						+ " Balance: {} unlocks priced, mob damage x{}",
-				state.describe(), Wallet.get().balance(), balance.unlocks().size(), balance.mobDamageMultiplier());
+		LOGGER.info("Hardcore Roguelite loaded. Balance: {} unlocks priced, mob damage x{}",
+				balance.unlocks().size(), balance.mobDamageMultiplier());
+
+		// Before every other server hook: progression belongs to the save, and anything that asks
+		// what is owned — worldgen, the border, the run lifecycle — has to be asking this save.
+		Progress.register();
 
 		// First, and before anything can read a player's save data: a persistent attachment that is
 		// not registered by the time an entity is loaded is dropped with a log line and no other
