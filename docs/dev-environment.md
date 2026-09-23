@@ -968,6 +968,10 @@ installation-wide `config/hardcore-roguelite-progress.json` holding 999 currency
 - **the-installation-keeps-no-progression** — the leftover is byte-for-byte what was put there, and
   each save holds its own snapshot.
 
+| Save A, reopened after save B was played | Save B, reopened after save A |
+| ---------------------------------------- | ----------------------------- |
+| ![the currency HUD reading 35](images/gametest-save-profile-a-reopened.png) | ![the currency HUD reading 4](images/gametest-save-profile-b-reopened.png) |
+
 The fast version of the same rule is `ProgressSaveScopeTest` (JUnit, two temporary save roots), and
 `ShopPurchaseGameTest`'s **progression-lives-in-the-save-and-not-in-the-installation** checks the
 server GameTest's own save.
