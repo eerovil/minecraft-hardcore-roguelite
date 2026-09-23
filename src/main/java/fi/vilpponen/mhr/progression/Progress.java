@@ -20,7 +20,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import net.fabricmc.loader.api.FabricLoader;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * Everything the player keeps between runs, in one file and one write.
@@ -55,14 +56,19 @@ import net.fabricmc.loader.api.FabricLoader;
  * to handle and not a taxonomy of them: keep the old snapshot, and tell the caller the change did
  * not happen.
  *
- * <p>Stored in the Fabric config directory rather than in a world, because a run is disposable and
- * progression is not. See {@code docs/codebase/progression.md}.
+ * <p><b>One save is one roguelite profile.</b> The file lives at the root of the Minecraft save,
+ * next to {@code level.dat} and the run record, and is bound to it when a server starts and let go
+ * when it stops. The run's overworld, nether and end are thrown away between runs; the save root is
+ * not, so progression outlives every run in it. A different save is a different profile and starts
+ * from nothing, and nothing is ever read from, or copied out of, the installation's config
+ * directory. See {@code docs/codebase/progression.md}.
  *
- * <p><b>Reading fails closed.</b> No file at all is a new player and starts from nothing. A file
+ * <p><b>Reading fails closed.</b> No file at all is a new profile and starts from nothing. A file
  * that is there and cannot be read is something else entirely, and this refuses to load rather than
  * carrying on as though the player had bought nothing — because a profile that starts empty is a
  * profile the next purchase writes over, and the purchases that could not be read would be gone for
- * good. The game stops at startup with the file named, the same way a broken balance file stops it.
+ * good. The save stops opening with the file named, the same way a broken balance file stops the
+ * game.
  *
  * <p>{@link fi.vilpponen.mhr.UnlockState} and {@link Wallet} are the two views feature code talks
  * to. Neither of them owns anything; this does.
@@ -74,10 +80,6 @@ import net.fabricmc.loader.api.FabricLoader;
 public final class Progress {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final String FILE_NAME = "hardcore-roguelite-progress.json";
-
-	/** The two files this replaced. Read once, if they are there and the snapshot is not. */
-	private static final String LEGACY_UNLOCKS = "hardcore-roguelite-unlocks.json";
-	private static final String LEGACY_CURRENCY = "hardcore-roguelite-currency.json";
 
 	private static final String CURRENCY = "currency";
 	private static final String UNLOCKS = "unlocks";
@@ -98,29 +100,8 @@ public final class Progress {
 	private static final String PAID_RUN = "run";
 	private static final String PAID_ENTRIES = "entries";
 
-	/**
-	 * Unlock ids that have been renamed, old name to current one.
-	 *
-	 * <p>A profile written before the rename is migrated as it is read, so nobody loses a purchase
-	 * to a refactor. Only the legacy files can still hold these: the snapshot has only ever been
-	 * written in current names. An entry can be dropped once no profile that old can plausibly
-	 * exist — for {@code trees}, the five {@code slot_*} names and the six bare animal names that is
-	 * as soon as the mod has shipped anywhere, since they predate the namespaced ids and only ever
-	 * existed in development.
-	 */
-	private static final Map<String, String> RENAMED_IDS = Map.ofEntries(
-			Map.entry("trees", "world.trees"),
-			Map.entry("cow", "world.animal.cow"),
-			Map.entry("pig", "world.animal.pig"),
-			Map.entry("sheep", "world.animal.sheep"),
-			Map.entry("chicken", "world.animal.chicken"),
-			Map.entry("horse", "world.animal.horse"),
-			Map.entry("wolf", "world.animal.wolf"),
-			Map.entry("slot_helmet", "player.slot.helmet"),
-			Map.entry("slot_chestplate", "player.slot.chestplate"),
-			Map.entry("slot_leggings", "player.slot.leggings"),
-			Map.entry("slot_boots", "player.slot.boots"),
-			Map.entry("slot_offhand", "player.slot.offhand"));
+	/** The snapshot of the save that is open, or null when no save is. */
+	private static volatile Path openFile;
 
 	private static volatile Progress instance;
 
@@ -138,13 +119,67 @@ public final class Progress {
 		this.file = file;
 	}
 
+	/**
+	 * Bind progression to a save's lifetime: read when its server starts, let go when it stops.
+	 *
+	 * <p>{@code SERVER_STARTING} is before the server loads a single level, so nothing in the save —
+	 * worldgen included — can ask what is owned before the answer is this save's.
+	 */
+	public static void register() {
+		ServerLifecycleEvents.SERVER_STARTING.register(server -> open(server.getWorldPath(LevelResource.ROOT)));
+		ServerLifecycleEvents.SERVER_STOPPED.register(server -> close());
+	}
+
+	/**
+	 * Make this save's snapshot the one every view answers from, and read it now.
+	 *
+	 * <p>Read eagerly so that a damaged file stops the save opening, with the file named, rather than
+	 * the first purchase finding out.
+	 *
+	 * @throws PersistenceException if the save has a snapshot that cannot be read; no save is then
+	 *     open, so nothing can be bought on top of it
+	 */
+	public static Progress open(Path saveRoot) {
+		synchronized (Progress.class) {
+			if (openFile != null) {
+				HardcoreRoguelite.LOGGER.warn("Opening progression in {} while {} was still open",
+						saveRoot, openFile);
+			}
+			openFile = saveRoot.resolve(FILE_NAME).toAbsolutePath().normalize();
+			instance = null;
+			try {
+				Progress opened = get();
+				HardcoreRoguelite.LOGGER.info("Progression for this save is {}. Unlocked: {}. Currency: {}.",
+						openFile, opened.levels(), opened.currency());
+				return opened;
+			} catch (RuntimeException unreadable) {
+				openFile = null;
+				throw unreadable;
+			}
+		}
+	}
+
+	/** Let go of the save. Until the next one opens there is no progression to ask about. */
+	public static void close() {
+		synchronized (Progress.class) {
+			openFile = null;
+			instance = null;
+		}
+	}
+
+	/**
+	 * The open save's progression.
+	 *
+	 * @throws IllegalStateException if no save is open. Answering "nothing owned" instead would be a
+	 *     profile nobody has, and the next write would put it somewhere.
+	 */
 	public static Progress get() {
 		Progress local = instance;
 		if (local == null) {
 			synchronized (Progress.class) {
 				local = instance;
 				if (local == null) {
-					local = new Progress(FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME));
+					local = new Progress(file());
 					local.load();
 					instance = local;
 				}
@@ -154,14 +189,14 @@ public final class Progress {
 	}
 
 	/**
-	 * Throw away what is loaded and read the file again.
+	 * Throw away what is loaded and read the open save's file again.
 	 *
-	 * <p>Nothing in the game needs this: one process is one player's progression from launch to
-	 * exit, and every change is written through as it is made. It exists for the automated tests,
-	 * where the dedicated server runs inside the client's own process — so a test that wants to know
-	 * whether a purchase really reached the disk has no process boundary to cross and has to ask for
-	 * one. Between two runs is the honest place to call it, because that is where a real player
-	 * would have quit the game.
+	 * <p>Nothing in the game needs this: one open save is one profile from start to stop, and every
+	 * change is written through as it is made. It exists for the automated tests, where the
+	 * dedicated server runs inside the client's own process — so a test that wants to know whether a
+	 * purchase really reached the disk has no process boundary to cross and has to ask for one.
+	 * Between two runs is the honest place to call it, because that is where a real player would
+	 * have quit the game.
 	 */
 	public static Progress reloadFromFile() {
 		synchronized (Progress.class) {
@@ -170,9 +205,19 @@ public final class Progress {
 		}
 	}
 
-	/** Where the snapshot lives. Public so a test can get in the way of it on purpose. */
+	/**
+	 * Where the open save's snapshot lives. Public so a test can get in the way of it on purpose.
+	 *
+	 * @throws IllegalStateException if no save is open
+	 */
 	public static Path file() {
-		return FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+		Path local = openFile;
+		if (local == null) {
+			throw new IllegalStateException("No Minecraft save is open, so there is no roguelite"
+					+ " progression to read. Progression belongs to a save; see"
+					+ " docs/codebase/progression.md.");
+		}
+		return local;
 	}
 
 	public synchronized int currency() {
@@ -311,12 +356,11 @@ public final class Progress {
 		paidKeys = Collections.unmodifiableSet(new TreeSet<>(nextPaidKeys));
 	}
 
+	/** No file is a save that has never bought or earned anything, and nothing is written until it does. */
 	private synchronized void load() {
 		if (Files.isRegularFile(file)) {
 			readSnapshot();
-			return;
 		}
-		migrateFromTheOldFiles();
 	}
 
 	/**
@@ -432,77 +476,7 @@ public final class Progress {
 						+ " nothing had ever been bought. Fix or move the file and start again.", cause);
 	}
 
-	/**
-	 * Take what the two old files said and write it as one snapshot.
-	 *
-	 * <p>Runs once, the first time a profile written by an older build is loaded. The old files are
-	 * left where they are: the snapshot is what is read from now on, and a purchase that has already
-	 * been paid for is not something to risk on a tidy-up.
-	 */
-	private synchronized void migrateFromTheOldFiles() {
-		Path directory = file.getParent();
-		Path oldUnlocks = directory.resolve(LEGACY_UNLOCKS);
-		Path oldCurrency = directory.resolve(LEGACY_CURRENCY);
-		if (!Files.isRegularFile(oldUnlocks) && !Files.isRegularFile(oldCurrency)) {
-			// A player who has never bought anything. Nothing to carry over, and nothing is written
-			// until they do.
-			return;
-		}
-
-		// Every source that is there has to be read whole before anything is written. A source that
-		// is present and unreadable used to count as empty, which turned a file that could have been
-		// repaired into a snapshot saying those purchases never happened.
-		Map<String, Integer> read = readLegacyUnlocks(oldUnlocks);
-		int total = readLegacyCurrency(oldCurrency);
-
-		HardcoreRoguelite.LOGGER.info("Moving progression into one file: {} unlock(s) and {} currency from {}",
-				read.size(), total, directory);
-		commit(total, read, 0, Set.of());
-	}
-
-	/** @throws PersistenceException if the file is there and cannot be read whole. */
-	private static Map<String, Integer> readLegacyUnlocks(Path oldUnlocks) {
-		Map<String, Integer> read = new TreeMap<>();
-		if (!Files.isRegularFile(oldUnlocks)) {
-			return read;
-		}
-		try (Reader reader = Files.newBufferedReader(oldUnlocks)) {
-			JsonElement root = JsonParser.parseReader(reader);
-			if (root == null || root.isJsonNull()) {
-				return read;
-			}
-			if (root.isJsonArray()) {
-				// The shape from before unlocks had levels: a bare list of the ids owned.
-				for (JsonElement id : (JsonArray) root) {
-					take(read, id.getAsString(), 1);
-				}
-				return read;
-			}
-			read.putAll(levelsIn(root.getAsJsonObject()));
-		} catch (IOException | RuntimeException e) {
-			throw failedToRead(oldUnlocks, e);
-		}
-		return read;
-	}
-
-	/** @throws PersistenceException if the file is there and cannot be read whole. */
-	private static int readLegacyCurrency(Path oldCurrency) {
-		if (!Files.isRegularFile(oldCurrency)) {
-			return 0;
-		}
-		try (Reader reader = Files.newBufferedReader(oldCurrency)) {
-			JsonElement root = JsonParser.parseReader(reader);
-			if (root == null || root.isJsonNull()) {
-				return 0;
-			}
-			JsonElement total = root.getAsJsonObject().get("balance");
-			return total == null ? 0 : Math.max(0, total.getAsInt());
-		} catch (IOException | RuntimeException e) {
-			throw failedToRead(oldCurrency, e);
-		}
-	}
-
-	/** The id-to-level map out of a JSON object, with renames applied and known levels clamped. */
+	/** The id-to-level map out of a JSON object, with known levels clamped. */
 	private static Map<String, Integer> levelsIn(JsonObject json) {
 		Map<String, Integer> read = new TreeMap<>();
 		for (Map.Entry<String, JsonElement> entry : json.entrySet()) {
@@ -522,21 +496,16 @@ public final class Progress {
 	 * an unlock asks for the one it cares about by id, so one that resolves to nothing never matches.
 	 */
 	private static void take(Map<String, Integer> levels, String id, int level) {
-		String current = RENAMED_IDS.getOrDefault(id, id);
-		if (!current.equals(id)) {
-			HardcoreRoguelite.LOGGER.info("Unlock '{}' is now called '{}'", id, current);
-		}
-
-		Unlock unlock = Unlock.byId(current);
+		Unlock unlock = Unlock.byId(id);
 		int kept = level;
 		if (unlock != null) {
 			kept = Math.clamp(level, 0, unlock.maxLevel());
 			if (kept != level) {
-				HardcoreRoguelite.LOGGER.warn("Clamping unlock '{}' level {} to {}", current, level, kept);
+				HardcoreRoguelite.LOGGER.warn("Clamping unlock '{}' level {} to {}", id, level, kept);
 			}
 		}
 		if (kept > 0) {
-			levels.put(current, kept);
+			levels.put(id, kept);
 		}
 	}
 

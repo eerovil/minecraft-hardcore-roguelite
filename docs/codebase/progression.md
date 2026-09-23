@@ -3,9 +3,11 @@
 Read this before changing unlock storage, adding a shop purchase, adding currency, or introducing a
 new permanent upgrade.
 
-The central rule is simple:
+The central rules are simple:
 
 > **A run is disposable; progression is not.**
+>
+> **One Minecraft save is one roguelite profile.**
 
 The implementation already has one permanent progression model. Extend it. Do not build a second
 shop-owned or feature-owned progression store beside it.
@@ -14,9 +16,24 @@ shop-owned or feature-owned progression store beside it.
 
 Everything permanent lives in one file, owned by one class.
 
-`progression/Progress` holds it and is the only thing that writes it. It is deliberately in the
-Fabric config directory as `hardcore-roguelite-progress.json`, outside every Minecraft world:
-deleting a run/world must not delete what the player has bought.
+`progression/Progress` holds it and is the only thing that writes it. It lives at the root of the
+Minecraft save, next to `level.dat` and the run record, as
+`<save>/hardcore-roguelite-progress.json`. Throwing away a run's overworld, nether and end does not
+touch the save root, so a new run keeps everything; a different save is a different profile and
+starts with nothing; deleting the save deletes its profile with it.
+
+`Progress.register()` binds it to the save on `SERVER_STARTING` — before the server loads a single
+level, so worldgen never asks a question before the answer is this save's — and lets go on
+`SERVER_STOPPED`. With no save open there is no progression: `Progress.get()` throws rather than
+answering "nothing owned", because an empty answer is one the next write would put somewhere. The
+file is read as the save opens, so a damaged one stops that save from opening, with the path named.
+
+Nothing permanent is installation-scoped. Builds before this kept the snapshot in the Fabric config
+directory, shared by every save on the installation; that file cannot say which save it belonged to,
+so it is neither read nor copied into any save, and a development save from then starts with a fresh
+profile. The same goes for the two files that came before the snapshot
+(`hardcore-roguelite-unlocks.json`, `hardcore-roguelite-currency.json`) and the renamed-id table
+that migrated them: gone with the location they lived in.
 
 Currency and ownership are one file because they are one purchase. The persisted shape is:
 
@@ -42,10 +59,8 @@ An unlock's value is the purchased level. Missing means level 0 / not owned.
 rest of the mod asks by — `UnlockState` for what is owned, and the place the rules about unlock ids
 live; `Wallet` for the currency — and both read and write through `Progress`.
 
-`Progress` also owns migration. A profile written by an older build is read once from the two files
-it used to live in, with renamed ids carried over and known levels clamped, and written back as one
-snapshot; the old files are left where they are. Changing a stable id after it has been used is
-therefore a save migration, not a cosmetic refactor.
+Known levels are clamped as the snapshot is read. Changing a stable id after it has been used is a
+save migration, not a cosmetic refactor: every save that bought it holds the old id.
 
 How that one file is written, and what happens when it cannot be, is
 [One snapshot, one write](#one-snapshot-one-write) below. Read it before changing anything about
@@ -291,8 +306,8 @@ where one has moved and the other has not is not a state the game should ever be
 
 They used to be a file each. That made a purchase two writes with a gap in the middle, and no
 amount of ordering, journalling or recovery turns two writes into one — three review rounds went by
-adding machinery to the gap before the gap itself was removed. **There is now one file**,
-`config/hardcore-roguelite-progress.json`, holding both:
+adding machinery to the gap before the gap itself was removed. **There is now one file per save**,
+`<save>/hardcore-roguelite-progress.json`, holding both:
 
 ```json
 {
@@ -354,15 +369,12 @@ Rules to keep:
   - Reading invents nothing. What a snapshot is — both fields, in the right shape — is decided once,
     where it is read. `{"currency": 100}` parses perfectly and is a damaged file, not a player who
     owns nothing; loading it as empty is how the next purchase writes that emptiness over something
-    repairable. No file is a new player and starts from nothing; a file that is there
-    and cannot be read stops the game with the path named. Starting empty is the one mistake that
-    cannot be undone, because the next purchase writes the empty profile over the real one.
-  - A migration commits only once **every** legacy file that is present has been read whole. A
-    present-but-unreadable source is not an empty one.
+    repairable. No file is a save that has never bought anything and starts from nothing; a file
+    that is there and cannot be read stops the save opening with the path named. Starting empty is
+    the one mistake that cannot be undone, because the next purchase writes the empty profile over
+    the real one.
 - `Progress.commit` throws `PersistenceException` rather than logging and returning. A failed write
   that reports success is how a purchase ends up claimed but not stored.
-- The two old files are read once, on a profile written by an older build, and left where they are.
-  A purchase that has already been paid for is not something to risk on a tidy-up.
 
 ## World border reads permanent progression
 
@@ -390,14 +402,18 @@ way that looks like a worldgen bug.
 
 Ask one question first:
 
-> Should deleting the current Minecraft world delete this state?
+> If it should survive a run but should disappear when the Minecraft save is deleted, it belongs to
+> the save-scoped roguelite profile.
 
-If **no**, it is permanent/meta progression and belongs in the `Progress` snapshot, outside every
-world. That is one file with one writer, so a new kind of permanent state is a new key in it — not a
-new file, and not a store of its own.
+If it should survive the run, it is permanent/meta progression and belongs in the `Progress`
+snapshot at the save root. That is one file with one writer, so a new kind of permanent state is a
+new key in it — not a new file, and not a store of its own.
 
-If **yes**, it is run state and should live with the world, normally through Minecraft
-`SavedData` or another world-owned mechanism.
+If it should go when the run's dimensions are thrown away, it is run state and should live with the
+run's world, normally through Minecraft `SavedData` or another world-owned mechanism.
+
+Nothing survives the save. There is no installation-wide progression, and adding some would need a
+feature of its own that justifies it.
 
 The starter chest is the worked example:
 
@@ -415,7 +431,7 @@ Examples:
 
 - binary purchase persists across a reload;
 - repeatable level persists and clamps correctly;
-- old save shapes/renamed ids migrate without losing ownership;
+- two saves never share or leak progression, and a new save starts with nothing;
 - an unknown owned id is preserved;
 - a starter catalogue entry needs no enum constant;
 - currency purchase conserves currency and cannot double-buy on one action;

@@ -68,24 +68,27 @@ On a profile that has never run the mod there is nothing to delete, so go straig
 
 Two things to know first.
 
-**Permanent progression is not in the world.** It sits in the Fabric config directory, so making a
-new world does not reset it. These are the files:
+**One save is one roguelite profile.** Purchases and currency live at the root of the save, so a
+new save starts from nothing and a new run inside the same save keeps everything. Price overrides are
+the one file that is still installation-wide, because they are tuning rather than progression:
 
 ```
-config/hardcore-roguelite-progress.json     purchases and currency
+<save>/hardcore-roguelite-progress.json     purchases and currency, this save only
 config/hardcore-roguelite-balance.json      your price overrides, if you made any
-config/hardcore-roguelite-unlocks.json      only on a profile from an older build
-config/hardcore-roguelite-currency.json     only on a profile from an older build
 ```
 
-**Deleting them under a running game does nothing.** The process holds its own copy from launch to
-exit and writes it through on every change, so a file deleted while the game is up is simply written
-again. Stop first.
+A `config/hardcore-roguelite-progress.json` (or `-unlocks.json` / `-currency.json`) left by an older
+build is not read by anything any more; delete it or leave it.
+
+**Deleting them under a running save does nothing.** The game holds its own copy of a save's
+profile from the moment the save opens until it closes, and writes it through on every change, so a
+file deleted while the save is open is simply written again. Close the save first.
 
 ### On the dev server
 
 The rules run on the *server*, so the files that matter are the server's — not your client
-instance's. The server has to be down while you delete them.
+instance's. The save is `/pvc/server/world`, so a fresh world is a fresh profile; only a price
+override has to be removed by hand. The server has to be down while you delete it.
 
 `MHR_CONTEXT` below is the same cluster name `scripts/dev.sh` uses, so the jars you built in step 1
 and the files you delete here cannot end up on different clusters. It defaults to `eero-pc`; set it
@@ -107,29 +110,25 @@ kubectl --context "$CTX" -n mhr-dev wait --for=delete pod -l app=mhr-server --ti
 BUILD=$(kubectl --context "$CTX" -n mhr-dev get pod -l app=mhr-build \
   -o jsonpath='{.items[0].metadata.name}')
 kubectl --context "$CTX" -n mhr-dev exec "$BUILD" -- \
-  rm -f /pvc/server/config/hardcore-roguelite-progress.json \
-        /pvc/server/config/hardcore-roguelite-balance.json \
-        /pvc/server/config/hardcore-roguelite-unlocks.json \
-        /pvc/server/config/hardcore-roguelite-currency.json
+  rm -f /pvc/server/config/hardcore-roguelite-balance.json
 
-scripts/dev.sh newworld      # brings the server back up on a fresh world
+scripts/dev.sh newworld      # deletes the save, profile included, and brings up a fresh one
 ```
 
-`scripts/dev.sh newworld` on its own is **not** enough: it deletes the three world directories and
-nothing else, so your purchases and currency survive it. That is correct — permanent progression is
-meant to outlive a world — but it means a world reset alone does not give you the fresh profile this
-guide assumes.
+`scripts/dev.sh newworld` deletes the whole save, and the profile with it — that is the point of a
+new save. Starting a new *run* inside the same save (`/mhr run`) keeps purchases and currency.
 
 ### In singleplayer
 
-If the game is up, quit to the title screen or close it, then delete those four files from your
-instance's `config/` directory. If an earlier playtest left a save behind, delete that too — or, to
-keep the world but forget which run it was on, delete `<save>/hardcore-roguelite-run.json` instead.
+Create a new world: it is a new profile with nothing bought. To start an existing save's profile
+again instead, quit to the title screen and delete `<save>/hardcore-roguelite-progress.json` — or,
+to keep the purchases but forget which run it was on, delete `<save>/hardcore-roguelite-run.json`.
+Remove `config/hardcore-roguelite-balance.json` from your instance if you made one.
 
 ---
 
-A missing progress file is a new player with nothing. **A file that is there and cannot be read
-stops the game on purpose**, naming the path — that is not a crash to work around, it is the mod
+A missing progress file is a save with nothing bought. **A file that is there and cannot be read
+stops that save opening on purpose**, naming the path — that is not a crash to work around, it is the mod
 refusing to write an empty profile over a repairable one.
 
 ## 3a. Play on the dev server
@@ -325,7 +324,7 @@ progress file as well as the world. Deleting only the world keeps your purchases
 | `Unknown or incomplete command` on `/mhr` | you are not opped, or cheats are off |
 | `This save is stopped` | the loop hit a failure it will not guess its way past. Restart the server and look at the log; it refuses rather than risk deleting a world you are standing in |
 | a run refuses to start | `/mhr run` says why — one is already in progress, or the save cannot describe all three run dimensions |
-| your purchases vanished | you deleted `config/hardcore-roguelite-progress.json`, or you are playing a different instance |
+| your purchases vanished | you are in a different save (each save is its own profile), or you deleted `<save>/hardcore-roguelite-progress.json` |
 
 ## How much of this has actually been run
 

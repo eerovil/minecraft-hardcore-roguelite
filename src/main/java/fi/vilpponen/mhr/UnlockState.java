@@ -110,24 +110,6 @@ public final class UnlockState {
 		return unlock == null ? 1 : unlock.maxLevel();
 	}
 
-	public String describe() {
-		Map<String, Integer> levels = Progress.get().levels();
-		if (levels.isEmpty()) {
-			return "(nothing)";
-		}
-		StringBuilder description = new StringBuilder();
-		for (Map.Entry<String, Integer> entry : levels.entrySet()) {
-			if (!description.isEmpty()) {
-				description.append(", ");
-			}
-			description.append(entry.getKey());
-			if (entry.getValue() > 1) {
-				description.append(' ').append(entry.getValue());
-			}
-		}
-		return description.toString();
-	}
-
 	/** The owned ids that a constant is named after. Ones with no constant are simply not here. */
 	public Set<Unlock> owned() {
 		Set<Unlock> owned = EnumSet.noneOf(Unlock.class);

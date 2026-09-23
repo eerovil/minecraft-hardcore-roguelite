@@ -213,7 +213,7 @@ world.border.medium
 ```
 
 There is exactly one id per unlock. The same string is the key in the balance file, the value
-written to `config/hardcore-roguelite-progress.json`, the argument the dev command takes, and what
+written to `<save>/hardcore-roguelite-progress.json`, the argument the dev command takes, and what
 `Unlock.id()` returns — so `balance.unlockPrice(unlock.id())` finds the price, and nothing needs a
 table translating one id into another.
 
@@ -221,9 +221,9 @@ An id is written into config files and saved state, so it has to survive constan
 renamed or removed. Adding an unlock later is adding a key to the balance file — no change to how
 state is persisted, how the shop is built, or how balance is loaded.
 
-Renaming one is a save migration, not a rename: a profile written before the rename is carried
-across on load, so a purchase is never orphaned. Where that happens and what it costs to add one is
-[`docs/codebase/progression.md`](codebase/progression.md). Adding an unlock never involves it — only
+Renaming one is a save migration, not a rename: every save that bought it holds the old id, and a
+purchase must never be orphaned. Nothing translates ids today; a rename would add that where the
+snapshot is read — see [`docs/codebase/progression.md`](codebase/progression.md). Adding an unlock never involves it — only
 changing the name of one that already shipped.
 
 ## When a broken file is noticed
