@@ -145,7 +145,7 @@ public final class Progress {
 				HardcoreRoguelite.LOGGER.warn("Opening progression in {} while {} was still open",
 						saveRoot, openFile);
 			}
-			openFile = saveRoot.resolve(FILE_NAME);
+			openFile = saveRoot.resolve(FILE_NAME).toAbsolutePath().normalize();
 			instance = null;
 			try {
 				Progress opened = get();
