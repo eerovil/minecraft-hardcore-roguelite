@@ -134,7 +134,6 @@ Good:
 
 The same principle applies to:
 
-- trees;
 - ores;
 - villages;
 - enchant rolls;

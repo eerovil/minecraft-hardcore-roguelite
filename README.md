@@ -10,8 +10,7 @@ with the shop sitting on it as an emerald block you right-click. Jumping off the
 next run. The run's overworld, nether and end are thrown away and generated again from a new seed
 every time, without leaving the game or the save.
 
-The twist is that a fresh save is missing things vanilla Minecraft normally gives you. No trees,
-no ores, no animals, no villages, locked armor and offhand slots, a small world border. You buy
+The twist is that a fresh save is missing things vanilla Minecraft normally gives you. No ores, no animals, no villages, locked armor and offhand slots, a small world border. You buy
 those back a piece at a time. Roughly five decent runs should be enough to get back to something
 like vanilla, if that's what you spend your currency on. After that, a much more expensive
 "vanilla+" tier takes you past vanilla: permanent status effects, easier hunger, a starting
@@ -24,7 +23,8 @@ first run if you can afford it, so you pick your own path.
 
 Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks implemented:
 
-- **trees** — until you buy it, the world generates without trees and saplings won't grow.
+- **trees are vanilla from the first run.** They are not sold. A run's starting border always has
+  wood inside it: if worldgen left none there, one oak is grown a few steps from spawn.
 - **villages** — until you buy it, new land generates with no villages in it.
 - **the ores** — coal, iron, copper, gold, redstone, lapis and diamond, each bought separately.
   A locked ore is missing from new terrain. Mining, recipes and loot are untouched.
@@ -73,7 +73,6 @@ Unlocks can also still be toggled directly with the dev command:
 
 ```
 /mhr list
-/mhr unlock world.trees
 /mhr unlock world.village
 /mhr unlock world.ore.iron
 /mhr unlock world.animal.cow

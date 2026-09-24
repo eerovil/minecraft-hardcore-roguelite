@@ -14,7 +14,7 @@
 	"defaultIcon": "minecraft:paper",
 
 	"groups": [
-		{ "id": "world", "tier": "vanilla", "prefixes": ["world.trees", "world.village"] },
+		{ "id": "world", "tier": "vanilla", "prefixes": ["world.village"] },
 		{ "id": "border", "tier": "vanilla", "prefixes": ["world.border."] },
 		{ "id": "ores", "tier": "vanilla", "prefixes": ["world.ore."] },
 		{ "id": "animals", "tier": "vanilla", "prefixes": ["world.animal."] },
@@ -25,7 +25,6 @@
 	],
 
 	"icons": {
-		"world.trees": "minecraft:oak_sapling",
 		"world.village": "minecraft:emerald",
 
 		"world.border.tiny": "minecraft:cobblestone_wall",

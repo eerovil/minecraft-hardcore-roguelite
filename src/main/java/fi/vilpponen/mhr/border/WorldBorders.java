@@ -74,7 +74,12 @@ public final class WorldBorders {
 		// A new run is three new dimensions, each with a border of its own that has never been set.
 		// Listening here rather than being called by the lifecycle is what keeps world management
 		// from having to know that borders exist.
-		RunEvents.RUN_STARTED.register((server, overworld, run) -> apply(server));
+		RunEvents.RUN_STARTED.register((server, overworld, run) -> {
+			apply(server);
+			// Straight after the border, because what counts as the starting area is what the
+			// border has just fenced in.
+			StartingWood.ensure(overworld, server.getRespawnData().pos());
+		});
 
 		// A border tier bought in the shop is the size of the world from that moment on, the same
 		// way the dev command's has always been.

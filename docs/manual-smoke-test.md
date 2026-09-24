@@ -201,9 +201,9 @@ regenerated from that seed and you are dropped into the new overworld.
 
 Look around. With nothing bought:
 
-- **No trees.** Not sparse — none at all, in any biome. This direction is reliable: the unlock
-  suppresses every tree, so a treeless desert and a treeless forest look the same. (The other
-  direction is not — see step 9.)
+- **Trees, as vanilla has them.** Trees are not sold; they grow from the first run. There is always
+  wood somewhere inside the border: if the seed put none there, one oak stands a few steps from
+  spawn, and the server log says `No wood inside the starting border, so an oak was grown`.
 - **No starter chest** at your feet. With something bought there would be one within three blocks.
 - **A 128-block world.** Walk in any direction and the border stops you about 64 blocks out. That is
   the `tiny` tier, the one you get for having bought no tier at all.
@@ -272,9 +272,6 @@ walking anywhere:
 | `starter.bread` | 16 bread in a chest at the run's spawn | next run |
 | `world.border.medium` | the world goes from 128 blocks across to 512 | next run |
 
-Buy `world.trees` as well if you like — it is the most striking change — but do not use it as
-your pass/fail signal. See step 9.
-
 If you would rather see something change *immediately*, buy `player.slot.helmet` (also 3) and watch
 the padlock leave that square in your inventory.
 
@@ -295,17 +292,6 @@ Two things confirm the purchases, and both are the same every time:
 - **A chest within a few blocks**, holding 16 bread, with a chat line saying where it is.
 - **`/mhr border` now says `medium (512 blocks across)`** where before run 1 it said
   `tiny (128 blocks across)`. Walk west until the border stops you if you want to see it.
-
-**Trees are not a reliable check, and this is the trap worth knowing.** The unlock restores
-*vanilla* tree generation — it does not plant trees for you. So run 2 puts you wherever its seed
-puts you, and a legitimate spawn in a desert, a plains or a snowy flat has few trees or none,
-with the unlock working perfectly. Seeing no trees at spawn is not a failure. If you want to
-check trees specifically, either walk to a forest, or start the run on a seed you have used
-before and compare the same place with the unlock and without:
-
-```
-/mhr run start 45000001        the seed argument exists for exactly this
-```
 
 That is the whole loop: the run was disposable, the purchases were not.
 

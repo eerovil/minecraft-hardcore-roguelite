@@ -41,7 +41,8 @@ import org.slf4j.LoggerFactory;
 public class ShopClientTest implements FabricClientGameTest {
 	private static final Logger LOGGER = LoggerFactory.getLogger("mhr-gametest");
 
-	private static final String TREES = "world.trees";
+	private static final String VILLAGE = "world.village";
+	private static final String RETIRED_TREES = "world.trees";
 	private static final String DIAMOND = "world.ore.diamond";
 	private static final String ENCHANT = "player.craft.enchant";
 	private static final String BREAD = "starter.bread";
@@ -119,6 +120,10 @@ public class ShopClientTest implements FabricClientGameTest {
 						+ " offer(s) against the server's " + served.size());
 		check(shop.currencyOnScreen() == 0,
 				"a fresh profile has nothing to spend, and the screen says " + shop.currencyOnScreen());
+		// Trees are vanilla from the first run, so the shop has no square for them.
+		check(shown.stream().noneMatch(offer -> offer.id().equals(RETIRED_TREES))
+						&& shop.squareOf(RETIRED_TREES) == null,
+				"the shop must not offer " + RETIRED_TREES + " any more, and it does");
 
 		// Vanilla's join toasts sit over the title for a few seconds. Letting them expire once here
 		// keeps them out of every evidence shot, including the later scenarios'.
@@ -155,12 +160,12 @@ public class ShopClientTest implements FabricClientGameTest {
 		shop.resetProgression();
 		shop.open();
 
-		check(shop.isClickable(TREES),
-				"a world unlock must be visible without scrolling, and " + TREES + " is not");
-		double[] trees = shop.squareOf(TREES);
+		check(shop.isClickable(VILLAGE),
+				"a world unlock must be visible without scrolling, and " + VILLAGE + " is not");
+		double[] village = shop.squareOf(VILLAGE);
 		double[] bread = shop.squareOf(BREAD);
-		check(bread[1] > trees[1],
-				"Vanilla+ must not be drawn above vanilla restoration: " + TREES + " is at y=" + trees[1]
+		check(bread[1] > village[1],
+				"Vanilla+ must not be drawn above vanilla restoration: " + VILLAGE + " is at y=" + village[1]
 						+ " and " + BREAD + " is at y=" + bread[1]);
 
 		shop.scrollToTheBottom();
@@ -172,25 +177,25 @@ public class ShopClientTest implements FabricClientGameTest {
 	/** A real click on a real square: the server grants it, charges once, and the screen updates. */
 	private void clickingAnAffordableSquareBuysIt(ClientGameTestContext context, TestPlayer player) {
 		shop.resetProgression();
-		int price = shop.priceOf(TREES);
+		int price = shop.priceOf(VILLAGE);
 		player.command("mhr currency set " + (price + 5));
 		shop.open();
 
-		check(!shop.ownedOnServer(TREES), "setup: " + TREES + " should start unowned");
-		shop.clickSquare(TREES);
+		check(!shop.ownedOnServer(VILLAGE), "setup: " + VILLAGE + " should start unowned");
+		shop.clickSquare(VILLAGE);
 
-		check(shop.ownedOnServer(TREES),
-				"clicking an affordable square must buy it, and the server still does not own " + TREES);
+		check(shop.ownedOnServer(VILLAGE),
+				"clicking an affordable square must buy it, and the server still does not own " + VILLAGE);
 		check(shop.balanceOnServer() == 5,
 				"the click must have charged exactly " + price + ": the purse went from " + (price + 5)
 						+ " to " + shop.balanceOnServer());
-		check(shop.levelOnScreen(TREES) == 1,
+		check(shop.levelOnScreen(VILLAGE) == 1,
 				"the screen must show the purchase at once, and it still shows level "
-						+ shop.levelOnScreen(TREES));
+						+ shop.levelOnScreen(VILLAGE));
 		check(shop.currencyOnScreen() == 5,
 				"the screen must show the new total at once, and it shows " + shop.currencyOnScreen());
 
-		context.takeScreenshot("shop-after-buying-trees");
+		context.takeScreenshot("shop-after-buying-village");
 	}
 
 	/** Out of reach means out of reach: the click is refused and nothing moves either way. */
@@ -216,14 +221,14 @@ public class ShopClientTest implements FabricClientGameTest {
 	private void ownedAndPartUpgradedStatesReachTheScreen(ClientGameTestContext context, TestPlayer player) {
 		shop.resetProgression();
 		int enchantPrice = shop.priceOf(ENCHANT);
-		player.command("mhr currency set " + (enchantPrice * 2 + shop.priceOf(TREES) + 30));
+		player.command("mhr currency set " + (enchantPrice * 2 + shop.priceOf(VILLAGE) + 30));
 		shop.open();
 
-		shop.clickSquare(TREES);
+		shop.clickSquare(VILLAGE);
 		shop.clickSquare(ENCHANT);
 		shop.clickSquare(ENCHANT);
 
-		check(shop.levelOnScreen(TREES) == 1, "an owned unlock must show as owned on the screen");
+		check(shop.levelOnScreen(VILLAGE) == 1, "an owned unlock must show as owned on the screen");
 		check(shop.levelOnScreen(ENCHANT) == 2,
 				"a repeatable unlock bought twice must show level 2, and the screen shows "
 						+ shop.levelOnScreen(ENCHANT));
@@ -278,43 +283,43 @@ public class ShopClientTest implements FabricClientGameTest {
 	 */
 	private void aSquareThatIsNotDrawnCannotBeBought(ClientGameTestContext context, TestPlayer player) {
 		shop.resetProgression();
-		int price = shop.priceOf(TREES);
+		int price = shop.priceOf(VILLAGE);
 		player.command("mhr currency set " + (price + 9));
 		shop.open();
 
-		check(shop.isClickable(TREES), "setup: " + TREES + " should be drawn before anything scrolls");
+		check(shop.isClickable(VILLAGE), "setup: " + VILLAGE + " should be drawn before anything scrolls");
 
 		// Scroll a notch at a time until the square stops being drawn. The first notch that does it is
 		// the dangerous one: a notch is smaller than a square, so at that moment most of the square is
 		// still inside the panel with nothing drawn on it.
 		int notches = 0;
-		while (shop.isClickable(TREES) && notches < 6) {
+		while (shop.isClickable(VILLAGE) && notches < 6) {
 			shop.scroll(-1, 1);
 			notches++;
 		}
-		check(!shop.isClickable(TREES),
-				"scrolling should have taken " + TREES + " off the panel within " + notches
+		check(!shop.isClickable(VILLAGE),
+				"scrolling should have taken " + VILLAGE + " off the panel within " + notches
 						+ " notches, and it is still drawn");
 
 		// Click the whole of where the square would have been, top strip included.
-		double[] centre = shop.squareOf(TREES);
-		check(centre != null, "setup: the shop should still know where " + TREES + " is");
+		double[] centre = shop.squareOf(VILLAGE);
+		check(centre != null, "setup: the shop should still know where " + VILLAGE + " is");
 		for (int offset = -8; offset <= 8; offset += 4) {
 			shop.clickAt(centre[0], centre[1] + offset * shop.guiScale());
 		}
 
-		check(!shop.ownedOnServer(TREES),
-				"clicking a square that is not drawn must buy nothing, and the server now owns " + TREES);
+		check(!shop.ownedOnServer(VILLAGE),
+				"clicking a square that is not drawn must buy nothing, and the server now owns " + VILLAGE);
 		check(shop.balanceOnServer() == price + 9,
 				"and it must cost nothing: the purse went from " + (price + 9) + " to " + shop.balanceOnServer());
 
 		// The control: the same square, scrolled back into view, is bought by the same click. Without
 		// this the scenario would pass just as well if nothing on the screen were clickable at all.
 		shop.scrollToTheTop();
-		check(shop.isClickable(TREES), "back at the top the square should be drawn again");
-		shop.clickSquare(TREES);
-		check(shop.ownedOnServer(TREES),
-				"the same click must buy it once the square is drawn, and the server still does not own " + TREES);
+		check(shop.isClickable(VILLAGE), "back at the top the square should be drawn again");
+		shop.clickSquare(VILLAGE);
+		check(shop.ownedOnServer(VILLAGE),
+				"the same click must buy it once the square is drawn, and the server still does not own " + VILLAGE);
 		check(shop.balanceOnServer() == 9,
 				"and then charge exactly once: the purse holds " + shop.balanceOnServer() + " rather than 9");
 	}
@@ -329,25 +334,25 @@ public class ShopClientTest implements FabricClientGameTest {
 	 */
 	private void aBalanceReloadReachesAnOpenShop(ClientGameTestContext context, TestPlayer player) {
 		shop.resetProgression();
-		int original = shop.priceOf(TREES);
+		int original = shop.priceOf(VILLAGE);
 		int retuned = original + 41;
 		player.command("mhr currency set " + (retuned + 6));
 		shop.open();
 
-		check(shop.priceOnScreen(TREES) == original,
+		check(shop.priceOnScreen(VILLAGE) == original,
 				"setup: the screen should start showing the bundled price, and it shows "
-						+ shop.priceOnScreen(TREES));
+						+ shop.priceOnScreen(VILLAGE));
 
 		try {
-			shop.writeOverride("{\"unlocks\": {\"" + TREES + "\": {\"price\": " + retuned + "}}}");
+			shop.writeOverride("{\"unlocks\": {\"" + VILLAGE + "\": {\"price\": " + retuned + "}}}");
 
-			check(shop.priceOnScreen(TREES) == retuned,
+			check(shop.priceOnScreen(VILLAGE) == retuned,
 					"a reload must reach the open screen: it should now show " + retuned + " and it shows "
-							+ shop.priceOnScreen(TREES));
+							+ shop.priceOnScreen(VILLAGE));
 
 			// And the price it shows is the price it takes. Clicking without reopening anything.
-			shop.clickSquare(TREES);
-			check(shop.ownedOnServer(TREES), "the click should still buy it");
+			shop.clickSquare(VILLAGE);
+			check(shop.ownedOnServer(VILLAGE), "the click should still buy it");
 			check(shop.balanceOnServer() == 6,
 					"the charge must match the price on the screen: the purse went from " + (retuned + 6)
 							+ " to " + shop.balanceOnServer());
@@ -445,7 +450,7 @@ public class ShopClientTest implements FabricClientGameTest {
 	 * A reload does not resize a run, and neither does anything that happens afterwards.
 	 *
 	 * <p>Every purchase asks the border to look at the unlocks again. It used to re-apply whatever
-	 * it found, and applying a tier reads its size out of the balance in effect — so buying a tree
+	 * it found, and applying a tier reads its size out of the balance in effect — so buying a village
 	 * an hour after a reload would quietly hand the run the new size. {@code /mhr reload} promises
 	 * the opposite.
 	 */
@@ -453,7 +458,7 @@ public class ShopClientTest implements FabricClientGameTest {
 		shop.resetProgression();
 		int mediumPrice = shop.priceOf(MEDIUM_BORDER);
 		int largePrice = shop.priceOf(LARGE_BORDER);
-		player.command("mhr currency set " + (mediumPrice + largePrice + shop.priceOf(TREES) + 5));
+		player.command("mhr currency set " + (mediumPrice + largePrice + shop.priceOf(VILLAGE) + 5));
 		shop.open();
 
 		shop.clickSquare(MEDIUM_BORDER);
@@ -467,9 +472,9 @@ public class ShopClientTest implements FabricClientGameTest {
 					"setup: the reload itself must leave the live border alone, and it is now "
 							+ borderSize(player));
 
-			shop.clickSquare(TREES);
+			shop.clickSquare(VILLAGE);
 
-			check(shop.ownedOnServer(TREES), "setup: the unrelated purchase should have gone through");
+			check(shop.ownedOnServer(VILLAGE), "setup: the unrelated purchase should have gone through");
 			check(Math.abs(borderSize(player) - started) < 1.0,
 					"buying something that is not a border must not resize the run: it was " + started
 							+ " across and is now " + borderSize(player));

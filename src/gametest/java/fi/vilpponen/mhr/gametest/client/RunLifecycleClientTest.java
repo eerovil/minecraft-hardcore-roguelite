@@ -80,7 +80,7 @@ public class RunLifecycleClientTest implements FabricClientGameTest {
 	private static final BlockState MARKER = Blocks.DIAMOND_BLOCK.defaultBlockState();
 
 	/** A permanent purchase, made before the first run, that has to outlive both of them. */
-	private static final String PURCHASE = "world.trees";
+	private static final String PURCHASE = "world.ore.coal";
 
 	/** How many times a run has been reported as ended, counted on the server. */
 	private static final AtomicInteger RUNS_ENDED = new AtomicInteger();

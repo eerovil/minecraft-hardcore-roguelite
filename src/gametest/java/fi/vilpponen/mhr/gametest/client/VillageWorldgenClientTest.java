@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
  * missing has no village in it, and the same land generated once the unlock is bought does.
  *
  * <p>Villages have nothing to place directly — there is no {@code place feature} for a structure —
- * so unlike the trees unlock there is no fast server-GameTest half. The whole thing needs real
+ * so there is no fast server-GameTest half. The whole thing needs real
  * terrain, which in this harness means a dedicated server built on an *ordinary* overworld rather
  * than the flat world the harness makes by default.
  *

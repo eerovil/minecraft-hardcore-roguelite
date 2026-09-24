@@ -119,7 +119,7 @@ class ShopLayoutTest {
 	void theWorldAndThePlayerAreBothVanillaRestoration() {
 		ShopLayout.Section vanilla = sectionOf(ShopLayout.arrange(shippedOffers()), VANILLA);
 
-		assertEquals(List.of("world.trees", "world.village"), rowIds(vanilla, "world"));
+		assertEquals(List.of("world.village"), rowIds(vanilla, "world"));
 		assertEquals(List.of("world.ore.coal", "world.ore.copper", "world.ore.iron", "world.ore.redstone",
 				"world.ore.lapis", "world.ore.gold", "world.ore.diamond"), rowIds(vanilla, "ores"));
 		assertEquals(List.of("world.animal.cow", "world.animal.pig", "world.animal.sheep",
@@ -154,7 +154,7 @@ class ShopLayoutTest {
 
 	@Test
 	void emptyRowsAndEmptySectionsAreNotDrawn() {
-		List<ShopLayout.Section> sections = ShopLayout.arrange(List.of(new Offer("world.trees", 3, 1, 1)));
+		List<ShopLayout.Section> sections = ShopLayout.arrange(List.of(new Offer("world.village", 30, 1, 1)));
 
 		assertEquals(1, sections.size(), "a catalogue with nothing beyond vanilla has no Vanilla+ heading");
 		assertEquals(VANILLA, sections.get(0).tierId());

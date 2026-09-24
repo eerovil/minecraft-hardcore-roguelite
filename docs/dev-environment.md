@@ -272,8 +272,7 @@ directory, each save's `hardcore-roguelite-progress.json` and the player's inven
 Every `worldBuilder()` call is a new save, so it is also a new roguelite profile with nothing
 bought. On top of
 that every scenario sets up the state it depends on rather than inheriting it — the equipment ones
-lock all five slots and empty the player, the tree ones set `world.trees` to what they need and
-clear their own patch of ground, the animal ones lock all six species — so one scenario cannot make
+lock all five slots and empty the player, the tree ones clear their own patch of ground, the animal ones lock all six species — so one scenario cannot make
 the next one pass, and the order they run in does not matter.
 
 The *pod* is shared, and two runs at once used to collide in two ways: they overwrite each other's
@@ -386,45 +385,39 @@ The clicks are real. The cursor is moved to the middle of the square and the cli
 the screen itself agrees that is the square under the pointer, so a layout change makes the test
 fail rather than silently click somewhere else.
 
-#### The trees unlock
+#### Trees, and wood in every bounded start
 
-Trees need no client, so most of them are **server GameTests** — the fast step, seconds rather than
-minutes. They live in `src/gametest/java/fi/vilpponen/mhr/gametest/TreeUnlockGameTest.java` and each
-one lays its own patch of dirt and asks a vanilla feature to place itself on it, which is the same
-call worldgen, bonemeal and a sapling all come down to:
+Trees are vanilla from the first run and are not sold (#60). What is tested is that nothing takes
+them away, and that a run whose starting border worldgen left without wood still gets some.
 
-- **locked-world-refuses-a-tree-feature** / **unlocked-world-places-a-tree-feature** — the
-  `place feature minecraft:oak` check the section below used to ask a human to type.
-- **locked-world-refuses-a-fallen-tree** / **unlocked-world-places-a-fallen-tree** — the same for
-  fallen trees, which are a free pile of logs and so have to go too.
-- **sapling-will-not-grow-while-locked** / **sapling-grows-once-unlocked** — a sapling pushed along
-  the way bonemeal pushes it. Locked, it is still standing afterwards and no logs exist; unlocked,
-  it is a tree.
-- **unrelated-vegetation-still-places-while-locked** — a flower patch still places while trees are
-  locked. This is the control: a mixin that quietly stopped *every* feature would pass all of the
-  above and be caught only here.
+The fast half is **server GameTests**, in `src/gametest/java/fi/vilpponen/mhr/gametest/TreeGameTest.java`.
+Each one lays its own patch of dirt:
 
-The real worldgen path cannot be checked there, because Fabric's server GameTests run on a superflat
-world with no trees in it to suppress. So it gets a client GameTest of its own, in
-`src/gametest/java/fi/vilpponen/mhr/gametest/client/TreeWorldgenClientTest.java`, which builds a
-dedicated server on an *ordinary* overworld instead of the harness's flat one:
+- **a-tree-feature-places-with-nothing-bought** / **a-fallen-tree-places-with-nothing-bought** — the
+  vanilla feature places, which is the same call worldgen, bonemeal and a sapling all come down to.
+- **a-sapling-grows-with-nothing-bought** — a sapling pushed along the way bonemeal pushes it.
+- **a-woodless-patch-gets-a-tree** — `StartingWood` asked about a patch with no log in it grows a
+  vanilla oak inside the patch.
+- **a-patch-with-wood-is-left-alone** — the control: one log already there, and nothing is grown or
+  changed.
+- **a-flooded-patch-still-gets-wood** — under water no vanilla oak stands, so the last resort builds
+  one by hand, and its trunk comes up out of the water.
 
-- **the-world-a-run-starts-in-has-no-trees** — the land the server made around spawn by itself, with
-  nothing force-loaded. No logs, and ground blocks in the thousands so that "no logs" means
-  something.
-- **fresh-land-has-no-trees-while-locked** — a plain `minecraft:forest` about six thousand blocks
-  out, force-loaded into existence on the spot. Still no logs.
-- **fresh-land-has-trees-once-unlocked** — `mhr unlock world.trees`, then a *different* forest six
-  thousand blocks the other way. Logs in the hundreds.
+The real paths need real worlds, so they are client GameTests:
 
-Two different forests on purpose: worldgen only applies to chunks made after the change, so scanning
-the same patch twice would answer "no trees" both times and look exactly like the feature working.
-Plain `minecraft:forest` on purpose too — a biome *tag* also matches places like a mushroom island,
-which has no trees in vanilla either, and "no logs where there never were any" proves nothing.
+- `TreeWorldgenClientTest` builds a dedicated server on an *ordinary* overworld.
+  **a-fresh-run-has-vanilla-trees** starts a run on a named seed on the smallest border with nothing
+  bought, and checks that the fallback *found* vanilla wood rather than planting any.
+  **fresh-land-has-trees-with-nothing-bought** force-loads a plain `minecraft:forest` six thousand
+  blocks out and counts its logs.
+- `StartingWoodClientTest` uses the harness's own superflat world, which has no trees at all — the
+  honest version of a woodless start. **a-woodless-bounded-start-gets-a-tree-inside-the-border**
+  starts a run on the smallest border, then scans every column inside the border for logs, so "the
+  fallback says it planted one" and "there is one" are separate claims.
 
-| Fresh forest, trees locked | ...and a fresh forest after `mhr unlock world.trees` |
-| -------------------------- | ---------------------------------------------------- |
-| ![grass and flowers, no trees](images/gametest-fresh-forest-trees-locked.png) | ![the same kind of land, full of oaks](images/gametest-fresh-forest-trees-unlocked.png) |
+| A fresh forest, nothing bought | A run on flat land, which has no trees of its own |
+| ------------------------------ | ------------------------------------------------- |
+| ![a forest full of oaks](images/gametest-fresh-forest-trees-vanilla.png) | ![flat grass and one oak a few steps from spawn](images/gametest-starting-wood-on-a-flat-world.png) |
 
 #### The animal unlocks
 
@@ -604,8 +597,8 @@ be a test of the page layout. Everything after that call is the real path, serve
 
 #### The villages unlock
 
-Villages have nothing to place directly — there is no `place feature` for a structure — so unlike
-trees there is no fast server-GameTest half. It is all real terrain, in
+Villages have nothing to place directly — there is no `place feature` for a structure — so there
+is no fast server-GameTest half. It is all real terrain, in
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/VillageWorldgenClientTest.java`, and it builds
 **two** dedicated servers on ordinary overworlds, one for each side of the unlock:
 
@@ -853,7 +846,7 @@ the player would see and the left button goes down.
   writes nothing, and the world is still the size Large made it.
 
 The screenshots it takes are evidence rather than debris, and they are taken on the passing path:
-`shop-fresh-progression`, `shop-vanilla-plus-below`, `shop-after-buying-trees` and
+`shop-fresh-progression`, `shop-vanilla-plus-below`, `shop-after-buying-village` and
 `shop-some-unlocks-owned`.
 
 **A trap worth knowing.** Buying anything asks the world border to look at the unlocks again, so
@@ -949,14 +942,14 @@ overworld reporting it, and run 1's markers being gone.
 
 | Run 1, with nothing bought | The shop, holding run 1's pay | Run 2, with what it bought |
 | -------------------------- | ----------------------------- | -------------------------- |
-| ![flat grass to the horizon, no trees anywhere](images/gametest-cycle-run-one-restricted.png) | ![the shop screen reading 14 to spend, Medium world owned](images/gametest-cycle-shop-after-buying.png) | ![a chest at the new run's spawn, chat listing both purchases](images/gametest-cycle-run-two.png) |
+| ![flat grass to the horizon](images/gametest-cycle-run-one-restricted.png) | ![the shop screen reading 14 to spend, Medium world owned](images/gametest-cycle-shop-after-buying.png) | ![a chest at the new run's spawn, chat listing both purchases](images/gametest-cycle-run-two.png) |
 
 #### One save is one roguelite profile
 
 `src/gametest/java/fi/vilpponen/mhr/gametest/client/SaveProfileClientTest.java` creates two real
 singleplayer saves from the client — singleplayer rather than the dedicated server, because a
 dedicated server is one save for its whole life — and gives them different currency and unlocks
-(35 and `world.trees`; 4 and `world.village`). Before either exists it leaves an old-style
+(35 and `world.ore.coal`; 4 and `world.village`). Before either exists it leaves an old-style
 installation-wide `config/hardcore-roguelite-progress.json` holding 999 currency and both unlocks.
 
 - **a-new-save-starts-with-nothing** / **a-second-new-save-does-not-see-the-first** — no currency,
@@ -1060,37 +1053,15 @@ To op yourself, once you have joined at least once:
 scripts/dev.sh rcon "op <your-username>"
 ```
 
-## Testing the trees unlock
+## Trees and starting wood
 
-Nothing here needs doing by hand any more:
+Trees are vanilla from the first run; there is nothing to unlock. `scripts/dev.sh gametest` covers
+it and the starting-wood guarantee — see [Automated gameplay tests](#automated-gameplay-tests). On
+the dev server, what a run start found is in the server log: `Starting border already has wood` when
+worldgen put some inside the border, `No wood inside the starting border, so an oak was grown` when
+it had to plant one.
 
-```sh
-scripts/dev.sh gametest
-```
-
-covers the whole unlock — direct feature placement both ways, fallen trees, saplings, and real
-terrain generated from scratch with and without the unlock. See
-[Automated gameplay tests](#automated-gameplay-tests). What follows is how to poke at it on the dev
-server when you want to *see* it rather than prove it.
-
-Trees are off until the unlock is bought. Buy it in the shop with `/mhr shop`, or skip the currency
-and grant it outright with the dev command:
-
-```sh
-scripts/dev.sh rcon "mhr list"
-scripts/dev.sh rcon "mhr unlock world.trees"
-```
-
-Worldgen only applies to chunks generated after the change, so walk into fresh land or start over
-with `scripts/dev.sh newworld`. For a quick check without any of that, place the feature directly:
-
-```sh
-scripts/dev.sh rcon "forceload add 0 0 16 16"
-scripts/dev.sh rcon "fill 0 100 0 8 100 8 minecraft:dirt"
-scripts/dev.sh rcon "place feature minecraft:oak 4 101 4"
-```
-
-Locked, that answers "Failed to place feature". After `mhr unlock world.trees` it answers "Placed". The progression file lives at `/server/world/hardcore-roguelite-progress.json`
+The progression file lives at `/server/world/hardcore-roguelite-progress.json`
 on the volume — at the root of the save, which a new run's dimensions do not touch. One save is one
 roguelite profile, so `scripts/dev.sh newworld`, which deletes the whole save, starts a fresh one.
 
@@ -1172,8 +1143,8 @@ the bystanders and the chicken jockey are covered by the server GameTest, and fr
 out empty is covered by the client one. Between them that is every check this section used to ask
 for by hand.
 
-The dev server is still the place to *look* at it. Unlike trees, an animal unlock takes effect at
-once — natural spawning asks every time, so land you have already visited starts or stops producing
+The dev server is still the place to *look* at it. Unlike a worldgen unlock, an animal unlock takes
+effect at once — natural spawning asks every time, so land you have already visited starts or stops producing
 that species straight away:
 
 ```sh

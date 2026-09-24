@@ -65,7 +65,7 @@ on purpose: a generated copy of the whole catalogue would go stale the moment a 
 	},
 
 	"unlocks": {
-		"world.trees": { "price": 3 },
+		"world.village": { "price": 30 },
 		"player.slot.helmet": { "price": 3 }
 	},
 
@@ -203,7 +203,6 @@ back — the purchases behind them are permanent.
 Unlocks are identified by a stable dotted string, never by an enum ordinal or an enum's position:
 
 ```
-world.trees
 world.village
 world.ore.iron
 world.animal.cow

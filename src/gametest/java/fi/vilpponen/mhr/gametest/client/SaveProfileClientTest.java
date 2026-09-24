@@ -38,7 +38,7 @@ import org.slf4j.LoggerFactory;
 public class SaveProfileClientTest implements FabricClientGameTest {
 	private static final Logger LOGGER = LoggerFactory.getLogger("mhr-gametest");
 
-	private static final String TREES = "world.trees";
+	private static final String COAL = "world.ore.coal";
 	private static final String VILLAGE = "world.village";
 	private static final String SNAPSHOT = "hardcore-roguelite-progress.json";
 
@@ -52,7 +52,7 @@ public class SaveProfileClientTest implements FabricClientGameTest {
 	@Override
 	public void runTest(ClientGameTestContext context) {
 		Path leftover = FabricLoader.getInstance().getConfigDir().resolve(SNAPSHOT);
-		String leftoverContents = "{\"currency\": " + LEFTOVER_CURRENCY + ", \"unlocks\": {\"" + TREES
+		String leftoverContents = "{\"currency\": " + LEFTOVER_CURRENCY + ", \"unlocks\": {\"" + COAL
 				+ "\": 1, \"" + VILLAGE + "\": 1}}";
 		write(leftover, leftoverContents);
 
@@ -65,7 +65,7 @@ public class SaveProfileClientTest implements FabricClientGameTest {
 				scenario(context, "a-new-save-starts-with-nothing",
 						() -> startsWithNothing(a.getServer(), saveA, "save A"));
 				scenario(context, "save-a-buys-its-own-things",
-						() -> establish(context, a.getServer(), CURRENCY_A, TREES, "save-a-first-played"));
+						() -> establish(context, a.getServer(), CURRENCY_A, COAL, "save-a-first-played"));
 			}
 
 			try (TestSingleplayerContext b = context.worldBuilder().create()) {
@@ -81,13 +81,13 @@ public class SaveProfileClientTest implements FabricClientGameTest {
 
 			scenario(context, "reopening-save-a-brings-back-only-its-own-profile", () -> {
 				try (TestSingleplayerContext a = saveA.open()) {
-					comesBackAs(context, a.getServer(), saveA, CURRENCY_A, TREES, VILLAGE,
+					comesBackAs(context, a.getServer(), saveA, CURRENCY_A, COAL, VILLAGE,
 							"save-a-reopened");
 				}
 			});
 			scenario(context, "reopening-save-b-brings-back-only-its-own-profile", () -> {
 				try (TestSingleplayerContext b = saveB.open()) {
-					comesBackAs(context, b.getServer(), saveB, CURRENCY_B, VILLAGE, TREES,
+					comesBackAs(context, b.getServer(), saveB, CURRENCY_B, VILLAGE, COAL,
 							"save-b-reopened");
 				}
 			});
