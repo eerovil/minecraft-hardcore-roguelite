@@ -78,7 +78,9 @@ public final class WorldBorders {
 			apply(server);
 			// Straight after the border, because what counts as the starting area is what the
 			// border has just fenced in.
-			StartingWood.ensure(overworld, server.getRespawnData().pos());
+			// The spawn the border was just centered on. Not MinecraftServer.getRespawnData(): at
+			// this point that can still be the previous world's, clamped to the previous border.
+			StartingWood.ensure(overworld, server.getWorldData().overworldData().getRespawnData().pos());
 		});
 
 		// A border tier bought in the shop is the size of the world from that moment on, the same

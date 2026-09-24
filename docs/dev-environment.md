@@ -406,8 +406,9 @@ Each one lays its own patch of dirt:
 The real paths need real worlds, so they are client GameTests:
 
 - `TreeWorldgenClientTest` builds a dedicated server on an *ordinary* overworld.
-  **a-fresh-run-has-vanilla-trees** starts a run on a named seed on the smallest border with nothing
-  bought, and checks that the fallback *found* vanilla wood rather than planting any.
+  **a-fresh-run-has-vanilla-trees** starts runs on the smallest border with nothing bought, on a
+  fixed list of seeds. Every one must have a log inside its border, and it stops at the first
+  seed where the fallback *found* vanilla wood rather than planting any — at least one must.
   **fresh-land-has-trees-with-nothing-bought** force-loads a plain `minecraft:forest` six thousand
   blocks out and counts its logs.
 - `StartingWoodClientTest` uses the harness's own superflat world, which has no trees at all — the

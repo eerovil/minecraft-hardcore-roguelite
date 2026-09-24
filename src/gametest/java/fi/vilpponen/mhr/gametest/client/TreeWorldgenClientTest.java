@@ -2,6 +2,7 @@ package fi.vilpponen.mhr.gametest.client;
 
 import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.border.StartingWood;
+import fi.vilpponen.mhr.run.RunPhase;
 import java.util.ArrayList;
 import java.util.List;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
@@ -43,10 +44,11 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 	private static final String RETIRED_TREES = "world.trees";
 
 	/**
-	 * The run's seed. Named so the first scenario is about the same world every time; any seed with
-	 * a tree somewhere in its smallest border would do.
+	 * The seeds runs are started on, in order. Named so every scenario is about the same worlds every
+	 * time. Several, because which of them put a tree inside the smallest border is up to vanilla,
+	 * and the claim needs at least one that did.
 	 */
-	private static final long RUN_SEED = 20260924L;
+	private static final long[] RUN_SEEDS = {20260924L, 1L, 2L, 3L, 42L, 12345L};
 
 	/** How far out from the middle of the patch to generate, in chunks. 5×5 is plenty of forest. */
 	private static final int RADIUS_IN_CHUNKS = 2;
@@ -100,33 +102,50 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 	// --- the scenarios ---------------------------------------------------------------------
 
 	/**
-	 * The world a run actually begins in, on the smallest border, with nothing bought. Vanilla put
-	 * wood inside that border by itself, so the fallback that guarantees some had nothing to do.
+	 * The world a run actually begins in, on the smallest border, with nothing bought.
 	 *
-	 * <p>That second half is the point: the fallback is for starts vanilla left without wood, and a
-	 * start vanilla already served must be left exactly as generated.
+	 * <p>Every run must end up with a log inside its border, whatever the seed. And at least one of
+	 * the seeds must have had vanilla trees there already, with the fallback leaving that start
+	 * exactly as generated: the fallback is for starts vanilla left without wood, and trees
+	 * themselves must not be suppressed. Runs stop at the first seed that proves the second half.
 	 */
 	private void aFreshRunHasVanillaTrees(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
 		server.runCommand("mhr border tiny");
-		TestRuns.start(server, RUN_SEED);
+		Long vanillaSeed = null;
+		for (long seed : RUN_SEEDS) {
+			if (TestRuns.phase(server) == RunPhase.RUNNING) {
+				TestRuns.end(server);
+			}
+			TestRuns.start(server, seed);
+
+			StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
+			check(result != null, "starting a run on seed " + seed + " did not run the starting-wood check");
+			LOGGER.info("Run on seed {}: starting wood {} at {}", seed, result.outcome(), result.log());
+			check(result.outcome() != StartingWood.Outcome.UNBOUNDED,
+					"the run on seed " + seed + " was meant to be on the smallest border");
+			boolean real = server.computeOnServer(minecraftServer -> {
+				ServerLevel overworld = minecraftServer.overworld();
+				return overworld.getWorldBorder().isWithinBounds(result.log())
+						&& overworld.getBlockState(result.log()).is(BlockTags.LOGS);
+			});
+			check(real, "the run on seed " + seed + " must have a log inside its border, and "
+					+ result.log() + " (" + result.outcome() + ") is not one");
+
+			if (result.outcome() == StartingWood.Outcome.FOUND) {
+				generate(server, result.log());
+				int logs = count(server, result.log(), BlockTags.LOGS);
+				LOGGER.info("Around the log at {}: {} logs", result.log(), logs);
+				check(logs > 1, "vanilla trees are more than one log, and around " + result.log()
+						+ " there are " + logs);
+				vanillaSeed = seed;
+				break;
+			}
+		}
+		check(vanillaSeed != null, "none of the seeds " + java.util.Arrays.toString(RUN_SEEDS)
+				+ " started with vanilla trees inside the smallest border, so nothing here shows trees"
+				+ " are left alone");
 		connection.waitForChunksRender();
-
-		StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
-		check(result != null, "starting a run did not run the starting-wood check at all");
-		LOGGER.info("Run on seed {}: starting wood {} at {}", RUN_SEED, result.outcome(), result.log());
-		check(result.outcome() == StartingWood.Outcome.FOUND,
-				"a run on seed " + RUN_SEED + " must find vanilla trees inside its border, and the"
-						+ " fallback says " + result.outcome());
-		boolean inside = server.computeOnServer(minecraftServer -> minecraftServer.overworld()
-				.getWorldBorder().isWithinBounds(result.log()));
-		check(inside, "the log found at " + result.log() + " must be inside the border");
-
-		generate(server, result.log());
-		int logs = count(server, result.log(), BlockTags.LOGS);
-		LOGGER.info("Around the log at {}: {} logs", result.log(), logs);
-		check(logs > 1, "vanilla trees are more than one log, and around " + result.log()
-				+ " there are " + logs);
 	}
 
 	/**

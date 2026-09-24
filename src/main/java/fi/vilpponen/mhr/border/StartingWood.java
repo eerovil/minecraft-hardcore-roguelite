@@ -89,18 +89,18 @@ public final class StartingWood {
 			result = new Result(Outcome.UNBOUNDED, null);
 		} else {
 			// Only columns wholly inside the border, so a log anywhere in the area is one the
-			// player can walk up to.
+			// player can walk up to. Spawn is pulled inside it first: a tree next to a spawn the
+			// border does not hold would be no use to anybody.
+			int minX = (int) Math.ceil(border.getMinX());
+			int minZ = (int) Math.ceil(border.getMinZ());
+			int maxX = Math.max(minX, (int) Math.floor(border.getMaxX()) - 1);
+			int maxZ = Math.max(minZ, (int) Math.floor(border.getMaxZ()) - 1);
+			BlockPos near = new BlockPos(Math.clamp(spawn.getX(), minX, maxX), spawn.getY(),
+					Math.clamp(spawn.getZ(), minZ, maxZ));
 			Area area = new Area(
-					Math.max(spawn.getX() - SEARCH_RADIUS, (int) Math.ceil(border.getMinX())),
-					Math.max(spawn.getZ() - SEARCH_RADIUS, (int) Math.ceil(border.getMinZ())),
-					Math.min(spawn.getX() + SEARCH_RADIUS, (int) Math.floor(border.getMaxX()) - 1),
-					Math.min(spawn.getZ() + SEARCH_RADIUS, (int) Math.floor(border.getMaxZ()) - 1));
-			if (area.minX() > area.maxX() || area.minZ() > area.maxZ()) {
-				// A border narrower than one block, which only a broken balance file can ask for.
-				// The column the player stands in is all there is.
-				area = new Area(spawn.getX(), spawn.getZ(), spawn.getX(), spawn.getZ());
-			}
-			result = ensure(level, area, spawn);
+					Math.max(near.getX() - SEARCH_RADIUS, minX), Math.max(near.getZ() - SEARCH_RADIUS, minZ),
+					Math.min(near.getX() + SEARCH_RADIUS, maxX), Math.min(near.getZ() + SEARCH_RADIUS, maxZ));
+			result = ensure(level, area, near);
 		}
 		last = result;
 		if (result.outcome() == Outcome.PLANTED) {
