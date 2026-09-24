@@ -407,6 +407,8 @@ The real paths need real worlds, so they are client GameTests:
   seed 11, whose first border has none. Seed 1 must be kept where it is; seed 11 must move, and the
   land it left must still have no wood — nothing was grown to fix it. Both must end with a border
   centered on the spawn, holding at least three logs and the player.
+  **a-bigger-border-counts-all-of-its-land** starts seed 11 again on the Medium border. It has no
+  wood near spawn, but the Medium border reaches trees, so the start must be kept rather than moved.
   **fresh-land-has-trees-with-nothing-bought** force-loads a plain `minecraft:forest` six thousand
   blocks out and counts its logs.
 - `StartingWoodClientTest` uses the harness's own superflat world, which has no trees and no wooded

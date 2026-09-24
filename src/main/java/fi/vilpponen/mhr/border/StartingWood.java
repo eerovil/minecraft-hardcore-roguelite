@@ -28,7 +28,7 @@ import net.minecraft.world.level.storage.LevelData;
  * when a run starts:
  *
  * <ol>
- *   <li><b>Found.</b> Enough wood is already inside the border. Nothing is touched.
+ *   <li><b>Found.</b> Enough wood is already somewhere inside the border. Nothing is touched.
  *   <li><b>Moved.</b> It is not, so wooded biomes nearby are looked up from the biome map, the way
  *       {@code /locate biome} does, nearest first. The first one whose actual land has enough wood
  *       becomes the start: the run's spawn moves there and the border is centered on it.
@@ -49,10 +49,13 @@ public final class StartingWood {
 	public static final int VIABLE_LOGS = 3;
 
 	/**
-	 * How far from spawn to count, in blocks. Covers the whole of the smallest border; on a bigger
-	 * one, wood this close is enough of an answer and the rest of the world need not be generated.
+	 * The most chunks the first look inside the border may generate: a square as wide as the Medium
+	 * border. It stops at the third log and looks at the chunks nearest spawn first, so a wooded start
+	 * costs a handful. The cap is for a Large border with no wood near spawn, which would otherwise
+	 * generate thousands of chunks before giving up; past it, the wooded biomes inside the border are
+	 * counted instead, from the biome map.
 	 */
-	static final int SEARCH_RADIUS = 64;
+	static final int MAX_SCAN_CHUNKS = 33 * 33;
 
 	/**
 	 * How far below the top of each column a log still counts. Deep enough for any tree's trunk
@@ -140,7 +143,10 @@ public final class StartingWood {
 	}
 
 	private static Result ensureBounded(MinecraftServer server, ServerLevel overworld, BlockPos spawn) {
-		List<BlockPos> here = countLogs(overworld, reachable(overworld, spawn), spawn, VIABLE_LOGS);
+		// The whole border counts, not just the land by spawn: a Medium or Large start with its trees
+		// two hundred blocks out is still a start with trees.
+		Area border = reachable(overworld);
+		List<BlockPos> here = countLogs(overworld, border, spawn, VIABLE_LOGS, MAX_SCAN_CHUNKS);
 		if (here.size() >= VIABLE_LOGS) {
 			return new Result(Outcome.FOUND, here.get(0), spawn, spawn);
 		}
@@ -159,6 +165,16 @@ public final class StartingWood {
 			// moves. Only this little patch is generated to find out.
 			Area grove = new Area(candidate.getX() - GROVE_RADIUS, candidate.getZ() - GROVE_RADIUS,
 					candidate.getX() + GROVE_RADIUS, candidate.getZ() + GROVE_RADIUS);
+			if (border.contains(candidate)) {
+				// Inside the border already, past where the first look stopped: trees here mean the
+				// start is fine as it is, and moving would only take the player away from them.
+				List<BlockPos> inside = countLogs(overworld, border.intersect(grove), candidate, VIABLE_LOGS,
+						Integer.MAX_VALUE);
+				if (inside.size() >= VIABLE_LOGS) {
+					return new Result(Outcome.FOUND, inside.get(0), spawn, spawn);
+				}
+				continue;
+			}
 			List<BlockPos> groveLogs = countLogs(overworld, grove, candidate, VIABLE_LOGS);
 			if (groveLogs.size() < VIABLE_LOGS) {
 				continue;
@@ -168,7 +184,8 @@ public final class StartingWood {
 			moveSpawn(server, moved);
 			// Counted again inside the border the move produced, rather than assumed: the border has
 			// to hold the trees, not just the spawn.
-			List<BlockPos> inside = countLogs(overworld, reachable(overworld, moved), moved, VIABLE_LOGS);
+			List<BlockPos> inside = countLogs(overworld, reachable(overworld), moved, VIABLE_LOGS,
+					MAX_SCAN_CHUNKS);
 			if (inside.size() >= VIABLE_LOGS) {
 				return new Result(Outcome.MOVED, inside.get(0), moved, spawn);
 			}
@@ -194,19 +211,15 @@ public final class StartingWood {
 	}
 
 	/**
-	 * The columns near {@code spawn} wholly inside the border, so a log anywhere in them is one the
-	 * player can walk up to.
+	 * Every column wholly inside the border, so a log anywhere in them is one the player can walk
+	 * up to.
 	 */
-	private static Area reachable(ServerLevel level, BlockPos spawn) {
+	private static Area reachable(ServerLevel level) {
 		WorldBorder border = level.getWorldBorder();
 		int minX = (int) Math.ceil(border.getMinX());
 		int minZ = (int) Math.ceil(border.getMinZ());
-		int maxX = Math.max(minX, (int) Math.floor(border.getMaxX()) - 1);
-		int maxZ = Math.max(minZ, (int) Math.floor(border.getMaxZ()) - 1);
-		int x = Math.clamp(spawn.getX(), minX, maxX);
-		int z = Math.clamp(spawn.getZ(), minZ, maxZ);
-		return new Area(Math.max(x - SEARCH_RADIUS, minX), Math.max(z - SEARCH_RADIUS, minZ),
-				Math.min(x + SEARCH_RADIUS, maxX), Math.min(z + SEARCH_RADIUS, maxZ));
+		return new Area(minX, minZ, Math.max(minX, (int) Math.floor(border.getMaxX()) - 1),
+				Math.max(minZ, (int) Math.floor(border.getMaxZ()) - 1));
 	}
 
 	/**
@@ -277,8 +290,16 @@ public final class StartingWood {
 		return pos.getX() + " " + pos.getY() + " " + pos.getZ();
 	}
 
-	/** A square of columns, corners included. */
+	/** A rectangle of columns, corners included. */
 	public record Area(int minX, int minZ, int maxX, int maxZ) {
+		boolean contains(BlockPos pos) {
+			return pos.getX() >= minX && pos.getX() <= maxX && pos.getZ() >= minZ && pos.getZ() <= maxZ;
+		}
+
+		Area intersect(Area other) {
+			return new Area(Math.max(minX, other.minX), Math.max(minZ, other.minZ),
+					Math.min(maxX, other.maxX), Math.min(maxZ, other.maxZ));
+		}
 	}
 
 	/**
@@ -288,6 +309,11 @@ public final class StartingWood {
 	 * <p>Public so a GameTest can ask it about a patch it built rather than a whole run.
 	 */
 	public static List<BlockPos> countLogs(ServerLevel level, Area area, BlockPos centre, int want) {
+		return countLogs(level, area, centre, want, Integer.MAX_VALUE);
+	}
+
+	/** The same, looking at no more than {@code maxChunks} chunks, the nearest ones. */
+	static List<BlockPos> countLogs(ServerLevel level, Area area, BlockPos centre, int want, int maxChunks) {
 		List<ChunkPos> chunks = new ArrayList<>();
 		for (int chunkX = area.minX() >> 4; chunkX <= area.maxX() >> 4; chunkX++) {
 			for (int chunkZ = area.minZ() >> 4; chunkZ <= area.maxZ() >> 4; chunkZ++) {
@@ -303,7 +329,7 @@ public final class StartingWood {
 
 		List<BlockPos> found = new ArrayList<>();
 		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
-		for (ChunkPos chunk : chunks) {
+		for (ChunkPos chunk : chunks.subList(0, Math.min(chunks.size(), maxChunks))) {
 			// Generates the chunk if it is not there yet. Worldgen has to have answered before
 			// "there is no tree" means anything.
 			level.getChunk(chunk.x(), chunk.z());

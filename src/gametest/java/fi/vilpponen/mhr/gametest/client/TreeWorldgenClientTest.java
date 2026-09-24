@@ -89,6 +89,9 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 				scenario(context, "a-fresh-run-has-vanilla-trees",
 						() -> aFreshRunHasVanillaTrees(context, server, connection));
 
+				scenario(context, "a-bigger-border-counts-all-of-its-land",
+						() -> aBiggerBorderCountsAllOfItsLand(server));
+
 				// Land far outside the border is the question now, not the run's own start.
 				server.runCommand("mhr border infinite");
 				scenario(context, "fresh-land-has-trees-with-nothing-bought",
@@ -179,6 +182,47 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 		TestRuns.start(server, MOVED_SEED);
 		StartingWood.Result moved = server.computeOnServer(unused -> StartingWood.last());
 		look(context, server, connection, moved.spawn(), "run-spawn-moved-to-trees");
+	}
+
+	/**
+	 * A Medium border is judged on all of its land, not just the part by spawn. Seed 11 has no wood
+	 * anywhere near its spawn — the smallest border has to move away from it — but a border 512
+	 * across reaches trees, so the start must be kept rather than moved.
+	 */
+	private void aBiggerBorderCountsAllOfItsLand(TestDedicatedServerContext server) {
+		server.runCommand("mhr border medium");
+		if (TestRuns.phase(server) == RunPhase.RUNNING) {
+			TestRuns.end(server);
+		}
+		TestRuns.start(server, MOVED_SEED);
+
+		StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
+		LOGGER.info("Run on seed {} with a Medium border: starting wood {} at {}, spawn {} (was {})", MOVED_SEED,
+				result.outcome(), result.log(), result.spawn(), result.from());
+		int nearSpawn = server.computeOnServer(minecraftServer -> logsInSquare(minecraftServer.overworld(),
+				result.from(), 63));
+		check(nearSpawn < StartingWood.VIABLE_LOGS, "setup: seed " + MOVED_SEED + " was meant to have no wood"
+				+ " within the smallest border of its spawn, and has " + nearSpawn + " logs there");
+		check(result.outcome() == StartingWood.Outcome.FOUND && result.spawn().equals(result.from()),
+				"a Medium border with trees inside it must keep its start, and the check says "
+						+ result.outcome() + " from " + result.from() + " to " + result.spawn());
+		String problem = server.computeOnServer(minecraftServer -> {
+			ServerLevel overworld = minecraftServer.overworld();
+			var border = overworld.getWorldBorder();
+			if (border.getSize() < 500) {
+				return "setup: the border is " + border.getSize() + " across, not Medium";
+			}
+			if (!border.isWithinBounds(result.log()) || !overworld.getBlockState(result.log()).is(BlockTags.LOGS)) {
+				return result.log() + " is not a log inside the border";
+			}
+			int far = horizontalDistance(result.log(), result.from());
+			return far <= 64 ? "the log it found at " + result.log() + " is by spawn, where there were none" : null;
+		});
+		check(problem == null, "the Medium run on seed " + MOVED_SEED + ": " + problem);
+	}
+
+	private static int horizontalDistance(BlockPos a, BlockPos b) {
+		return Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getZ() - b.getZ()));
 	}
 
 	/** Every log in every column inside the overworld's border, top to bottom. */

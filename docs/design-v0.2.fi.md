@@ -224,7 +224,6 @@ Muita vaikeuksia haetaan ensisijaisesti siitä, että maailmasta puuttuu hyödyl
 Esimerkiksi:
 
 - pieni world border
-- ei puita
 - ei malmeja
 - ei eläimiä
 - ei armor-slotien käyttöä
