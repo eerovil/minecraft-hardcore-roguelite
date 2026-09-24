@@ -2,10 +2,13 @@ package fi.vilpponen.mhr.border;
 
 import fi.vilpponen.mhr.HardcoreRoguelite;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -13,13 +16,16 @@ import net.minecraft.core.QuartPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.PlayerSpawnFinder;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.tags.BiomeTags;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.levelgen.feature.FallenTreeFeature;
+import net.minecraft.world.level.levelgen.feature.Feature;
+import net.minecraft.world.level.levelgen.feature.TreeFeature;
+import net.minecraft.world.level.levelgen.placement.PlacedFeature;
 import net.minecraft.world.level.storage.LevelData;
 
 /**
@@ -32,9 +38,10 @@ import net.minecraft.world.level.storage.LevelData;
  *
  * <ol>
  *   <li><b>Found.</b> Enough wood is already somewhere inside the border. Nothing is touched.
- *   <li><b>Moved.</b> It is not, so wooded biomes nearby are looked up from the biome map, the way
- *       {@code /locate biome} does, nearest first. The first one whose actual land has enough wood
- *       becomes the start: the run's spawn moves there and the border is centered on it.
+ *   <li><b>Moved.</b> It is not, so biomes nearby that grow trees are looked up from the biome map,
+ *       the way {@code /locate biome} does, nearest first (see {@link #growsTrees}). The first one
+ *       whose actual land has enough wood becomes the start: the run's spawn moves there and the
+ *       border is centered on it.
  *   <li><b>None.</b> Nothing natural is in reach — a superflat world, say. The start is left where
  *       and as it was, and the log says so.
  * </ol>
@@ -55,8 +62,8 @@ public final class StartingWood {
 	 * The most chunks the first look inside the border may generate: a square as wide as the Medium
 	 * border. It stops at the third log and looks at the chunks nearest spawn first, so a wooded start
 	 * costs a handful. The cap is for a Large border with no wood near spawn, which would otherwise
-	 * generate thousands of chunks before giving up; past it, the wooded biomes inside the border are
-	 * counted instead, from the biome map.
+	 * generate thousands of chunks before giving up; past it, the land around the biomes inside
+	 * the border that grow trees is counted instead, from the biome map.
 	 */
 	static final int MAX_SCAN_CHUNKS = 33 * 33;
 
@@ -181,8 +188,8 @@ public final class StartingWood {
 	/** One candidate: a start at it if its land has the wood, or null to go on to the next. */
 	private static Result tryCandidate(MinecraftServer server, ServerLevel overworld, LogCache logs,
 			Area border, BlockPos spawn, BlockPos candidate) {
-		// A wooded biome is a promise of trees, not a tree, so its land is counted before anything
-		// moves. Only this little patch is generated to find out.
+		// A biome that grows trees is a promise of trees, not a tree, so its land is counted before
+		// anything moves. Only this little patch is generated to find out.
 		Area grove = new Area(candidate.getX() - GROVE_RADIUS, candidate.getZ() - GROVE_RADIUS,
 				candidate.getX() + GROVE_RADIUS, candidate.getZ() + GROVE_RADIUS);
 		if (border.contains(candidate)) {
@@ -238,6 +245,7 @@ public final class StartingWood {
 	 */
 	private static List<BlockPos> woodedCandidates(ServerLevel level, BlockPos spawn) {
 		int quartY = QuartPos.fromBlock(level.getSeaLevel());
+		Map<Biome, Boolean> grows = new IdentityHashMap<>();
 		List<BlockPos> candidates = new ArrayList<>();
 		for (int dx = -MOVE_RADIUS; dx <= MOVE_RADIUS; dx += BIOME_STEP) {
 			for (int dz = -MOVE_RADIUS; dz <= MOVE_RADIUS; dz += BIOME_STEP) {
@@ -247,7 +255,7 @@ public final class StartingWood {
 				int x = spawn.getX() + dx;
 				int z = spawn.getZ() + dz;
 				Holder<Biome> biome = level.getUncachedNoiseBiome(QuartPos.fromBlock(x), quartY, QuartPos.fromBlock(z));
-				if (isWooded(biome)) {
+				if (grows.computeIfAbsent(biome.value(), StartingWood::growsTrees)) {
 					candidates.add(new BlockPos(x, level.getSeaLevel(), z));
 				}
 			}
@@ -258,9 +266,40 @@ public final class StartingWood {
 		return candidates;
 	}
 
-	private static boolean isWooded(Holder<Biome> biome) {
-		return biome.is(BiomeTags.IS_FOREST) || biome.is(BiomeTags.IS_TAIGA)
-				|| biome.is(BiomeTags.IS_JUNGLE) || biome.is(BiomeTags.IS_SAVANNA);
+	/**
+	 * Whether the biome's own worldgen places trees: a tree or a fallen tree anywhere among its
+	 * features, however deeply it sits inside a random selector.
+	 *
+	 * <p>Asked of the biome rather than of a list of biome tags, so no biome that grows trees — cherry
+	 * grove, mangrove swamp, plains with its odd oak, one a datapack adds — is ruled out before its
+	 * land is counted. Growing some trees is not the same as having enough of them where it matters,
+	 * which is why a candidate's real logs are still counted before the spawn moves. Even the ocean
+	 * says yes — it can grow the odd tree on an island — so a start far out at sea may generate a
+	 * good deal of the land in reach before it finds a forest. That is bounded by
+	 * {@link #MOVE_RADIUS}, happens once per run, and is the price of never ruling a biome out
+	 * unseen. Public so a GameTest can ask it about biomes by name.
+	 */
+	public static boolean growsTrees(Biome biome) {
+		Set<Feature> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+		for (var step : biome.getGenerationSettings().features()) {
+			for (Holder<PlacedFeature> placed : step) {
+				if (placesTrees(placed.value().feature(), seen)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static boolean placesTrees(Holder<Feature> holder, Set<Feature> seen) {
+		Feature feature = holder.value();
+		if (!seen.add(feature)) {
+			return false;
+		}
+		if (feature instanceof TreeFeature || feature instanceof FallenTreeFeature) {
+			return true;
+		}
+		return feature.getSubFeatures().anyMatch(sub -> placesTrees(sub, seen));
 	}
 
 	private static int horizontalDistance(BlockPos a, BlockPos b) {

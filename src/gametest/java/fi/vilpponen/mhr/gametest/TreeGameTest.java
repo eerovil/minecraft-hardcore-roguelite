@@ -4,13 +4,17 @@ import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.border.StartingWood;
 import net.fabricmc.fabric.api.gametest.v1.GameTest;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.data.worldgen.features.TreeFeatures;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BiomeTags;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.TagKey;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SaplingBlock;
@@ -174,6 +178,58 @@ public final class TreeGameTest {
 		helper.assertValueEqual(chosen, neighbour, "the candidate chosen after its neighbour failed");
 		helper.assertValueEqual(tried, java.util.List.of(failed, neighbour), "the candidates tried, in order");
 		helper.succeed();
+	}
+
+	/**
+	 * A biome that grows trees is a candidate even when it is not a forest, taiga, jungle or
+	 * savanna. Cherry grove is the plain case: its trees are real, and those four tags do not name
+	 * it, so a rule built from them would never count its logs. Each biome is checked against the
+	 * tags first, so the scenario keeps meaning something if Minecraft ever retags one.
+	 */
+	@GameTest
+	public void aTreeBiomeOutsideTheForestTagsIsACandidate(GameTestHelper helper) {
+		for (ResourceKey<Biome> key : java.util.List.of(Biomes.CHERRY_GROVE, Biomes.MANGROVE_SWAMP,
+				Biomes.MEADOW, Biomes.PLAINS)) {
+			Holder<Biome> biome = biome(helper, key);
+			helper.assertFalse(inForestTags(biome), key.identifier() + " must be outside the forest, taiga, jungle"
+					+ " and savanna tags for this scenario to test anything");
+			helper.assertTrue(StartingWood.growsTrees(biome.value()),
+					key.identifier() + " grows trees, so a start may move to it");
+		}
+		helper.succeed();
+	}
+
+	/**
+	 * Every forest, taiga, jungle and savanna is still a candidate — the new rule loses none of the
+	 * old — and a biome with no trees at all is not, so the rule is not simply "every biome".
+	 */
+	@GameTest
+	public void onlyBiomesThatGrowTreesAreCandidates(GameTestHelper helper) {
+		var biomes = helper.getLevel().registryAccess().lookupOrThrow(Registries.BIOME);
+		int forested = 0;
+		for (Holder<Biome> biome : biomes.listElements().toList()) {
+			if (inForestTags(biome)) {
+				forested++;
+				helper.assertTrue(StartingWood.growsTrees(biome.value()),
+						biome.getRegisteredName() + " is a forest, taiga, jungle or savanna, so it must be a candidate");
+			}
+		}
+		helper.assertTrue(forested > 0, "the forest, taiga, jungle and savanna tags must name some biome");
+		for (ResourceKey<Biome> key : java.util.List.of(Biomes.DESERT, Biomes.BEACH, Biomes.STONY_SHORE,
+				Biomes.THE_VOID)) {
+			helper.assertFalse(StartingWood.growsTrees(biome(helper, key).value()),
+					key.identifier() + " grows no trees, so it must not be a candidate");
+		}
+		helper.succeed();
+	}
+
+	private static Holder<Biome> biome(GameTestHelper helper, ResourceKey<Biome> key) {
+		return helper.getLevel().registryAccess().lookupOrThrow(Registries.BIOME).getOrThrow(key);
+	}
+
+	private static boolean inForestTags(Holder<Biome> biome) {
+		return biome.is(BiomeTags.IS_FOREST) || biome.is(BiomeTags.IS_TAIGA)
+				|| biome.is(BiomeTags.IS_JUNGLE) || biome.is(BiomeTags.IS_SAVANNA);
 	}
 
 	/** Every candidate is tried before the search gives up. */

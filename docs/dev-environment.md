@@ -403,6 +403,12 @@ Each one lays its own patch of dirt:
   / **every-candidate-is-tried-before-giving-up** — the search for a natural start tries every
   wooded candidate within reach, in order, rather than giving up after a few or skipping one for
   being near a candidate that had no trees.
+- **a-tree-biome-outside-the-forest-tags-is-a-candidate** / **only-biomes-that-grow-trees-are-candidates**
+  — a biome is a candidate when its own worldgen places a tree or a fallen tree, not when it is
+  tagged forest, taiga, jungle or savanna. Cherry grove, mangrove swamp, meadow and plains are
+  outside those tags and must be candidates. Every biome in the tags must still be one, and desert,
+  beach, stony shore and the void must not. Oceans are candidates too: vanilla gives them the odd
+  tree on an island.
 
 The real paths need real worlds, so they are client GameTests:
 
