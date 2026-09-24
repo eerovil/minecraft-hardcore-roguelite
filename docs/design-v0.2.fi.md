@@ -93,15 +93,17 @@ työkaluja eikä tapaa ansaita ensimmäistä valuuttaa (#60).
 
 Puut generoidaan siksi normaalisti jo ensimmäisestä runista alkaen, eikä niitä myydä kaupassa.
 
-Kun run alkaa rajatun world borderin sisällä, borderin sisällä on aina vähintään yksi
-`#minecraft:logs`-blokki:
+Kun run alkaa rajatun world borderin sisällä, aloituspaikaksi valitaan luonnostaan kelvollinen
+paikka. Kelvollinen tarkoittaa vähintään kolmea saavutettavaa `#minecraft:logs`-blokkia borderin
+sisällä (työpöytä ja puuhakku):
 
-1. Jos worldgen jätti borderin sisään puuta, maailmaan ei kosketa.
-2. Muuten spawn ja border siirretään lähimmän metsäisen biomin puiden viereen, enintään 512 blokin
-   päähän. Maailma pysyy täysin vanillana.
-3. Jos sellaista ei ole (esim. superflat), spawnin viereen kasvatetaan yksi tammi.
+1. Jos alkuperäinen spawn on kelvollinen, siihen ei kosketa.
+2. Muuten lähimmät metsäiset biomit haetaan biomikartasta (kuten `locate biome`), enintään 512
+   blokin päästä. Spawn ja border siirretään ensimmäiseen, jonka todellinen maasto on kelvollinen.
+3. Jos sellaista ei löydy (esim. superflat), aloitus jätetään ennalleen.
 
-Seediä ei koskaan vaihdeta: nimetty seed pysyy samana.
+Maailmaa ei koskaan muokata: aavikkoon tai jäätikölle ei istuteta puuta, joka ei sinne kuulu. Seediä
+ei vaihdeta: nimetty seed pysyy samana.
 
 ### Malmit
 

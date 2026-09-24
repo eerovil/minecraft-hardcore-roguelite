@@ -16,16 +16,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * A bounded run that worldgen gave no wood still starts with some.
+ * A run whose world has no trees anywhere is left as generated: no tree is ever made up to fix it.
  *
  * <p>The harness's own world is superflat: grass to the horizon and not one tree in it, in vanilla
- * as much as here. That makes it the honest version of the start the issue was about — a small
- * border around land that would otherwise have nothing to cut — reached the way a player reaches
- * it, by starting a run. {@link fi.vilpponen.mhr.gametest.TreeGameTest} covers the same rule fast,
- * on patches it builds itself.
+ * as much as here, and no wooded biome to move to either. Starting a run there is the one way to
+ * reach the case where nothing natural is in reach, and the answer has to be to leave the world
+ * alone rather than grow a tree that does not belong in it. The seed that *does* have trees nearby
+ * is {@link TreeWorldgenClientTest}'s.
  *
- * <p>The log is counted by scanning the land inside the border, not only by asking the fallback
- * what it did, so "it says it planted one" and "there is one" are separate claims.
+ * <p>The land inside the border is scanned for logs rather than only asking the check what it did,
+ * so "it says it grew nothing" and "there is nothing" are separate claims.
  *
  * <p>See {@code docs/dev-environment.md} for how to run this.
  */
@@ -45,8 +45,8 @@ public class StartingWoodClientTest implements FabricClientGameTest {
 				server.runCommand("time set noon");
 				server.runCommand("weather clear");
 
-				scenario(context, "a-woodless-bounded-start-gets-a-tree-inside-the-border",
-						() -> aWoodlessBoundedStartGetsATree(context, server, connection));
+				scenario(context, "a-start-with-no-trees-in-reach-is-left-as-generated",
+						() -> aStartWithNoTreesInReachIsLeftAsGenerated(context, server, connection));
 			}
 		}
 
@@ -57,7 +57,7 @@ public class StartingWoodClientTest implements FabricClientGameTest {
 		LOGGER.info("All starting-wood scenarios passed.");
 	}
 
-	private void aWoodlessBoundedStartGetsATree(ClientGameTestContext context,
+	private void aStartWithNoTreesInReachIsLeftAsGenerated(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
 		// The smallest border, which is the one a first run gets, established rather than assumed.
 		server.runCommand("mhr border tiny");
@@ -66,24 +66,22 @@ public class StartingWoodClientTest implements FabricClientGameTest {
 
 		StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
 		check(result != null, "starting a run did not run the starting-wood check at all");
-		check(result.outcome() == StartingWood.Outcome.PLANTED,
-				"superflat has no trees, so the fallback must have grown one, and it says " + result.outcome());
+		check(result.outcome() == StartingWood.Outcome.NONE,
+				"superflat has no trees and nowhere wooded to move to, and the check says " + result.outcome());
+		check(result.spawn().equals(result.from()),
+				"with nowhere to go the spawn must stay put, and it moved from " + result.from() + " to " + result.spawn());
+		BlockPos spawn = server.computeOnServer(minecraftServer ->
+				minecraftServer.getWorldData().overworldData().getRespawnData().pos());
+		check(spawn.equals(result.from()), "the run's spawn is " + spawn + ", not the " + result.from()
+				+ " it started at");
 
 		Scan scan = scanInsideTheBorder(server);
-		LOGGER.info("Inside a {}-wide border: {} logs over {} columns; the fallback's is at {}",
-				scan.size(), scan.logs(), scan.columns(), result.log());
+		LOGGER.info("Inside a {}-wide border: {} logs over {} columns", scan.size(), scan.logs(), scan.columns());
 		check(scan.columns() > 0, "the scan looked at no land at all, so counting logs proves nothing");
-		check(scan.logs() > 0, "a bounded run must start with wood inside its border, and the "
-				+ scan.columns() + " columns inside it have no log");
-		boolean reportedIsReal = server.computeOnServer(minecraftServer -> {
-			ServerLevel overworld = minecraftServer.overworld();
-			return overworld.getWorldBorder().isWithinBounds(result.log())
-					&& overworld.getBlockState(result.log()).is(BlockTags.LOGS);
-		});
-		check(reportedIsReal, "the fallback's tree at " + result.log()
-				+ " must be a log inside the border, and it is not");
+		check(scan.logs() == 0, "no tree may be made up where the world has none, and the border holds "
+				+ scan.logs() + " logs");
 
-		look(context, server, connection, result.log());
+		look(context, server, connection);
 	}
 
 	/** Every log near the top of every column inside the overworld's border. */
@@ -116,21 +114,17 @@ public class StartingWoodClientTest implements FabricClientGameTest {
 	private record Scan(long size, int columns, int logs) {
 	}
 
-	/** Stands at spawn facing the tree and photographs it, so a person can see what was counted. */
+	/** Stands at spawn and photographs the flat land around it, so a person can see what was counted. */
 	private static void look(ClientGameTestContext context, TestDedicatedServerContext server,
-			TestDedicatedServerConnection connection, BlockPos tree) {
+			TestDedicatedServerConnection connection) {
 		BlockPos spawn = TestRuns.runSpawn(server);
-		double dx = tree.getX() - spawn.getX();
-		double dz = tree.getZ() - spawn.getZ();
-		float yaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
 		int surface = server.computeOnServer(minecraftServer -> minecraftServer.overworld()
 				.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, spawn.getX(), spawn.getZ()));
 		server.runCommand("gamemode spectator Player0");
-		server.runCommand("tp Player0 " + (spawn.getX() - dx * 0.4) + " " + (surface + 2) + " "
-				+ (spawn.getZ() - dz * 0.4) + " " + yaw + " 5");
+		server.runCommand("tp Player0 " + spawn.getX() + " " + (surface + 6) + " " + spawn.getZ() + " 0 15");
 		connection.waitForChunksRender();
 		context.waitTicks(20);
-		context.takeScreenshot("starting-wood-on-a-flat-world");
+		context.takeScreenshot("flat-world-start-left-as-generated");
 	}
 
 	// --- plumbing --------------------------------------------------------------------------

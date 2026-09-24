@@ -4,58 +4,53 @@ import fi.vilpponen.mhr.HardcoreRoguelite;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import com.mojang.datafixers.util.Pair;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
-import net.minecraft.core.registries.Registries;
-import net.minecraft.data.worldgen.features.TreeFeatures;
+import net.minecraft.core.QuartPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.PlayerSpawnFinder;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BiomeTags;
 import net.minecraft.tags.BlockTags;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.LeavesBlock;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.levelgen.Heightmap;
-import net.minecraft.world.level.levelgen.feature.Feature;
 import net.minecraft.world.level.storage.LevelData;
 
 /**
- * A bounded run never starts without wood.
+ * A bounded run starts somewhere with wood, chosen rather than made.
  *
  * <p>Trees are vanilla from the first run, so almost every start already has some. But the border
- * makes the start small, and a small square of desert, badlands, ocean or superflat can hold no
- * tree at all — and with no wood there is no crafting table, no tools and no way to earn the first
- * currency. So when a run starts, three things are tried in order, and the first that works wins:
+ * makes the start small, and a small square of desert, glacier or ocean can hold no tree at all —
+ * and with no wood there is no crafting table, no tools and no way to earn the first currency. So
+ * when a run starts:
  *
  * <ol>
- *   <li><b>Found.</b> Vanilla already put a log inside the border. Nothing is touched.
- *   <li><b>Moved.</b> Vanilla put trees somewhere nearby. The run's spawn moves next to them and the
- *       border is centered there instead, so the world stays exactly as generated.
- *   <li><b>Planted.</b> Neither — a superflat world, or a desert with no forest in reach. One oak is
- *       grown a few steps from spawn.
+ *   <li><b>Found.</b> Enough wood is already inside the border. Nothing is touched.
+ *   <li><b>Moved.</b> It is not, so wooded biomes nearby are looked up from the biome map, the way
+ *       {@code /locate biome} does, nearest first. The first one whose actual land has enough wood
+ *       becomes the start: the run's spawn moves there and the border is centered on it.
+ *   <li><b>None.</b> Nothing natural is in reach — a superflat world, say. The start is left where
+ *       and as it was, and the log says so.
  * </ol>
  *
- * <p>The seed is never changed. A run started on a named seed stays on that seed, which is what
- * naming it is for.
+ * <p>The world itself is never edited. A desert stays a desert: no tree is ever placed to make a
+ * start viable. The seed is never changed either, so a run started on a named seed stays on it.
  *
- * <p>Only the land inside the border counts, because a log the player cannot walk to does not help.
- * An unbounded border has no such problem and is left to vanilla.
- *
- * <p>These are not balance numbers. They say how hard to look and where to plant, not how much wood
- * the player gets, and the answer is always "one tree at most, and only when there was none".
+ * <p>These are not balance numbers. They say how hard to look, not how much the player gets.
  */
 public final class StartingWood {
 	/**
-	 * How far from spawn to look, in blocks. Covers the whole of the smallest border; on a bigger
-	 * one, a log this close is enough of an answer and the rest of the world need not be generated
-	 * to find another.
+	 * How many logs make a start viable: one for a crafting table and a wooden pickaxe (4 + 3 planks,
+	 * and the sticks out of 2 more), plus room for an axe. Three logs are twelve planks.
+	 */
+	public static final int VIABLE_LOGS = 3;
+
+	/**
+	 * How far from spawn to count, in blocks. Covers the whole of the smallest border; on a bigger
+	 * one, wood this close is enough of an answer and the rest of the world need not be generated.
 	 */
 	static final int SEARCH_RADIUS = 64;
 
@@ -63,19 +58,7 @@ public final class StartingWood {
 	 * How far below the top of each column a log still counts. Deep enough for any tree's trunk
 	 * under its own canopy, shallow enough that a log buried in a cave is not called reachable.
 	 */
-	static final int SEARCH_DEPTH = 32;
-
-	/**
-	 * Where a fallback tree may go: at least this far from spawn, so it is not on top of the player
-	 * or the starter chest, which looks three blocks around spawn for its own room...
-	 */
-	private static final int PLANT_MIN_DISTANCE = 6;
-
-	/** ...and no further than this, so it is in sight when the run begins. */
-	private static final int PLANT_MAX_DISTANCE = 16;
-
-	/** How many spots to offer the vanilla oak before building one by hand. */
-	private static final int PLANT_ATTEMPTS = 32;
+	public static final int SEARCH_DEPTH = 32;
 
 	/**
 	 * How far the spawn may move to reach trees, in blocks. Far enough that most deserts and
@@ -83,28 +66,38 @@ public final class StartingWood {
 	 */
 	static final int MOVE_RADIUS = 512;
 
-	/** How close together the biome search samples, in blocks. Finer finds smaller groves. */
-	private static final int BIOME_STEP = 16;
+	/** How far apart the biome map is sampled, in blocks. */
+	private static final int BIOME_STEP = 32;
 
-	/** How far around a wooded biome's edge to look for the log itself, in blocks. */
+	/**
+	 * A candidate this close to one already turned down is skipped, so each look covers new land
+	 * rather than the edge of the same unlucky patch.
+	 */
+	private static final int CANDIDATE_SPACING = 96;
+
+	/** How many candidates to try before giving up. Each one generates some land to count in. */
+	private static final int MAX_CANDIDATES = 8;
+
+	/** How far around a candidate its wood is counted before the spawn is moved to it, in blocks. */
 	private static final int GROVE_RADIUS = 32;
 
 	/**
-	 * What {@link #ensure} did, where the log it answers with is, and where the run's spawn ended
-	 * up — which is where it started unless the outcome is {@link Outcome#MOVED}.
+	 * What {@link #ensure} did. {@code log} is a log it counted, {@code spawn} where the run's spawn
+	 * ended up, and {@code from} where it was before — the same unless the outcome is
+	 * {@link Outcome#MOVED}.
 	 */
-	public record Result(Outcome outcome, BlockPos log, BlockPos spawn) {
+	public record Result(Outcome outcome, BlockPos log, BlockPos spawn, BlockPos from) {
 	}
 
 	public enum Outcome {
 		/** The border is unbounded, so nothing was looked at. */
 		UNBOUNDED,
-		/** Worldgen already put a log inside the border. Nothing was changed. */
+		/** Enough wood was inside the border already. Nothing was changed. */
 		FOUND,
-		/** There was none inside, but trees nearby, so the spawn and the border moved to them. */
+		/** There was not, so the spawn and the border moved to wooded land nearby. */
 		MOVED,
-		/** There was none in reach, so one tree was grown. */
-		PLANTED
+		/** There was not, and no wooded land in reach had enough either. Nothing was changed. */
+		NONE
 	}
 
 	private static volatile Result last;
@@ -118,14 +111,14 @@ public final class StartingWood {
 	}
 
 	/**
-	 * Make sure the run's overworld has a log inside its border. Called once the border is in place,
-	 * and may move the run's spawn and the border with it.
+	 * Make sure the run starts with wood inside its border, if the world has any in reach. Called
+	 * once the border is in place, and may move the run's spawn and the border with it.
 	 */
 	public static Result ensure(MinecraftServer server, ServerLevel overworld) {
 		BlockPos spawn = spawnOf(server);
 		Result result;
 		if (overworld.getWorldBorder().getSize() >= WorldBorder.MAX_SIZE) {
-			result = new Result(Outcome.UNBOUNDED, null, spawn);
+			result = new Result(Outcome.UNBOUNDED, null, spawn, spawn);
 		} else {
 			result = ensureBounded(server, overworld, spawn);
 		}
@@ -134,11 +127,12 @@ public final class StartingWood {
 			case FOUND -> HardcoreRoguelite.LOGGER.info("Starting border already has wood, e.g. at {}",
 					describe(result.log()));
 			case MOVED -> HardcoreRoguelite.LOGGER.info(
-					"No wood inside the starting border, so the run's spawn moved from {} to {}, next to trees at {}",
+					"Not enough wood inside the starting border, so the run's spawn moved from {} to {}, next to trees at {}",
 					describe(spawn), describe(result.spawn()), describe(result.log()));
-			case PLANTED -> HardcoreRoguelite.LOGGER.info(
-					"No wood inside the starting border or within {} blocks, so an oak was grown at {}",
-					MOVE_RADIUS, describe(result.log()));
+			case NONE -> HardcoreRoguelite.LOGGER.warn(
+					"Not enough wood inside the starting border, and no wooded land within {} blocks of {} has"
+							+ " enough either. The start is left as it was.",
+					MOVE_RADIUS, describe(spawn));
 			case UNBOUNDED -> {
 			}
 		}
@@ -146,30 +140,49 @@ public final class StartingWood {
 	}
 
 	private static Result ensureBounded(MinecraftServer server, ServerLevel overworld, BlockPos spawn) {
-		BlockPos found = findLog(overworld, reachable(overworld, spawn));
-		if (found != null) {
-			return new Result(Outcome.FOUND, found, spawn);
+		List<BlockPos> here = countLogs(overworld, reachable(overworld, spawn), spawn, VIABLE_LOGS);
+		if (here.size() >= VIABLE_LOGS) {
+			return new Result(Outcome.FOUND, here.get(0), spawn, spawn);
 		}
 
-		BlockPos grove = findGrove(overworld, spawn);
-		if (grove != null && overworld.getWorldBorder().isWithinBounds(grove)) {
-			// Further out than the first look went, on a border bigger than it, but inside all the same.
-			return new Result(Outcome.FOUND, grove, spawn);
-		}
-		if (grove != null) {
-			BlockPos moved = standingSpotNear(overworld, grove);
-			server.setRespawnData(LevelData.RespawnData.of(Level.OVERWORLD, moved, 0.0F, 0.0F));
-			WorldBorders.apply(server);
-			// Asked again rather than assumed: the border has to hold the trees, not just the spawn.
-			BlockPos log = findLog(overworld, reachable(overworld, moved));
-			if (log != null) {
-				return new Result(Outcome.MOVED, log, moved);
+		List<BlockPos> tried = new ArrayList<>();
+		for (BlockPos candidate : woodedCandidates(overworld, spawn)) {
+			if (tried.size() >= MAX_CANDIDATES) {
+				break;
 			}
-			spawn = moved;
+			if (tried.stream().anyMatch(other -> horizontalDistance(other, candidate) < CANDIDATE_SPACING)) {
+				continue;
+			}
+			tried.add(candidate);
+
+			// A wooded biome is a promise of trees, not a tree, so its land is counted before anything
+			// moves. Only this little patch is generated to find out.
+			Area grove = new Area(candidate.getX() - GROVE_RADIUS, candidate.getZ() - GROVE_RADIUS,
+					candidate.getX() + GROVE_RADIUS, candidate.getZ() + GROVE_RADIUS);
+			List<BlockPos> groveLogs = countLogs(overworld, grove, candidate, VIABLE_LOGS);
+			if (groveLogs.size() < VIABLE_LOGS) {
+				continue;
+			}
+
+			BlockPos moved = standingSpotNear(overworld, groveLogs.get(0));
+			moveSpawn(server, moved);
+			// Counted again inside the border the move produced, rather than assumed: the border has
+			// to hold the trees, not just the spawn.
+			List<BlockPos> inside = countLogs(overworld, reachable(overworld, moved), moved, VIABLE_LOGS);
+			if (inside.size() >= VIABLE_LOGS) {
+				return new Result(Outcome.MOVED, inside.get(0), moved, spawn);
+			}
 		}
 
-		return new Result(Outcome.PLANTED, plant(overworld, reachable(overworld, spawn), clamp(overworld, spawn)),
-				spawn);
+		if (!spawnOf(server).equals(spawn)) {
+			moveSpawn(server, spawn);
+		}
+		return new Result(Outcome.NONE, null, spawn, spawn);
+	}
+
+	private static void moveSpawn(MinecraftServer server, BlockPos to) {
+		server.setRespawnData(LevelData.RespawnData.of(Level.OVERWORLD, to, 0.0F, 0.0F));
+		WorldBorders.apply(server);
 	}
 
 	/**
@@ -182,8 +195,7 @@ public final class StartingWood {
 
 	/**
 	 * The columns near {@code spawn} wholly inside the border, so a log anywhere in them is one the
-	 * player can walk up to. Spawn is pulled inside the border first: a tree next to a spawn the
-	 * border does not hold would be no use to anybody.
+	 * player can walk up to.
 	 */
 	private static Area reachable(ServerLevel level, BlockPos spawn) {
 		WorldBorder border = level.getWorldBorder();
@@ -191,42 +203,50 @@ public final class StartingWood {
 		int minZ = (int) Math.ceil(border.getMinZ());
 		int maxX = Math.max(minX, (int) Math.floor(border.getMaxX()) - 1);
 		int maxZ = Math.max(minZ, (int) Math.floor(border.getMaxZ()) - 1);
-		BlockPos near = clamp(level, spawn);
-		return new Area(
-				Math.max(near.getX() - SEARCH_RADIUS, minX), Math.max(near.getZ() - SEARCH_RADIUS, minZ),
-				Math.min(near.getX() + SEARCH_RADIUS, maxX), Math.min(near.getZ() + SEARCH_RADIUS, maxZ));
-	}
-
-	private static BlockPos clamp(ServerLevel level, BlockPos pos) {
-		WorldBorder border = level.getWorldBorder();
-		int minX = (int) Math.ceil(border.getMinX());
-		int minZ = (int) Math.ceil(border.getMinZ());
-		int maxX = Math.max(minX, (int) Math.floor(border.getMaxX()) - 1);
-		int maxZ = Math.max(minZ, (int) Math.floor(border.getMaxZ()) - 1);
-		return new BlockPos(Math.clamp(pos.getX(), minX, maxX), pos.getY(), Math.clamp(pos.getZ(), minZ, maxZ));
+		int x = Math.clamp(spawn.getX(), minX, maxX);
+		int z = Math.clamp(spawn.getZ(), minZ, maxZ);
+		return new Area(Math.max(x - SEARCH_RADIUS, minX), Math.max(z - SEARCH_RADIUS, minZ),
+				Math.min(x + SEARCH_RADIUS, maxX), Math.min(z + SEARCH_RADIUS, maxZ));
 	}
 
 	/**
-	 * A log in the nearest wooded biome within {@link #MOVE_RADIUS} of spawn, or null.
+	 * Every spot within {@link #MOVE_RADIUS} of spawn whose biome grows trees, nearest first.
 	 *
-	 * <p>The biome is found the way {@code /locate biome} finds one, from the biome map alone, so
-	 * nothing is generated until there is somewhere worth looking. Then only the land around that
-	 * spot is generated and searched, because a wooded biome is a promise of trees, not a tree.
+	 * <p>Read from the biome map alone, the way {@code /locate biome} reads it, so nothing is
+	 * generated to make the list. Ties are broken by position, so the order depends on the world and
+	 * nothing else.
 	 */
-	private static BlockPos findGrove(ServerLevel level, BlockPos spawn) {
-		Pair<BlockPos, Holder<Biome>> nearest = level.findClosestBiome3d(StartingWood::isWooded,
-				spawn, MOVE_RADIUS, BIOME_STEP, 64);
-		if (nearest == null) {
-			return null;
+	private static List<BlockPos> woodedCandidates(ServerLevel level, BlockPos spawn) {
+		int quartY = QuartPos.fromBlock(level.getSeaLevel());
+		List<BlockPos> candidates = new ArrayList<>();
+		for (int dx = -MOVE_RADIUS; dx <= MOVE_RADIUS; dx += BIOME_STEP) {
+			for (int dz = -MOVE_RADIUS; dz <= MOVE_RADIUS; dz += BIOME_STEP) {
+				if (dx * dx + dz * dz > MOVE_RADIUS * MOVE_RADIUS) {
+					continue;
+				}
+				int x = spawn.getX() + dx;
+				int z = spawn.getZ() + dz;
+				Holder<Biome> biome = level.getUncachedNoiseBiome(QuartPos.fromBlock(x), quartY, QuartPos.fromBlock(z));
+				if (isWooded(biome)) {
+					candidates.add(new BlockPos(x, level.getSeaLevel(), z));
+				}
+			}
 		}
-		BlockPos at = nearest.getFirst();
-		return findLog(level, new Area(at.getX() - GROVE_RADIUS, at.getZ() - GROVE_RADIUS,
-				at.getX() + GROVE_RADIUS, at.getZ() + GROVE_RADIUS));
+		candidates.sort(Comparator.comparingInt((BlockPos pos) -> horizontalDistance(pos, spawn))
+				.thenComparingInt(BlockPos::getX)
+				.thenComparingInt(BlockPos::getZ));
+		return candidates;
 	}
 
 	private static boolean isWooded(Holder<Biome> biome) {
 		return biome.is(BiomeTags.IS_FOREST) || biome.is(BiomeTags.IS_TAIGA)
 				|| biome.is(BiomeTags.IS_JUNGLE) || biome.is(BiomeTags.IS_SAVANNA);
+	}
+
+	private static int horizontalDistance(BlockPos a, BlockPos b) {
+		int dx = a.getX() - b.getX();
+		int dz = a.getZ() - b.getZ();
+		return (int) Math.sqrt((double) dx * dx + (double) dz * dz);
 	}
 
 	/**
@@ -257,147 +277,55 @@ public final class StartingWood {
 		return pos.getX() + " " + pos.getY() + " " + pos.getZ();
 	}
 
-	/**
-	 * The same, for any square of columns. Public so a GameTest can ask it about a patch it built
-	 * rather than a whole run.
-	 *
-	 * <p>The area is the whole question: the caller has already cut it down to what the player can
-	 * reach, so nothing outside it is looked at and the tree, if one is needed, goes inside it.
-	 */
-	public static Result ensure(ServerLevel level, Area area, BlockPos near) {
-		BlockPos found = findLog(level, area);
-		if (found != null) {
-			return new Result(Outcome.FOUND, found, near);
-		}
-		return new Result(Outcome.PLANTED, plant(level, area, near), near);
-	}
-
 	/** A square of columns, corners included. */
 	public record Area(int minX, int minZ, int maxX, int maxZ) {
-		boolean contains(int x, int z) {
-			return x >= minX && x <= maxX && z >= minZ && z <= maxZ;
-		}
 	}
 
-	/** The first log near the top of any column in the area, or null. */
-	private static BlockPos findLog(ServerLevel level, Area area) {
-		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+	/**
+	 * Up to {@code want} logs near the top of the columns in {@code area}, looking at the chunks
+	 * nearest {@code centre} first so a wooded start is answered without generating the rest.
+	 *
+	 * <p>Public so a GameTest can ask it about a patch it built rather than a whole run.
+	 */
+	public static List<BlockPos> countLogs(ServerLevel level, Area area, BlockPos centre, int want) {
+		List<ChunkPos> chunks = new ArrayList<>();
 		for (int chunkX = area.minX() >> 4; chunkX <= area.maxX() >> 4; chunkX++) {
 			for (int chunkZ = area.minZ() >> 4; chunkZ <= area.maxZ() >> 4; chunkZ++) {
-				// Generates the chunk if it is not there yet. Worldgen has to have answered before
-				// "there is no tree" means anything.
-				level.getChunk(chunkX, chunkZ);
-				for (int x = Math.max(area.minX(), chunkX << 4); x <= Math.min(area.maxX(), (chunkX << 4) + 15); x++) {
-					for (int z = Math.max(area.minZ(), chunkZ << 4); z <= Math.min(area.maxZ(), (chunkZ << 4) + 15); z++) {
-						int top = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
-						int bottom = Math.max(level.getMinY(), top - SEARCH_DEPTH);
-						for (int y = top; y >= bottom; y--) {
-							if (level.getBlockState(pos.set(x, y, z)).is(BlockTags.LOGS)) {
-								return pos.immutable();
+				chunks.add(new ChunkPos(chunkX, chunkZ));
+			}
+		}
+		int centreX = centre.getX() >> 4;
+		int centreZ = centre.getZ() >> 4;
+		chunks.sort(Comparator.comparingInt((ChunkPos chunk) ->
+						Math.max(Math.abs(chunk.x() - centreX), Math.abs(chunk.z() - centreZ)))
+				.thenComparingInt(ChunkPos::x)
+				.thenComparingInt(ChunkPos::z));
+
+		List<BlockPos> found = new ArrayList<>();
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		for (ChunkPos chunk : chunks) {
+			// Generates the chunk if it is not there yet. Worldgen has to have answered before
+			// "there is no tree" means anything.
+			level.getChunk(chunk.x(), chunk.z());
+			int fromX = Math.max(area.minX(), chunk.x() << 4);
+			int toX = Math.min(area.maxX(), (chunk.x() << 4) + 15);
+			int fromZ = Math.max(area.minZ(), chunk.z() << 4);
+			int toZ = Math.min(area.maxZ(), (chunk.z() << 4) + 15);
+			for (int x = fromX; x <= toX; x++) {
+				for (int z = fromZ; z <= toZ; z++) {
+					int top = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
+					int bottom = Math.max(level.getMinY(), top - SEARCH_DEPTH);
+					for (int y = top; y >= bottom; y--) {
+						if (level.getBlockState(pos.set(x, y, z)).is(BlockTags.LOGS)) {
+							found.add(pos.immutable());
+							if (found.size() >= want) {
+								return found;
 							}
 						}
 					}
 				}
 			}
 		}
-		return null;
-	}
-
-	/**
-	 * Grow one tree near {@code near}, and answer with a log of it.
-	 *
-	 * <p>A vanilla oak first, on dry ground, so the fallback looks like the rest of the world and
-	 * drops saplings like any other tree. Only if no spot takes one is a small oak built by hand,
-	 * which always works: it is the promise, the vanilla one is the preference.
-	 */
-	private static BlockPos plant(ServerLevel level, Area area, BlockPos near) {
-		List<int[]> spots = spots(area, near);
-		if (spots.isEmpty()) {
-			// Nothing of the area is within reach of spawn. Only possible when asked about an area
-			// spawn is not in, so the nearest corner of it will have to do.
-			spots = List.of(new int[] {
-					Math.clamp(near.getX(), area.minX(), area.maxX()),
-					Math.clamp(near.getZ(), area.minZ(), area.maxZ())});
-		}
-
-		Feature oak = level.registryAccess().lookupOrThrow(Registries.FEATURE).getValueOrThrow(TreeFeatures.OAK);
-		for (int i = 0; i < Math.min(PLANT_ATTEMPTS, spots.size()); i++) {
-			int[] spot = spots.get(i);
-			BlockPos base = new BlockPos(spot[0],
-					level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, spot[0], spot[1]), spot[1]);
-			if (!level.getFluidState(base.below()).isEmpty() || !level.getFluidState(base).isEmpty()) {
-				continue;
-			}
-			RandomSource random = RandomSource.create(level.getSeed() ^ base.asLong());
-			if (oak.place(level, level.getChunkSource().getGenerator(), random, base)
-					&& level.getBlockState(base).is(BlockTags.LOGS)) {
-				return base;
-			}
-		}
-
-		int[] spot = spots.get(0);
-		return build(level, spot[0], spot[1]);
-	}
-
-	/**
-	 * The columns a tree may go in, best first: inside the area, ideally a few steps
-	 * from spawn, nearest first. Ties are broken by position so the order never depends on anything
-	 * but the world.
-	 */
-	private static List<int[]> spots(Area area, BlockPos near) {
-		List<int[]> spots = new ArrayList<>();
-		for (int dx = -PLANT_MAX_DISTANCE; dx <= PLANT_MAX_DISTANCE; dx++) {
-			for (int dz = -PLANT_MAX_DISTANCE; dz <= PLANT_MAX_DISTANCE; dz++) {
-				int x = near.getX() + dx;
-				int z = near.getZ() + dz;
-				if (area.contains(x, z)) {
-					spots.add(new int[] {x, z});
-				}
-			}
-		}
-		spots.sort(Comparator
-				.comparingInt((int[] spot) -> distance(spot, near) < PLANT_MIN_DISTANCE ? 1 : 0)
-				.thenComparingInt(spot -> {
-					int dx = spot[0] - near.getX();
-					int dz = spot[1] - near.getZ();
-					return dx * dx + dz * dz;
-				})
-				.thenComparingInt(spot -> spot[0])
-				.thenComparingInt(spot -> spot[1]));
-		return spots;
-	}
-
-	private static int distance(int[] spot, BlockPos near) {
-		return Math.max(Math.abs(spot[0] - near.getX()), Math.abs(spot[1] - near.getZ()));
-	}
-
-	/**
-	 * A small oak put together block by block: a trunk from solid ground up through whatever is on
-	 * top of it — water included — and a cap of leaves. Answers with the bottom log.
-	 */
-	private static BlockPos build(ServerLevel level, int x, int z) {
-		int ground = level.getHeight(Heightmap.Types.OCEAN_FLOOR, x, z);
-		int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
-		int top = Math.max(ground, surface) + 3;
-
-		level.setBlock(new BlockPos(x, ground - 1, z), Blocks.DIRT.defaultBlockState(), 3);
-		BlockState log = Blocks.OAK_LOG.defaultBlockState();
-		for (int y = ground; y <= top; y++) {
-			level.setBlock(new BlockPos(x, y, z), log, 3);
-		}
-
-		BlockState leaves = Blocks.OAK_LEAVES.defaultBlockState().setValue(LeavesBlock.DISTANCE, 1);
-		for (int y = top - 1; y <= top + 1; y++) {
-			int reach = y == top + 1 ? 1 : 2;
-			for (int dx = -reach; dx <= reach; dx++) {
-				for (int dz = -reach; dz <= reach; dz++) {
-					BlockPos pos = new BlockPos(x + dx, y, z + dz);
-					if (level.getBlockState(pos).isAir()) {
-						level.setBlock(pos, leaves, 3);
-					}
-				}
-			}
-		}
-		return new BlockPos(x, ground, z);
+		return found;
 	}
 }

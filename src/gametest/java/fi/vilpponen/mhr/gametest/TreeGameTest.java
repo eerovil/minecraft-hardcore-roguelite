@@ -22,9 +22,8 @@ import net.minecraft.world.level.levelgen.feature.Feature;
  *
  * <p>Two things live here. Trees are vanilla from the first run, with nothing bought: the vanilla
  * tree feature places — the same call worldgen, bonemeal and a sapling all end up making — and a
- * sapling grows. And the fallback that keeps a bounded run from starting without wood, {@link
- * StartingWood}, asked about a patch each scenario builds for itself: it grows a tree where there
- * is no wood, and leaves alone a patch that already has some.
+ * sapling grows. And the rule {@link StartingWood} uses to judge a start, asked about a patch each
+ * scenario builds for itself: three reachable logs make a start viable, two do not.
  *
  * <p>The slow half — real terrain, and a real run start — lives in {@link
  * fi.vilpponen.mhr.gametest.client.TreeWorldgenClientTest} and {@link
@@ -94,83 +93,49 @@ public final class TreeGameTest {
 		helper.succeed();
 	}
 
-	// --- a bounded start always has wood ---------------------------------------------------
+	// --- what counts as a viable start ----------------------------------------------------
 
 	/**
-	 * A patch with no wood in it gets a tree, inside the patch, standing on the ground. This is the
-	 * regression the issue is about: a start that would otherwise have nothing to cut.
+	 * Two logs are not a start: eight planks cannot make a crafting table and a wooden pickaxe with
+	 * the sticks for it. Counting them changes nothing about the patch — the check only looks.
 	 */
 	@GameTest(skyAccess = true)
-	public void aWoodlessPatchGetsATree(GameTestHelper helper) {
+	public void twoLogsAreNotAViableStart(GameTestHelper helper) {
 		nothingBought();
 		prepare(helper);
-		helper.assertValueEqual(logsInPatch(helper), 0, "setup: logs in the patch before the fallback");
+		placeLogs(helper, 2);
 
-		StartingWood.Result result = StartingWood.ensure(helper.getLevel(), area(helper, 0, 6),
-				helper.absolutePos(SEED));
+		int counted = StartingWood.countLogs(helper.getLevel(), area(helper, 0, 6), helper.absolutePos(SEED),
+				StartingWood.VIABLE_LOGS).size();
 
-		helper.assertValueEqual(result.outcome(), StartingWood.Outcome.PLANTED,
-				"what the fallback did about a patch with no wood");
-		helper.assertTrue(helper.getLevel().getBlockState(result.log()).is(BlockTags.LOGS),
-				"the fallback said it grew a tree at " + result.log() + ", and there is no log there");
-		helper.assertTrue(isInside(helper, result.log(), 0, 6),
-				"the fallback's tree must be inside the patch it was asked about, and it is at " + result.log());
-		helper.assertTrue(logsInPatch(helper) > 0, "the patch still has no logs after the fallback");
-		helper.succeed();
-	}
-
-	/**
-	 * A patch that already has a log is left exactly as it was. The fallback is for starts with no
-	 * wood, not a free tree on top of vanilla's.
-	 */
-	@GameTest(skyAccess = true)
-	public void aPatchWithWoodIsLeftAlone(GameTestHelper helper) {
-		nothingBought();
-		prepare(helper);
-		BlockPos log = helper.absolutePos(new BlockPos(1, 1, 5));
-		helper.getLevel().setBlock(log, Blocks.BIRCH_LOG.defaultBlockState(), 3);
-
-		StartingWood.Result result = StartingWood.ensure(helper.getLevel(), area(helper, 0, 6),
-				helper.absolutePos(SEED));
-
-		helper.assertValueEqual(result.outcome(), StartingWood.Outcome.FOUND,
-				"what the fallback did about a patch that already had a log");
-		helper.assertValueEqual(result.log(), log, "the log the fallback found");
-		helper.assertValueEqual(logsInPatch(helper), 1, "logs in the patch after the fallback");
+		helper.assertValueEqual(counted, 2, "logs counted in a patch holding two");
+		helper.assertTrue(counted < StartingWood.VIABLE_LOGS, "two logs must not count as a viable start");
+		helper.assertValueEqual(logsInPatch(helper), 2, "logs in the patch after counting, which only looks");
 		helper.assertValueEqual(blocksInPatch(helper, BlockTags.LEAVES), 0,
-				"leaves in the patch after the fallback, which should have grown nothing");
+				"leaves in the patch after counting, which must never grow anything");
 		helper.succeed();
 	}
 
-	/**
-	 * Under water no vanilla oak will stand, so the fallback's last resort builds one: a trunk from
-	 * the bottom up through the water, which is still wood a player can reach.
-	 */
+	/** Three logs are. The control for the scenario above: the same patch with one more log. */
 	@GameTest(skyAccess = true)
-	public void aFloodedPatchStillGetsWood(GameTestHelper helper) {
+	public void threeLogsAreAViableStart(GameTestHelper helper) {
 		nothingBought();
 		prepare(helper);
-		ServerLevel level = helper.getLevel();
-		// A pool two deep with a stone rim, so the water stays in this test's own patch.
-		for (BlockPos pos : between(helper, new BlockPos(0, 1, 0), new BlockPos(6, 2, 6))) {
-			level.setBlock(pos, Blocks.STONE.defaultBlockState(), 2);
-		}
-		for (BlockPos pos : between(helper, new BlockPos(1, 1, 1), new BlockPos(5, 2, 5))) {
-			level.setBlock(pos, Blocks.WATER.defaultBlockState(), 2);
-		}
+		placeLogs(helper, 3);
 
-		StartingWood.Result result = StartingWood.ensure(level, area(helper, 1, 5), helper.absolutePos(SEED));
+		int counted = StartingWood.countLogs(helper.getLevel(), area(helper, 0, 6), helper.absolutePos(SEED),
+				StartingWood.VIABLE_LOGS).size();
 
-		helper.assertValueEqual(result.outcome(), StartingWood.Outcome.PLANTED,
-				"what the fallback did about a flooded patch with no wood");
-		helper.assertTrue(isInside(helper, result.log(), 1, 5),
-				"the fallback's tree must be inside the pool it was asked about, and it is at " + result.log());
-		// The water is two deep over the dirt, so the first dry block of the trunk is three up.
-		BlockPos aboveWater = result.log().atY(helper.absolutePos(new BlockPos(0, 3, 0)).getY());
-		helper.assertTrue(level.getBlockState(aboveWater).is(BlockTags.LOGS),
-				"the trunk must come up out of the water to be reachable, and above the surface at "
-						+ aboveWater + " is " + level.getBlockState(aboveWater));
+		helper.assertValueEqual(counted, StartingWood.VIABLE_LOGS, "logs counted in a patch holding three");
 		helper.succeed();
+	}
+
+	/** Lays {@code count} logs on the dirt, in a row along one edge of the patch. */
+	private static void placeLogs(GameTestHelper helper, int count) {
+		for (int i = 0; i < count; i++) {
+			helper.getLevel().setBlock(helper.absolutePos(new BlockPos(1 + i * 2, 1, 5)),
+					Blocks.BIRCH_LOG.defaultBlockState(), 3);
+		}
 	}
 
 	// --- plumbing --------------------------------------------------------------------------
@@ -196,12 +161,6 @@ public final class TreeGameTest {
 		BlockPos b = helper.absolutePos(new BlockPos(to, 0, to));
 		return new StartingWood.Area(Math.min(a.getX(), b.getX()), Math.min(a.getZ(), b.getZ()),
 				Math.max(a.getX(), b.getX()), Math.max(a.getZ(), b.getZ()));
-	}
-
-	private static boolean isInside(GameTestHelper helper, BlockPos pos, int from, int to) {
-		StartingWood.Area area = area(helper, from, to);
-		return pos.getX() >= area.minX() && pos.getX() <= area.maxX()
-				&& pos.getZ() >= area.minZ() && pos.getZ() <= area.maxZ();
 	}
 
 	/** Places a vanilla feature exactly the way worldgen would, and says whether it took. */

@@ -44,13 +44,15 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 	private static final String RETIRED_TREES = "world.trees";
 
 	/**
-	 * The seeds runs are started on. Whether a seed starts with trees inside the smallest border or
-	 * has to move to them is up to vanilla, so these were picked by trying seeds 1 to 16: seed 1 has
-	 * trees inside its first border, and seed 11 has none there and a forest about 230 blocks away.
-	 * Kept to two because every run start holds the server still for a moment, and a long list of
-	 * them in a row is enough for the client to time out.
+	 * The seeds runs are started on. Whether a seed starts with trees inside the smallest border is
+	 * up to vanilla, so these were picked by trying seeds 1 to 16: seed 1 has trees inside its first
+	 * border, and seed 11 has none there and a forest a couple of hundred blocks away. Kept to two
+	 * because every run start holds the server still for a moment, and a long list of them in a row
+	 * is enough for the client to time out.
 	 */
-	private static final long[] RUN_SEEDS = {1L, 11L};
+	private static final long FOUND_SEED = 1L;
+	private static final long MOVED_SEED = 11L;
+	private static final long[] RUN_SEEDS = {FOUND_SEED, MOVED_SEED};
 
 	/** How far out from the middle of the patch to generate, in chunks. 5×5 is plenty of forest. */
 	private static final int RADIUS_IN_CHUNKS = 2;
@@ -106,17 +108,15 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 	/**
 	 * The world a run actually begins in, on the smallest border, with nothing bought.
 	 *
-	 * <p>Every run must end up with a log inside its border and the player standing inside it,
-	 * whatever the seed. At least one seed must have had vanilla trees there already and been left
-	 * exactly as generated — trees are not suppressed. And at least one must have had none inside,
-	 * but trees in reach, and have moved its spawn and border to them rather than planting.
+	 * <p>Seed 1 has trees inside its first border: it must be found and left exactly where it is.
+	 * Seed 11 has none there: it must move to land that already has trees, and the land it left must
+	 * still have none — nothing was grown to fix it. Either way the border must end up centered on
+	 * the spawn, hold at least {@link StartingWood#VIABLE_LOGS} logs, and hold the player.
 	 */
 	private void aFreshRunHasVanillaTrees(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
 		server.runCommand("mhr border tiny");
 		List<String> outcomes = new ArrayList<>();
-		boolean sawFound = false;
-		Long movedSeed = null;
 		for (long seed : RUN_SEEDS) {
 			if (TestRuns.phase(server) == RunPhase.RUNNING) {
 				TestRuns.end(server);
@@ -126,16 +126,12 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 			StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
 			check(result != null, "starting a run on seed " + seed + " did not run the starting-wood check");
 			outcomes.add(seed + "=" + result.outcome());
-			LOGGER.info("Run on seed {}: starting wood {} at {}, spawn {}", seed, result.outcome(),
-					result.log(), result.spawn());
-			check(result.outcome() != StartingWood.Outcome.UNBOUNDED,
-					"the run on seed " + seed + " was meant to be on the smallest border");
+			LOGGER.info("Run on seed {}: starting wood {} at {}, spawn {} (was {})", seed, result.outcome(),
+					result.log(), result.spawn(), result.from());
+
 			String problem = server.computeOnServer(minecraftServer -> {
 				ServerLevel overworld = minecraftServer.overworld();
 				var border = overworld.getWorldBorder();
-				if (!border.isWithinBounds(result.log()) || !overworld.getBlockState(result.log()).is(BlockTags.LOGS)) {
-					return result.log() + " (" + result.outcome() + ") is not a log inside the border";
-				}
 				BlockPos spawn = minecraftServer.getWorldData().overworldData().getRespawnData().pos();
 				if (!spawn.equals(result.spawn())) {
 					return "the run's spawn is " + spawn + " but the check says it is " + result.spawn();
@@ -144,6 +140,11 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 						|| Math.abs(border.getCenterZ() - (spawn.getZ() + 0.5)) > 1) {
 					return "the border is centered on " + border.getCenterX() + ", " + border.getCenterZ()
 							+ " and not on the spawn " + spawn;
+				}
+				int logs = logsInsideTheBorder(overworld);
+				if (logs < StartingWood.VIABLE_LOGS) {
+					return "the border holds " + logs + " logs, fewer than the " + StartingWood.VIABLE_LOGS
+							+ " a start needs";
 				}
 				for (var player : minecraftServer.getPlayerList().getPlayers()) {
 					if (player.level() == overworld && !border.isWithinBounds(player.blockPosition())) {
@@ -155,28 +156,55 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 			});
 			check(problem == null, "the run on seed " + seed + ": " + problem);
 
-			if (result.outcome() == StartingWood.Outcome.FOUND && !sawFound) {
-				generate(server, result.log());
-				int logs = count(server, result.log(), BlockTags.LOGS);
-				LOGGER.info("Around the log at {}: {} logs", result.log(), logs);
-				check(logs > 1, "vanilla trees are more than one log, and around " + result.log()
-						+ " there are " + logs);
-				sawFound = true;
+			if (seed == FOUND_SEED) {
+				check(result.outcome() == StartingWood.Outcome.FOUND && result.spawn().equals(result.from()),
+						"seed " + seed + " has trees inside its first border, so its start must be kept, and"
+								+ " the check says " + result.outcome() + " from " + result.from() + " to " + result.spawn());
 			}
-			if (result.outcome() == StartingWood.Outcome.MOVED && movedSeed == null) {
-				movedSeed = seed;
+			if (seed == MOVED_SEED) {
+				check(result.outcome() == StartingWood.Outcome.MOVED && !result.spawn().equals(result.from()),
+						"seed " + seed + " has no trees inside its first border, so its start must move, and"
+								+ " the check says " + result.outcome());
+				int left = server.computeOnServer(minecraftServer -> logsInSquare(minecraftServer.overworld(),
+						result.from(), 63));
+				LOGGER.info("The start seed {} left at {} still has {} logs around it", seed, result.from(), left);
+				check(left < StartingWood.VIABLE_LOGS, "the start seed " + seed + " moved away from at "
+						+ result.from() + " was meant to be treeless, and has " + left + " logs around it");
 			}
 		}
 		LOGGER.info("Starting wood by seed: {}", outcomes);
-		check(sawFound, "none of the seeds started with vanilla trees inside the smallest border, so"
-				+ " nothing here shows trees are left alone: " + outcomes);
-		check(movedSeed != null, "none of the seeds had to move to trees, so the move is untested: " + outcomes);
 
 		// The picture last, so looking around as a spectator cannot touch any run being checked.
 		TestRuns.end(server);
-		TestRuns.start(server, movedSeed);
+		TestRuns.start(server, MOVED_SEED);
 		StartingWood.Result moved = server.computeOnServer(unused -> StartingWood.last());
 		look(context, server, connection, moved.spawn(), "run-spawn-moved-to-trees");
+	}
+
+	/** Every log in every column inside the overworld's border, top to bottom. */
+	private static int logsInsideTheBorder(ServerLevel overworld) {
+		var border = overworld.getWorldBorder();
+		int half = (int) (border.getSize() / 2) - 1;
+		BlockPos centre = BlockPos.containing(border.getCenterX(), 0, border.getCenterZ());
+		return logsInSquare(overworld, centre, half);
+	}
+
+	/** Every log in the columns within {@code half} blocks of {@code centre}, top to bottom. */
+	private static int logsInSquare(ServerLevel overworld, BlockPos centre, int half) {
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int logs = 0;
+		for (int x = centre.getX() - half; x <= centre.getX() + half; x++) {
+			for (int z = centre.getZ() - half; z <= centre.getZ() + half; z++) {
+				overworld.getChunk(x >> 4, z >> 4);
+				int top = overworld.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
+				for (int y = overworld.getMinY(); y < top; y++) {
+					if (overworld.getBlockState(pos.set(x, y, z)).is(BlockTags.LOGS)) {
+						logs++;
+					}
+				}
+			}
+		}
+		return logs;
 	}
 
 	/**
