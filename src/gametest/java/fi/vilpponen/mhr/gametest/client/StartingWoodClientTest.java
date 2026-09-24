@@ -19,7 +19,9 @@ import org.slf4j.LoggerFactory;
  * A run whose world has no trees anywhere is left as generated: no tree is ever made up to fix it.
  *
  * <p>The harness's own world is superflat: grass to the horizon and not one tree in it, in vanilla
- * as much as here, and no wooded biome to move to either. Starting a run there is the one way to
+ * as much as here. Its biome is plains, which can grow a tree, so every cell in reach is a
+ * candidate to move to and none of them has one — the most the search for a start can ever have to
+ * look at, and so the case that proves it stops at its budget. Starting a run there is the one way to
  * reach the case where nothing natural is in reach, and the answer has to be to leave the world
  * alone rather than grow a tree that does not belong in it. The seed that *does* have trees nearby
  * is {@link TreeWorldgenClientTest}'s.
@@ -61,11 +63,22 @@ public class StartingWoodClientTest implements FabricClientGameTest {
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
 		// The smallest border, which is the one a first run gets, established rather than assumed.
 		server.runCommand("mhr border tiny");
+		long startedAt = System.nanoTime();
 		TestRuns.start(server, SEED);
+		long startMillis = (System.nanoTime() - startedAt) / 1_000_000;
 		connection.waitForChunksRender();
 
 		StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
 		check(result != null, "starting a run did not run the starting-wood check at all");
+		// Superflat's biome is plains, which can grow a tree, so every cell in reach is a candidate
+		// and none has one: the worst case for the search. It must stop at its budget — exactly
+		// there, which also proves it really did look — rather than generate everything in reach.
+		LOGGER.info("The run start took {} ms; the search for trees looked at {} chunks (budget {})",
+				startMillis, result.searchedChunks(), StartingWood.CANDIDATE_BUDGET_CHUNKS);
+		check(result.searchedChunks() == StartingWood.CANDIDATE_BUDGET_CHUNKS,
+				"with a candidate at every cell and trees in none, the search must look at exactly its "
+						+ StartingWood.CANDIDATE_BUDGET_CHUNKS + "-chunk budget, and it looked at "
+						+ result.searchedChunks());
 		check(result.outcome() == StartingWood.Outcome.NONE,
 				"superflat has no trees and nowhere wooded to move to, and the check says " + result.outcome());
 		check(result.spawn().equals(result.from()),

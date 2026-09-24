@@ -401,14 +401,18 @@ Each one lays its own patch of dirt:
   `StartingWood` judges a start by, and proof that counting changes nothing in the patch.
 - **a-later-candidate-is-tried-after-many-fail** / **a-candidate-next-to-a-failed-one-is-still-tried**
   / **every-candidate-is-tried-before-giving-up** — the search for a natural start tries every
-  wooded candidate within reach, in order, rather than giving up after a few or skipping one for
-  being near a candidate that had no trees.
+  candidate within reach, in order, rather than giving up after a few or skipping one for being
+  near a candidate that had no trees. A 32×32 cell is a candidate when any part of it is a biome
+  that grows trees, and each candidate counts the logs in its own cell, so no two look at the same
+  land.
+- **the-search-stops-when-its-budget-is-spent** — the one thing that ends the search early is its
+  chunk budget (`StartingWood.CANDIDATE_BUDGET_CHUNKS`).
 - **a-tree-biome-outside-the-forest-tags-is-a-candidate** / **only-biomes-that-grow-trees-are-candidates**
   — a biome is a candidate when its own worldgen places a tree or a fallen tree, not when it is
   tagged forest, taiga, jungle or savanna. Cherry grove, mangrove swamp, meadow and plains are
   outside those tags and must be candidates. Every biome in the tags must still be one, and desert,
   beach, stony shore and the void must not. Oceans are candidates too: vanilla gives them the odd
-  tree on an island.
+  tree on an island. That is why the search has a budget.
 
 The real paths need real worlds, so they are client GameTests:
 
@@ -421,13 +425,16 @@ The real paths need real worlds, so they are client GameTests:
   wood near spawn, but the Medium border reaches trees, so the start must be kept rather than moved.
   **fresh-land-has-trees-with-nothing-bought** force-loads a plain `minecraft:forest` six thousand
   blocks out and counts its logs.
-- `StartingWoodClientTest` uses the harness's own superflat world, which has no trees and no wooded
-  biome to move to. **a-start-with-no-trees-in-reach-is-left-as-generated** starts a run there and
-  scans every column inside the border: the spawn has not moved and there is not one log.
+- `StartingWoodClientTest` uses the harness's own superflat world, which has no trees. Its biome is
+  plains, which can grow a tree, so every cell in reach is a candidate and none has one — the worst
+  case for the search. **a-start-with-no-trees-in-reach-is-left-as-generated** starts a run there:
+  the search must have looked at exactly its budget of chunks and stopped, and a scan of every
+  column inside the border finds the spawn unmoved and not one log. It logs how long the run start
+  took.
 
 | A fresh forest, nothing bought | Seed 11's run, moved to trees | Superflat, left as generated |
 | ------------------------------ | ----------------------------- | ---------------------------- |
-| ![a forest full of trees](images/gametest-fresh-forest-trees-vanilla.png) | ![badlands edge with a wooded plain beside it](images/gametest-run-spawn-moved-to-trees.png) | ![flat grass, no tree anywhere](images/gametest-flat-world-start-left-as-generated.png) |
+| ![a forest full of trees](images/gametest-fresh-forest-trees-vanilla.png) | ![badlands, with a tree on the hilltop the start moved to](images/gametest-run-spawn-moved-to-trees.png) | ![flat grass, no tree anywhere](images/gametest-flat-world-start-left-as-generated.png) |
 
 #### The animal unlocks
 

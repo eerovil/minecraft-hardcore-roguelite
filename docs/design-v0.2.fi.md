@@ -98,8 +98,10 @@ paikka. Kelvollinen tarkoittaa vähintään kolmea saavutettavaa `#minecraft:log
 sisällä (työpöytä ja puuhakku):
 
 1. Jos alkuperäinen spawn on kelvollinen, siihen ei kosketa.
-2. Muuten lähimmät metsäiset biomit haetaan biomikartasta (kuten `locate biome`), enintään 512
-   blokin päästä. Spawn ja border siirretään ensimmäiseen, jonka todellinen maasto on kelvollinen.
+2. Muuten lähimmät biomit, joihin voi kasvaa puita, haetaan biomikartasta (kuten `locate biome`),
+   enintään 512 blokin päästä. Spawn ja border siirretään ensimmäiseen, jonka todellinen maasto on
+   kelvollinen. Haku generoi enintään 1 089 chunkkia, jottei esimerkiksi meren keskeltä alkava ajo
+   generoi koko ympäristöään.
 3. Jos sellaista ei löydy (esim. superflat), aloitus jätetään ennalleen.
 
 Maailmaa ei koskaan muokata: aavikkoon tai jäätikölle ei istuteta puuta, joka ei sinne kuulu. Seediä

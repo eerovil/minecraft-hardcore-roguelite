@@ -152,7 +152,7 @@ public final class TreeGameTest {
 		BlockPos chosen = StartingWood.firstViable(candidates, candidate -> {
 			tried.add(candidate);
 			return tried.size() == 10 ? candidate : null;
-		});
+		}, () -> false);
 
 		helper.assertValueEqual(chosen, candidates.get(9), "the candidate chosen after nine that failed");
 		helper.assertValueEqual(tried, candidates.subList(0, 10), "the candidates tried, in order");
@@ -161,8 +161,8 @@ public final class TreeGameTest {
 
 	/**
 	 * A candidate right next to one that failed is still tried, and can be the one chosen. Each
-	 * candidate looks only at the land around it, so a neighbour 64 blocks off each way covers
-	 * mostly new ground — skipping it as "too close" would miss trees that are really there.
+	 * candidate looks only at its own cell, so a neighbour's land is land nobody has looked at —
+	 * skipping it as "too close" would miss trees that are really there.
 	 */
 	@GameTest
 	public void aCandidateNextToAFailedOneIsStillTried(GameTestHelper helper) {
@@ -173,7 +173,7 @@ public final class TreeGameTest {
 		BlockPos chosen = StartingWood.firstViable(java.util.List.of(failed, neighbour), candidate -> {
 			tried.add(candidate);
 			return candidate.equals(neighbour) ? candidate : null;
-		});
+		}, () -> false);
 
 		helper.assertValueEqual(chosen, neighbour, "the candidate chosen after its neighbour failed");
 		helper.assertValueEqual(tried, java.util.List.of(failed, neighbour), "the candidates tried, in order");
@@ -245,10 +245,33 @@ public final class TreeGameTest {
 		BlockPos chosen = StartingWood.firstViable(candidates, candidate -> {
 			tried.add(candidate);
 			return null;
-		});
+		}, () -> false);
 
 		helper.assertTrue(chosen == null, "nothing may be chosen when no candidate has trees, and " + chosen + " was");
 		helper.assertValueEqual(tried, candidates, "the candidates tried before giving up");
+		helper.succeed();
+	}
+
+	/**
+	 * The search stops once it has spent its budget, even with candidates left and none viable. The
+	 * budget is what keeps a start at sea from generating the whole ocean; see {@link
+	 * fi.vilpponen.mhr.gametest.client.StartingWoodClientTest} for the same limit on real land.
+	 */
+	@GameTest
+	public void theSearchStopsWhenItsBudgetIsSpent(GameTestHelper helper) {
+		java.util.List<BlockPos> candidates = new java.util.ArrayList<>();
+		for (int i = 0; i < 10; i++) {
+			candidates.add(new BlockPos(i * 32, 64, 0));
+		}
+		java.util.List<BlockPos> tried = new java.util.ArrayList<>();
+
+		BlockPos chosen = StartingWood.firstViable(candidates, candidate -> {
+			tried.add(candidate);
+			return null;
+		}, () -> tried.size() >= 3);
+
+		helper.assertTrue(chosen == null, "nothing may be chosen once the budget is spent, and " + chosen + " was");
+		helper.assertValueEqual(tried, candidates.subList(0, 3), "the candidates tried before the budget ran out");
 		helper.succeed();
 	}
 

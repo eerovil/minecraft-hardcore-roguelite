@@ -9,6 +9,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -79,18 +80,33 @@ public final class StartingWood {
 	 */
 	static final int MOVE_RADIUS = 512;
 
-	/** How far apart the biome map is sampled, in blocks. */
-	private static final int BIOME_STEP = 32;
+	/**
+	 * How far apart the biome map is sampled, in blocks. Each sample stands for the square cell
+	 * around it, two chunks by two, and a candidate's wood is counted in its own cell only. The
+	 * cells tile the land without overlapping, so no candidate pays for land another one already
+	 * looked at, and none is skipped for being near one that failed.
+	 */
+	static final int CELL = 32;
 
-	/** How far around a candidate its wood is counted before the spawn is moved to it, in blocks. */
-	private static final int GROVE_RADIUS = 32;
+	/**
+	 * The most chunks the search for somewhere else to start may generate, all candidates together.
+	 * Every biome that can grow a tree is a candidate, and an ocean or a plain can grow one, so a
+	 * start at sea or on open grassland can have a candidate at nearly every cell in reach — about
+	 * 800 of them, 3,200 chunks. The search goes nearest first and stops here, so the worst run start
+	 * costs about as much as the first look inside a Medium border, not several times that.
+	 */
+	public static final int CANDIDATE_BUDGET_CHUNKS = 33 * 33;
+
+	/** How far apart the biome map is read inside a cell, in blocks: four by four samples a cell. */
+	private static final int CELL_SAMPLE = 8;
 
 	/**
 	 * What {@link #ensure} did. {@code log} is a log it counted, {@code spawn} where the run's spawn
 	 * ended up, and {@code from} where it was before — the same unless the outcome is
-	 * {@link Outcome#MOVED}.
+	 * {@link Outcome#MOVED}. {@code searchedChunks} is how many chunks the search for somewhere else
+	 * to start looked at, never more than {@link #CANDIDATE_BUDGET_CHUNKS}.
 	 */
-	public record Result(Outcome outcome, BlockPos log, BlockPos spawn, BlockPos from) {
+	public record Result(Outcome outcome, BlockPos log, BlockPos spawn, BlockPos from, int searchedChunks) {
 	}
 
 	public enum Outcome {
@@ -122,7 +138,7 @@ public final class StartingWood {
 		BlockPos spawn = spawnOf(server);
 		Result result;
 		if (overworld.getWorldBorder().getSize() >= WorldBorder.MAX_SIZE) {
-			result = new Result(Outcome.UNBOUNDED, null, spawn, spawn);
+			result = new Result(Outcome.UNBOUNDED, null, spawn, spawn, 0);
 		} else {
 			result = ensureBounded(server, overworld, spawn);
 		}
@@ -131,8 +147,9 @@ public final class StartingWood {
 			case FOUND -> HardcoreRoguelite.LOGGER.info("Starting border already has wood, e.g. at {}",
 					describe(result.log()));
 			case MOVED -> HardcoreRoguelite.LOGGER.info(
-					"Not enough wood inside the starting border, so the run's spawn moved from {} to {}, next to trees at {}",
-					describe(spawn), describe(result.spawn()), describe(result.log()));
+					"Not enough wood inside the starting border, so the run's spawn moved from {} to {}, next to trees at {}"
+							+ " ({} chunks searched)",
+					describe(spawn), describe(result.spawn()), describe(result.log()), result.searchedChunks());
 			case NONE -> HardcoreRoguelite.LOGGER.warn(
 					"Not enough wood inside the starting border, and no wooded land within {} blocks of {} has"
 							+ " enough either. The start is left as it was.",
@@ -149,12 +166,12 @@ public final class StartingWood {
 		Area border = reachable(overworld);
 		List<BlockPos> here = countLogs(overworld, border, spawn, VIABLE_LOGS, MAX_SCAN_CHUNKS);
 		if (here.size() >= VIABLE_LOGS) {
-			return new Result(Outcome.FOUND, here.get(0), spawn, spawn);
+			return new Result(Outcome.FOUND, here.get(0), spawn, spawn, 0);
 		}
 
-		LogCache logs = new LogCache(overworld);
+		LogCache logs = new LogCache(overworld, CANDIDATE_BUDGET_CHUNKS);
 		Result natural = firstViable(woodedCandidates(overworld, spawn),
-				candidate -> tryCandidate(server, overworld, logs, border, spawn, candidate));
+				candidate -> tryCandidate(server, overworld, logs, border, spawn, candidate), logs::spent);
 		if (natural != null) {
 			return natural;
 		}
@@ -162,21 +179,27 @@ public final class StartingWood {
 		if (!spawnOf(server).equals(spawn)) {
 			moveSpawn(server, spawn);
 		}
-		return new Result(Outcome.NONE, null, spawn, spawn);
+		if (logs.spent()) {
+			HardcoreRoguelite.LOGGER.warn("The search for trees near {} stopped after {} chunks, its limit",
+					describe(spawn), logs.scanned());
+		}
+		return new Result(Outcome.NONE, null, spawn, spawn, logs.scanned());
 	}
 
 	/**
 	 * Try the candidates in order until one works, and answer with what it gave, or null once they
 	 * have all been tried.
 	 *
-	 * <p>Every candidate is tried, however close it is to one that failed: each only looks at the
-	 * land right around it, so a neighbour can hold trees its neighbour's patch never reached. The
-	 * list is bounded — it only holds spots within {@link #MOVE_RADIUS} — so trying all of it is
-	 * bounded too, and land two candidates share is only scanned once (see {@link LogCache}). Public
-	 * so a GameTest can drive it with a made-up list rather than a world.
+	 * <p>Every candidate is tried, however close it is to one that failed: each only looks at its
+	 * own cell, so a neighbour can hold trees its neighbour's cell does not. What ends the search
+	 * early is {@code stop}: the search has spent its chunk budget. Public so a GameTest can drive
+	 * it with a made-up list rather than a world.
 	 */
-	public static <R> R firstViable(List<BlockPos> candidates, Function<BlockPos, R> attempt) {
+	public static <R> R firstViable(List<BlockPos> candidates, Function<BlockPos, R> attempt, BooleanSupplier stop) {
 		for (BlockPos candidate : candidates) {
+			if (stop.getAsBoolean()) {
+				return null;
+			}
 			R result = attempt.apply(candidate);
 			if (result != null) {
 				return result;
@@ -189,26 +212,29 @@ public final class StartingWood {
 	private static Result tryCandidate(MinecraftServer server, ServerLevel overworld, LogCache logs,
 			Area border, BlockPos spawn, BlockPos candidate) {
 		// A biome that grows trees is a promise of trees, not a tree, so its land is counted before
-		// anything moves. Only this little patch is generated to find out.
-		Area grove = new Area(candidate.getX() - GROVE_RADIUS, candidate.getZ() - GROVE_RADIUS,
-				candidate.getX() + GROVE_RADIUS, candidate.getZ() + GROVE_RADIUS);
+		// anything moves. Only this one cell is generated to find out.
+		Area cell = cellOf(candidate);
 		if (border.contains(candidate)) {
 			// Inside the border already, past where the first look stopped: trees here mean the
 			// start is fine as it is, and moving would only take the player away from them.
-			List<BlockPos> inside = logs.in(border.intersect(grove), VIABLE_LOGS);
-			return inside.size() >= VIABLE_LOGS ? new Result(Outcome.FOUND, inside.get(0), spawn, spawn) : null;
+			List<BlockPos> inside = logs.in(border.intersect(cell), VIABLE_LOGS);
+			return inside.size() >= VIABLE_LOGS
+					? new Result(Outcome.FOUND, inside.get(0), spawn, spawn, logs.scanned())
+					: null;
 		}
-		List<BlockPos> groveLogs = logs.in(grove, VIABLE_LOGS);
-		if (groveLogs.size() < VIABLE_LOGS) {
+		List<BlockPos> cellLogs = logs.in(cell, VIABLE_LOGS);
+		if (cellLogs.size() < VIABLE_LOGS) {
 			return null;
 		}
 
-		BlockPos moved = standingSpotNear(overworld, groveLogs.get(0));
+		BlockPos moved = standingSpotNear(overworld, cellLogs.get(0));
 		moveSpawn(server, moved);
 		// Counted again inside the border the move produced, rather than assumed: the border has
 		// to hold the trees, not just the spawn.
 		List<BlockPos> inside = countLogs(overworld, reachable(overworld), moved, VIABLE_LOGS, MAX_SCAN_CHUNKS);
-		return inside.size() >= VIABLE_LOGS ? new Result(Outcome.MOVED, inside.get(0), moved, spawn) : null;
+		return inside.size() >= VIABLE_LOGS
+				? new Result(Outcome.MOVED, inside.get(0), moved, spawn, logs.scanned())
+				: null;
 	}
 
 	private static void moveSpawn(MinecraftServer server, BlockPos to) {
@@ -237,7 +263,8 @@ public final class StartingWood {
 	}
 
 	/**
-	 * Every spot within {@link #MOVE_RADIUS} of spawn whose biome grows trees, nearest first.
+	 * The middle of every cell within {@link #MOVE_RADIUS} of spawn with a biome in it that grows
+	 * trees, nearest first. The cells are lined up with chunks, so each is exactly four of them.
 	 *
 	 * <p>Read from the biome map alone, the way {@code /locate biome} reads it, so nothing is
 	 * generated to make the list. Ties are broken by position, so the order depends on the world and
@@ -247,16 +274,16 @@ public final class StartingWood {
 		int quartY = QuartPos.fromBlock(level.getSeaLevel());
 		Map<Biome, Boolean> grows = new IdentityHashMap<>();
 		List<BlockPos> candidates = new ArrayList<>();
-		for (int dx = -MOVE_RADIUS; dx <= MOVE_RADIUS; dx += BIOME_STEP) {
-			for (int dz = -MOVE_RADIUS; dz <= MOVE_RADIUS; dz += BIOME_STEP) {
+		int baseX = Math.floorDiv(spawn.getX(), CELL) * CELL + CELL / 2;
+		int baseZ = Math.floorDiv(spawn.getZ(), CELL) * CELL + CELL / 2;
+		for (int dx = -MOVE_RADIUS; dx <= MOVE_RADIUS; dx += CELL) {
+			for (int dz = -MOVE_RADIUS; dz <= MOVE_RADIUS; dz += CELL) {
 				if (dx * dx + dz * dz > MOVE_RADIUS * MOVE_RADIUS) {
 					continue;
 				}
-				int x = spawn.getX() + dx;
-				int z = spawn.getZ() + dz;
-				Holder<Biome> biome = level.getUncachedNoiseBiome(QuartPos.fromBlock(x), quartY, QuartPos.fromBlock(z));
-				if (grows.computeIfAbsent(biome.value(), StartingWood::growsTrees)) {
-					candidates.add(new BlockPos(x, level.getSeaLevel(), z));
+				BlockPos centre = new BlockPos(baseX + dx, level.getSeaLevel(), baseZ + dz);
+				if (cellGrowsTrees(level, cellOf(centre), quartY, grows)) {
+					candidates.add(centre);
 				}
 			}
 		}
@@ -274,10 +301,8 @@ public final class StartingWood {
 	 * grove, mangrove swamp, plains with its odd oak, one a datapack adds — is ruled out before its
 	 * land is counted. Growing some trees is not the same as having enough of them where it matters,
 	 * which is why a candidate's real logs are still counted before the spawn moves. Even the ocean
-	 * says yes — it can grow the odd tree on an island — so a start far out at sea may generate a
-	 * good deal of the land in reach before it finds a forest. That is bounded by
-	 * {@link #MOVE_RADIUS}, happens once per run, and is the price of never ruling a biome out
-	 * unseen. Public so a GameTest can ask it about biomes by name.
+	 * says yes — it can grow the odd tree on an island — which is what
+	 * {@link #CANDIDATE_BUDGET_CHUNKS} is for. Public so a GameTest can ask it about biomes by name.
 	 */
 	public static boolean growsTrees(Biome biome) {
 		Set<Feature> seen = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -300,6 +325,30 @@ public final class StartingWood {
 			return true;
 		}
 		return feature.getSubFeatures().anyMatch(sub -> placesTrees(sub, seen));
+	}
+
+	/**
+	 * Whether any part of the cell is a biome that grows trees, from a biome sample every
+	 * {@link #CELL_SAMPLE} blocks across it. Not only its middle: the edge of a wooded plain can
+	 * reach into a cell whose middle is badlands, and its trees are as good as any.
+	 */
+	private static boolean cellGrowsTrees(ServerLevel level, Area cell, int quartY, Map<Biome, Boolean> grows) {
+		for (int x = cell.minX() + CELL_SAMPLE / 2; x <= cell.maxX(); x += CELL_SAMPLE) {
+			for (int z = cell.minZ() + CELL_SAMPLE / 2; z <= cell.maxZ(); z += CELL_SAMPLE) {
+				Holder<Biome> biome = level.getUncachedNoiseBiome(QuartPos.fromBlock(x), quartY, QuartPos.fromBlock(z));
+				if (grows.computeIfAbsent(biome.value(), StartingWood::growsTrees)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/** The cell a candidate stands for: the {@link #CELL}-wide square it is the middle of. */
+	private static Area cellOf(BlockPos candidate) {
+		int minX = candidate.getX() - CELL / 2;
+		int minZ = candidate.getZ() - CELL / 2;
+		return new Area(minX, minZ, minX + CELL - 1, minZ + CELL - 1);
 	}
 
 	private static int horizontalDistance(BlockPos a, BlockPos b) {
@@ -337,25 +386,43 @@ public final class StartingWood {
 	}
 
 	/**
-	 * The logs of each chunk the candidate search has looked at, counted once. Neighbouring
-	 * candidates' patches overlap, and without this every one of them would scan the shared land
-	 * again.
+	 * The logs of each chunk the candidate search has looked at, counted once, and how many chunks
+	 * that has been. Once {@code budget} chunks have been looked at, no new one is: the search is
+	 * {@link #spent} and ends.
 	 */
 	private static final class LogCache {
 		private final ServerLevel level;
+		private final int budget;
 		private final Map<Long, List<BlockPos>> byChunk = new HashMap<>();
 
-		LogCache(ServerLevel level) {
+		LogCache(ServerLevel level, int budget) {
 			this.level = level;
+			this.budget = budget;
 		}
 
-		/** Up to {@code want} logs inside {@code area}. */
+		int scanned() {
+			return byChunk.size();
+		}
+
+		boolean spent() {
+			return byChunk.size() >= budget;
+		}
+
+		/** Up to {@code want} logs inside {@code area}, from as many of its chunks as the budget allows. */
 		List<BlockPos> in(Area area, int want) {
 			List<BlockPos> found = new ArrayList<>();
 			for (int chunkX = area.minX() >> 4; chunkX <= area.maxX() >> 4; chunkX++) {
 				for (int chunkZ = area.minZ() >> 4; chunkZ <= area.maxZ() >> 4; chunkZ++) {
 					ChunkPos chunk = new ChunkPos(chunkX, chunkZ);
-					for (BlockPos log : byChunk.computeIfAbsent(chunk.pack(), key -> scan(chunk))) {
+					List<BlockPos> logs = byChunk.get(chunk.pack());
+					if (logs == null) {
+						if (spent()) {
+							return found;
+						}
+						logs = scan(chunk);
+						byChunk.put(chunk.pack(), logs);
+					}
+					for (BlockPos log : logs) {
 						if (area.contains(log)) {
 							found.add(log);
 							if (found.size() >= want) {

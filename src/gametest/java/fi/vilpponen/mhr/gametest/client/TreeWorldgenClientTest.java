@@ -128,6 +128,8 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 
 			StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
 			check(result != null, "starting a run on seed " + seed + " did not run the starting-wood check");
+			check(result.searchedChunks() <= StartingWood.CANDIDATE_BUDGET_CHUNKS, "the run on seed " + seed
+					+ " searched " + result.searchedChunks() + " chunks, over the budget");
 			outcomes.add(seed + "=" + result.outcome());
 			LOGGER.info("Run on seed {}: starting wood {} at {}, spawn {} (was {})", seed, result.outcome(),
 					result.log(), result.spawn(), result.from());
