@@ -57,7 +57,10 @@ public class ShopPurchaseGameTest {
 	private static final Logger LOGGER = LoggerFactory.getLogger("mhr-gametest");
 
 	/** A plain on/off unlock whose effect is worldgen, so buying it here changes nothing alive. */
-	private static final String TREES = "world.trees";
+	private static final String COAL = "world.ore.coal";
+
+	/** Trees used to be sold. They are vanilla from the first run now, and nothing sells them. */
+	private static final String RETIRED_TREES = "world.trees";
 
 	/** The one repeatable unlock in the shipped catalogue. */
 	private static final String ENCHANT = "player.craft.enchant";
@@ -90,6 +93,8 @@ public class ShopPurchaseGameTest {
 					this::buyingSomethingAlreadyOwnedIsRefusedAndFree);
 			scenario(failures, "nothing-sells-an-id-the-catalogue-does-not-have",
 					this::nothingSellsAnIdTheCatalogueDoesNotHave);
+			scenario(failures, "trees-are-not-for-sale",
+					this::treesAreNotForSale);
 			scenario(failures, "a-repeatable-unlock-climbs-to-its-ceiling-and-stops",
 					this::aRepeatableUnlockClimbsToItsCeilingAndStops);
 			scenario(failures, "a-purchase-is-still-there-after-the-snapshot-is-read-again",
@@ -137,29 +142,29 @@ public class ShopPurchaseGameTest {
 	private void withNothingToSpendNothingCanBeBought() {
 		reset();
 
-		Purchase.Result result = Purchase.buy(TREES);
+		Purchase.Result result = Purchase.buy(COAL);
 
 		check(result.outcome() == Purchase.Outcome.TOO_EXPENSIVE,
-				"with nothing to spend, buying " + TREES + " should be refused as too expensive, and it was "
+				"with nothing to spend, buying " + COAL + " should be refused as too expensive, and it was "
 						+ result.outcome());
-		check(!owns(TREES), TREES + " must not be owned after a refused purchase");
+		check(!owns(COAL), COAL + " must not be owned after a refused purchase");
 		check(balance() == 0, "a refused purchase must leave the purse alone, and it holds " + balance());
 	}
 
 	/** The conservation check: the price leaves the purse exactly once and one level arrives. */
 	private void aPurchaseTakesThePriceOnceAndGrantsOneLevel() {
 		reset();
-		int price = priceOf(TREES);
+		int price = priceOf(COAL);
 		// Deliberately more than the price, so "the purse was emptied" cannot pass for "the price was
 		// taken" — those are the same number when you start with exactly enough.
 		int before = price + 7;
 		Wallet.get().set(before);
 
-		Purchase.Result result = Purchase.buy(TREES);
+		Purchase.Result result = Purchase.buy(COAL);
 
-		check(result.bought(), "with " + before + " to spend, " + TREES + " at " + price
+		check(result.bought(), "with " + before + " to spend, " + COAL + " at " + price
 				+ " should have been bought, and the answer was " + result.outcome());
-		check(level(TREES) == 1, "one purchase must grant exactly one level, and the level is " + level(TREES));
+		check(level(COAL) == 1, "one purchase must grant exactly one level, and the level is " + level(COAL));
 		check(balance() == before - price, "one purchase must take exactly " + price + ": the purse went from "
 				+ before + " to " + balance());
 		check(result.balance() == balance(),
@@ -170,14 +175,14 @@ public class ShopPurchaseGameTest {
 	/** One short of the price is a refusal, and a refusal costs nothing. */
 	private void aPennyShortBuysNothingAndCostsNothing() {
 		reset();
-		int price = priceOf(TREES);
+		int price = priceOf(COAL);
 		Wallet.get().set(price - 1);
 
-		Purchase.Result result = Purchase.buy(TREES);
+		Purchase.Result result = Purchase.buy(COAL);
 
 		check(result.outcome() == Purchase.Outcome.TOO_EXPENSIVE,
 				"one short of " + price + " should be refused, and the answer was " + result.outcome());
-		check(!owns(TREES), "a refused purchase must not grant the unlock");
+		check(!owns(COAL), "a refused purchase must not grant the unlock");
 		check(balance() == price - 1,
 				"a refused purchase must take nothing, and the purse went from " + (price - 1) + " to " + balance());
 	}
@@ -185,17 +190,17 @@ public class ShopPurchaseGameTest {
 	/** Clicking something you already own does not quietly charge you for it again. */
 	private void buyingSomethingAlreadyOwnedIsRefusedAndFree() {
 		reset();
-		int price = priceOf(TREES);
+		int price = priceOf(COAL);
 		Wallet.get().set(price * 3);
-		check(Purchase.buy(TREES).bought(), "setup: the first purchase should succeed");
+		check(Purchase.buy(COAL).bought(), "setup: the first purchase should succeed");
 		int after = balance();
 
-		Purchase.Result second = Purchase.buy(TREES);
+		Purchase.Result second = Purchase.buy(COAL);
 
 		check(second.outcome() == Purchase.Outcome.ALREADY_MAXED,
 				"buying an owned unlock again should be refused as already owned, and it was " + second.outcome());
-		check(level(TREES) == 1, "a refused second purchase must not raise the level past 1, and it is "
-				+ level(TREES));
+		check(level(COAL) == 1, "a refused second purchase must not raise the level past 1, and it is "
+				+ level(COAL));
 		check(balance() == after,
 				"a refused second purchase must not charge again: the purse went from " + after + " to " + balance());
 	}
@@ -213,6 +218,26 @@ public class ShopPurchaseGameTest {
 		check(balance() == 10_000, "refusing an unknown id must cost nothing, and the purse holds " + balance());
 		check(!UnlockState.get().isOwned("world.ore.unobtainium"),
 				"refusing an unknown id must not write it into the save file");
+	}
+
+	/**
+	 * Trees are vanilla from the first run, so the catalogue has nothing to sell for them — not a
+	 * free entry, not a hidden one — and asking to buy the old id is refused like any unknown one.
+	 */
+	private void treesAreNotForSale() {
+		reset();
+		Wallet.get().set(10_000);
+
+		check(!Catalogue.sells(RETIRED_TREES), "the catalogue must not sell " + RETIRED_TREES + " any more");
+		check(Catalogue.offers().stream().noneMatch(offer -> offer.id().contains("tree")),
+				"nothing in the catalogue may sell trees, and it has "
+						+ Catalogue.offers().stream().map(Offer::id).filter(id -> id.contains("tree")).toList());
+
+		Purchase.Result result = Purchase.buy(RETIRED_TREES);
+
+		check(result.outcome() == Purchase.Outcome.NOT_FOR_SALE,
+				"buying " + RETIRED_TREES + " should be refused as not for sale, and it was " + result.outcome());
+		check(balance() == 10_000, "refusing it must cost nothing, and the purse holds " + balance());
 	}
 
 	/**
@@ -256,13 +281,13 @@ public class ShopPurchaseGameTest {
 	 */
 	private void aPurchaseIsStillThereAfterTheSnapshotIsReadAgain() {
 		reset();
-		int price = priceOf(TREES);
+		int price = priceOf(COAL);
 		Wallet.get().set(price + 5);
-		check(Purchase.buy(TREES).bought(), "setup: the purchase should succeed");
+		check(Purchase.buy(COAL).bought(), "setup: the purchase should succeed");
 
 		Progress.reloadFromFile();
 
-		check(owns(TREES), TREES + " was bought and must still be owned after the snapshot is read again");
+		check(owns(COAL), COAL + " was bought and must still be owned after the snapshot is read again");
 		check(balance() == 5,
 				"the currency spent must have reached the disk in the same file, and after re-reading the"
 						+ " purse holds " + balance());
@@ -274,26 +299,26 @@ public class ShopPurchaseGameTest {
 	 */
 	private void thePriceChargedIsTheOneInTheBalanceData(GameTestHelper helper) {
 		reset();
-		int original = priceOf(TREES);
+		int original = priceOf(COAL);
 		int retuned = original + 41;
-		writeOverride(helper, "{\"unlocks\": {\"" + TREES + "\": {\"price\": " + retuned + "}}}");
+		writeOverride(helper, "{\"unlocks\": {\"" + COAL + "\": {\"price\": " + retuned + "}}}");
 
-		check(priceOf(TREES) == retuned,
-				"'mhr reload' should have picked the new price up, and the shop still offers " + priceOf(TREES));
+		check(priceOf(COAL) == retuned,
+				"'mhr reload' should have picked the new price up, and the shop still offers " + priceOf(COAL));
 
 		Wallet.get().set(original);
-		Purchase.Result tooLittle = Purchase.buy(TREES);
+		Purchase.Result tooLittle = Purchase.buy(COAL);
 		check(tooLittle.outcome() == Purchase.Outcome.TOO_EXPENSIVE,
 				"the old price must no longer be enough, and the answer was " + tooLittle.outcome());
 
 		Wallet.get().set(retuned);
-		Purchase.Result enough = Purchase.buy(TREES);
+		Purchase.Result enough = Purchase.buy(COAL);
 		check(enough.bought(), "the new price should be enough, and the answer was " + enough.outcome());
 		check(balance() == 0, "the new price should have been charged in full, and the purse holds " + balance());
 
 		removeOverride(helper);
-		check(priceOf(TREES) == original,
-				"taking the override away should restore the bundled price, and the shop offers " + priceOf(TREES));
+		check(priceOf(COAL) == original,
+				"taking the override away should restore the bundled price, and the shop offers " + priceOf(COAL));
 	}
 
 	/**
@@ -302,14 +327,14 @@ public class ShopPurchaseGameTest {
 	 */
 	private void bothHalvesOfAPurchaseReachTheDiskTogether() {
 		reset();
-		int price = priceOf(TREES);
+		int price = priceOf(COAL);
 		Wallet.get().set(price + 11);
 
-		check(Purchase.buy(TREES).bought(), "setup: the purchase should succeed");
+		check(Purchase.buy(COAL).bought(), "setup: the purchase should succeed");
 
 		// Read from the disk rather than from memory: memory would agree even if nothing was written.
 		Progress.reloadFromFile();
-		check(owns(TREES), TREES + " must be owned in the file, and it is not");
+		check(owns(COAL), COAL + " must be owned in the file, and it is not");
 		check(balance() == 11,
 				"and the currency must have moved in the same file: it holds " + balance() + " rather than 11");
 	}
@@ -320,17 +345,17 @@ public class ShopPurchaseGameTest {
 	 */
 	private void aPurchaseTheDiskWillNotTakeChangesNothingAtAll() {
 		reset();
-		int price = priceOf(TREES);
+		int price = priceOf(COAL);
 		Wallet.get().set(price + 4);
 		block(Progress.file());
 
 		try {
-			Purchase.Result result = Purchase.buy(TREES);
+			Purchase.Result result = Purchase.buy(COAL);
 
 			check(result.outcome() == Purchase.Outcome.NOT_SAVED,
 					"a purchase that cannot be written should be refused as unsaveable, and the answer was "
 							+ result.outcome());
-			check(!owns(TREES), "the running game must not think it owns something it could not write");
+			check(!owns(COAL), "the running game must not think it owns something it could not write");
 			check(balance() == price + 4,
 					"and must not think it paid: the purse holds " + balance() + " rather than " + (price + 4));
 		} finally {
@@ -339,8 +364,8 @@ public class ShopPurchaseGameTest {
 
 		// The same purchase goes through once the disk will take it, so the refusal was the write
 		// failing rather than anything else about the purchase.
-		check(Purchase.buy(TREES).bought(), "with the disk working again the same purchase should succeed");
-		check(owns(TREES) && balance() == 4, "and it should charge exactly once");
+		check(Purchase.buy(COAL).bought(), "with the disk working again the same purchase should succeed");
+		check(owns(COAL) && balance() == 4, "and it should charge exactly once");
 	}
 
 	/**
@@ -349,10 +374,10 @@ public class ShopPurchaseGameTest {
 	 */
 	private void aRefusedWriteLeavesThePreviousProgressionWhole() {
 		reset();
-		int treesPrice = priceOf(TREES);
+		int coalPrice = priceOf(COAL);
 		int villagePrice = priceOf(VILLAGE);
-		Wallet.get().set(treesPrice + villagePrice + 7);
-		check(Purchase.buy(TREES).bought(), "setup: the first purchase should succeed");
+		Wallet.get().set(coalPrice + villagePrice + 7);
+		check(Purchase.buy(COAL).bought(), "setup: the first purchase should succeed");
 		int after = balance();
 
 		// Not a directory this time: the snapshot has to stay readable, because the point is what is
@@ -368,7 +393,7 @@ public class ShopPurchaseGameTest {
 		}
 
 		Progress.reloadFromFile();
-		check(owns(TREES), "the purchase that did succeed must still be in the file, and " + TREES
+		check(owns(COAL), "the purchase that did succeed must still be in the file, and " + COAL
 				+ " is not owned");
 		check(!owns(VILLAGE), "the purchase that did not must not be, and " + VILLAGE + " is owned");
 		check(balance() == after,
@@ -454,22 +479,22 @@ public class ShopPurchaseGameTest {
 
 		Path installation = FabricLoader.getInstance().getConfigDir()
 				.resolve("hardcore-roguelite-progress.json");
-		write(installation, "{\"currency\": 999, \"unlocks\": {\"" + TREES + "\": 1},"
+		write(installation, "{\"currency\": 999, \"unlocks\": {\"" + COAL + "\": 1},"
 				+ " \"paidAdvancements\": {\"run\": " + RUN + ", \"entries\": [\"" + MILESTONE + "\"]}}");
 		try {
 			Progress.reloadFromFile();
-			check(balance() == 0 && !owns(TREES) && !Wallet.get().hasEarned(RUN, MILESTONE),
+			check(balance() == 0 && !owns(COAL) && !Wallet.get().hasEarned(RUN, MILESTONE),
 					"a profile in the installation's config directory must not be read, and this save"
 							+ " came back with " + balance() + " currency"
-							+ (owns(TREES) ? " and " + TREES : ""));
+							+ (owns(COAL) ? " and " + COAL : ""));
 
 			// And the save's own file is still the one that answers, or the check above would pass
 			// just as well with nothing read from anywhere.
-			Wallet.get().set(priceOf(TREES));
-			Purchase.Result bought = Purchase.buy(TREES);
+			Wallet.get().set(priceOf(COAL));
+			Purchase.Result bought = Purchase.buy(COAL);
 			check(bought.bought(), "setup: the purchase should have gone through, and it was " + bought.outcome());
 			Progress.reloadFromFile();
-			check(owns(TREES), "a purchase must be read back from the save's own snapshot");
+			check(owns(COAL), "a purchase must be read back from the save's own snapshot");
 			check(read(installation).contains("999"),
 					"and must not have been written into the installation's config directory");
 		} finally {
@@ -486,7 +511,7 @@ public class ShopPurchaseGameTest {
 	 */
 	private void anUnreadableSnapshotStopsRatherThanStartingEmpty() {
 		startFromNothing();
-		String damaged = "{\"currency\": 100, \"unlocks\": {\"" + TREES;
+		String damaged = "{\"currency\": 100, \"unlocks\": {\"" + COAL;
 		write(Progress.file(), damaged);
 
 		check(refusesToLoad(), "an unreadable snapshot must refuse to load, and it loaded");
@@ -506,7 +531,7 @@ public class ShopPurchaseGameTest {
 	 */
 	private void aSnapshotMissingAFieldIsDamagedRatherThanEmpty() {
 		refusesAndKeeps("no unlocks at all", "{\"currency\": 100}");
-		refusesAndKeeps("no currency at all", "{\"unlocks\": {\"" + TREES + "\": 1}}");
+		refusesAndKeeps("no currency at all", "{\"unlocks\": {\"" + COAL + "\": 1}}");
 		refusesAndKeeps("unlocks that are not an object", "{\"currency\": 100, \"unlocks\": []}");
 		refusesAndKeeps("currency that is not a number", "{\"currency\": \"lots\", \"unlocks\": {}}");
 		refusesAndKeeps("a currency that is not whole", "{\"currency\": 1.5, \"unlocks\": {}}");
@@ -514,11 +539,11 @@ public class ShopPurchaseGameTest {
 		// And the shape that is right is still accepted, or the four above would pass just as well
 		// with everything refused.
 		startFromNothing();
-		write(Progress.file(), "{\"currency\": 7, \"unlocks\": {\"" + TREES + "\": 1}}");
+		write(Progress.file(), "{\"currency\": 7, \"unlocks\": {\"" + COAL + "\": 1}}");
 		Progress.reloadFromFile();
-		check(owns(TREES) && balance() == 7,
+		check(owns(COAL) && balance() == 7,
 				"a well-formed snapshot must still load, and it came back with " + balance()
-						+ " and " + TREES + (owns(TREES) ? " owned" : " not owned"));
+						+ " and " + COAL + (owns(COAL) ? " owned" : " not owned"));
 
 		startFromNothing();
 	}

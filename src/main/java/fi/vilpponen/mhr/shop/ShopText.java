@@ -32,7 +32,7 @@ public final class ShopText {
 				"Hardcore Roguelite client mod is required to open the shop.");
 	}
 
-	/** The short name shown under the icon's tooltip, e.g. {@code mhr.shop.unlock.world.trees}. */
+	/** The short name shown under the icon's tooltip, e.g. {@code mhr.shop.unlock.world.village}. */
 	public static String nameKey(String unlockId) {
 		return UNLOCK_PREFIX + unlockId;
 	}

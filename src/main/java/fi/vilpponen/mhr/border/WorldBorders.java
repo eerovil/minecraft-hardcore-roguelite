@@ -6,6 +6,7 @@ import fi.vilpponen.mhr.UnlockState;
 import fi.vilpponen.mhr.core.Balance;
 import fi.vilpponen.mhr.core.BalanceException;
 import fi.vilpponen.mhr.core.BalanceManager;
+import fi.vilpponen.mhr.mixin.MinecraftServerAccessor;
 import fi.vilpponen.mhr.run.RunEvents;
 import fi.vilpponen.mhr.run.RunLifecycle;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -74,7 +75,13 @@ public final class WorldBorders {
 		// A new run is three new dimensions, each with a border of its own that has never been set.
 		// Listening here rather than being called by the lifecycle is what keeps world management
 		// from having to know that borders exist.
-		RunEvents.RUN_STARTED.register((server, overworld, run) -> apply(server));
+		RunEvents.RUN_STARTED.register((server, overworld, run) -> {
+			apply(server);
+			// Straight after the border, because what counts as the starting area is what the
+			// border has just fenced in.
+			// May move the spawn to trees nearby, and the border with it.
+			StartingWood.ensure(server, overworld);
+		});
 
 		// A border tier bought in the shop is the size of the world from that moment on, the same
 		// way the dev command's has always been.
@@ -207,6 +214,12 @@ public final class WorldBorders {
 				apply(level, balance, diameter, spawn);
 			}
 		}
+
+		// The spawn vanilla hands out is the world's own pulled inside the border, and it is only
+		// worked out again once a tick. Everything that runs straight after a run start — the starter
+		// chest, the players arriving — asks for it before that tick comes, so bring it up to date
+		// now or they get the last border's answer.
+		((MinecraftServerAccessor) server).mhr$updateEffectiveRespawnData();
 
 		String size = tierBalance.isUnbounded() ? "no practical limit" : (long) diameter + " blocks across";
 		HardcoreRoguelite.LOGGER.info("World border tier {}: {}, overworld centered on {}, {}",

@@ -5,9 +5,13 @@ import fi.vilpponen.mhr.core.BalanceManager;
 /**
  * Everything the shop can sell that is permanent across runs.
  *
- * <p>Only {@link #TREES}, {@link #VILLAGE}, the ores, the six passive animals, the five equipment
- * slots and {@link #CRAFT_ENCHANT} do anything yet. The rest of the catalogue from the design
- * document (world border, status effects) gets added here as each one is implemented.
+ * <p>Only {@link #VILLAGE}, the ores, the six passive animals, the five equipment slots and
+ * {@link #CRAFT_ENCHANT} do anything yet. The rest of the catalogue from the design document
+ * (world border, status effects) gets added here as each one is implemented.
+ *
+ * <p>Trees used to be here as {@code world.trees}. They are vanilla from the first run now, because
+ * a world with no wood gave the player no way to start. A save that bought it still holds the id,
+ * which is kept like any other unknown id and does nothing.
  *
  * <p>Not everything the shop sells needs a constant here. A constant exists so Java can name one
  * unlock and ask whether it is owned; a starter item has nothing to name, because the whole of it
@@ -30,8 +34,6 @@ import fi.vilpponen.mhr.core.BalanceManager;
  * that can go is a balance number rather than a constant here.
  */
 public enum Unlock {
-	TREES("world.trees"),
-
 	/** Village structures in newly generated land. See {@code fi.vilpponen.mhr.village}. */
 	VILLAGE("world.village"),
 

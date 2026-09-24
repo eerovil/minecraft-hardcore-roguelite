@@ -1,5 +1,8 @@
 package fi.vilpponen.mhr.gametest.client;
 
+import fi.vilpponen.mhr.UnlockState;
+import fi.vilpponen.mhr.border.StartingWood;
+import fi.vilpponen.mhr.run.RunPhase;
 import java.util.ArrayList;
 import java.util.List;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
@@ -21,23 +24,35 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The half of the trees unlock that only real terrain can answer: land generated from scratch comes
- * out with no trees in it, and comes back with trees once the unlock is bought.
+ * Trees on real terrain, with nothing bought: a run starts in a world with vanilla trees in it, and
+ * land generated from scratch has them too.
  *
- * <p>{@link fi.vilpponen.mhr.gametest.TreeUnlockGameTest} covers the fast, targeted half on the
- * plain server. It cannot cover this one, because Fabric's server GameTests run on a superflat
- * world that has no tree worldgen to suppress in the first place. So this test builds a dedicated
- * server on a *normal* overworld — the only lever in the harness that produces one — walks out to a
- * forest nobody has been to, force-loads it, and counts the logs.
+ * <p>{@link fi.vilpponen.mhr.gametest.TreeGameTest} covers the fast, targeted half on the plain
+ * server. It cannot cover this one, because Fabric's server GameTests run on a superflat world that
+ * has no tree worldgen in the first place. So this test builds a dedicated server on a *normal*
+ * overworld — the only lever in the harness that produces one.
  *
- * <p>Two different forests are used, one on each side of the unlock, because worldgen only applies
- * to land generated after the change: scanning the same patch twice would answer "no trees" both
- * times and look exactly like the feature working.
+ * <p>Trees used to be an unlock, and this test used to prove they were missing until bought. They
+ * are vanilla from the first run now, so what it proves is that nothing takes them away.
  *
  * <p>See {@code docs/dev-environment.md} for how to run this.
  */
 public class TreeWorldgenClientTest implements FabricClientGameTest {
 	private static final Logger LOGGER = LoggerFactory.getLogger("mhr-gametest");
+
+	/** The retired unlock that used to gate trees, made sure of as not owned. */
+	private static final String RETIRED_TREES = "world.trees";
+
+	/**
+	 * The seeds runs are started on. Whether a seed starts with trees inside the smallest border is
+	 * up to vanilla, so these were picked by trying seeds 1 to 16: seed 1 has trees inside its first
+	 * border, and seed 11 has none there and a forest a couple of hundred blocks away. Kept to two
+	 * because every run start holds the server still for a moment, and a long list of them in a row
+	 * is enough for the client to time out.
+	 */
+	private static final long FOUND_SEED = 1L;
+	private static final long MOVED_SEED = 11L;
+	private static final long[] RUN_SEEDS = {FOUND_SEED, MOVED_SEED};
 
 	/** How far out from the middle of the patch to generate, in chunks. 5×5 is plenty of forest. */
 	private static final int RADIUS_IN_CHUNKS = 2;
@@ -47,12 +62,10 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 	private static final int SCAN_TO_Y = 150;
 
 	/**
-	 * Where each half of the fresh-chunk check goes looking for its forest. Thousands of blocks out
-	 * and in opposite directions, so neither patch is land the server has already made, and the two
-	 * are nowhere near each other.
+	 * Where the fresh-chunk check goes looking for its forest. Thousands of blocks out, so the patch
+	 * is not land the server has already made.
 	 */
-	private static final BlockPos LOCKED_SEARCH_FROM = new BlockPos(-6000, 64, -6000);
-	private static final BlockPos UNLOCKED_SEARCH_FROM = new BlockPos(6000, 64, 6000);
+	private static final BlockPos SEARCH_FROM = new BlockPos(6000, 64, 6000);
 
 	/** How far the biome search may wander, in blocks. */
 	private static final int SEARCH_RADIUS = 6400;
@@ -67,18 +80,22 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 			try (TestDedicatedServerConnection connection = server.connect()) {
 				connection.waitForChunksRender();
 
-				// A run starts on the tiny border tier, and land outside the border is not the
-				// question being asked here. Widen it before generating anything.
-				server.runCommand("mhr border infinite");
 				server.runCommand("time set noon");
 				server.runCommand("weather clear");
+				// The unlock is gone, so no command takes its id any more. A save that bought it
+				// still could hold it, and it must not matter either way.
+				server.computeOnServer(unused -> UnlockState.get().set(RETIRED_TREES, false));
 
-				scenario(context, "the-world-a-run-starts-in-has-no-trees",
-						() -> theWorldARunStartsInHasNoTrees(context, server, connection));
-				scenario(context, "fresh-land-has-no-trees-while-locked",
-						() -> freshLandHasNoTreesWhileLocked(context, server, connection));
-				scenario(context, "fresh-land-has-trees-once-unlocked",
-						() -> freshLandHasTreesOnceUnlocked(context, server, connection));
+				scenario(context, "a-fresh-run-has-vanilla-trees",
+						() -> aFreshRunHasVanillaTrees(context, server, connection));
+
+				scenario(context, "a-bigger-border-counts-all-of-its-land",
+						() -> aBiggerBorderCountsAllOfItsLand(server));
+
+				// Land far outside the border is the question now, not the run's own start.
+				server.runCommand("mhr border infinite");
+				scenario(context, "fresh-land-has-trees-with-nothing-bought",
+						() -> freshLandHasTreesWithNothingBought(context, server, connection));
 			}
 		}
 
@@ -92,75 +109,168 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 	// --- the scenarios ---------------------------------------------------------------------
 
 	/**
-	 * The world a run actually begins in. Nothing is force-loaded here: this is the land the server
-	 * made around the run's spawn on its own, before anything asked it a question, which is exactly
-	 * what a player sees on their first morning.
+	 * The world a run actually begins in, on the smallest border, with nothing bought.
 	 *
-	 * <p>A run is started rather than assumed, because a save begins in the lobby and the land a
-	 * run starts in does not exist until the run does. That is also what makes this the strongest
-	 * form of the question: the unlock is locked before a single chunk of that world is generated,
-	 * and the player is standing in it while it is counted.
-	 *
-	 * <p>The ground count is the control: the unlock withholds trees, not terrain, so a patch with
-	 * no ground in it would make "no logs" mean nothing.
+	 * <p>Seed 1 has trees inside its first border: it must be found and left exactly where it is.
+	 * Seed 11 has none there: it must move to land that already has trees, and the land it left must
+	 * still have none — nothing was grown to fix it. Either way the border must end up centered on
+	 * the spawn, hold at least {@link StartingWood#VIABLE_LOGS} logs, and hold the player.
 	 */
-	private void theWorldARunStartsInHasNoTrees(ClientGameTestContext context,
+	private void aFreshRunHasVanillaTrees(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
-		server.runCommand("mhr lock world.trees");
-		TestRuns.start(server);
-		connection.waitForChunksRender();
+		server.runCommand("mhr border tiny");
+		List<String> outcomes = new ArrayList<>();
+		for (long seed : RUN_SEEDS) {
+			if (TestRuns.phase(server) == RunPhase.RUNNING) {
+				TestRuns.end(server);
+			}
+			TestRuns.start(server, seed);
 
-		BlockPos spawn = TestRuns.runSpawn(server);
-		waitForLoadedPatch(context, server, spawn);
-		int logs = count(server, spawn, BlockTags.LOGS);
-		int ground = count(server, spawn, BlockTags.DIRT);
-		LOGGER.info("Spawn at {}: {} logs, {} ground blocks", spawn, logs, ground);
+			StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
+			check(result != null, "starting a run on seed " + seed + " did not run the starting-wood check");
+			check(result.searchedChunks() <= StartingWood.CANDIDATE_BUDGET_CHUNKS, "the run on seed " + seed
+					+ " searched " + result.searchedChunks() + " chunks, over the budget");
+			outcomes.add(seed + "=" + result.outcome());
+			LOGGER.info("Run on seed {}: starting wood {} at {}, spawn {} (was {})", seed, result.outcome(),
+					result.log(), result.spawn(), result.from());
 
-		check(ground > 0, "the land around spawn at " + spawn + " is empty, so counting zero logs"
-				+ " there would prove nothing");
-		check(logs == 0, "the world a run starts in must have no logs in it, but there are "
-				+ logs + " around spawn at " + spawn);
+			String problem = server.computeOnServer(minecraftServer -> {
+				ServerLevel overworld = minecraftServer.overworld();
+				var border = overworld.getWorldBorder();
+				BlockPos spawn = minecraftServer.getWorldData().overworldData().getRespawnData().pos();
+				if (!spawn.equals(result.spawn())) {
+					return "the run's spawn is " + spawn + " but the check says it is " + result.spawn();
+				}
+				if (Math.abs(border.getCenterX() - (spawn.getX() + 0.5)) > 1
+						|| Math.abs(border.getCenterZ() - (spawn.getZ() + 0.5)) > 1) {
+					return "the border is centered on " + border.getCenterX() + ", " + border.getCenterZ()
+							+ " and not on the spawn " + spawn;
+				}
+				int logs = logsInsideTheBorder(overworld);
+				if (logs < StartingWood.VIABLE_LOGS) {
+					return "the border holds " + logs + " logs, fewer than the " + StartingWood.VIABLE_LOGS
+							+ " a start needs";
+				}
+				for (var player : minecraftServer.getPlayerList().getPlayers()) {
+					if (player.level() == overworld && !border.isWithinBounds(player.blockPosition())) {
+						return player.getGameProfile().name() + " arrived at " + player.blockPosition()
+								+ ", outside the border";
+					}
+				}
+				return null;
+			});
+			check(problem == null, "the run on seed " + seed + ": " + problem);
+
+			if (seed == FOUND_SEED) {
+				check(result.outcome() == StartingWood.Outcome.FOUND && result.spawn().equals(result.from()),
+						"seed " + seed + " has trees inside its first border, so its start must be kept, and"
+								+ " the check says " + result.outcome() + " from " + result.from() + " to " + result.spawn());
+			}
+			if (seed == MOVED_SEED) {
+				check(result.outcome() == StartingWood.Outcome.MOVED && !result.spawn().equals(result.from()),
+						"seed " + seed + " has no trees inside its first border, so its start must move, and"
+								+ " the check says " + result.outcome());
+				int left = server.computeOnServer(minecraftServer -> logsInSquare(minecraftServer.overworld(),
+						result.from(), 63));
+				LOGGER.info("The start seed {} left at {} still has {} logs around it", seed, result.from(), left);
+				check(left < StartingWood.VIABLE_LOGS, "the start seed " + seed + " moved away from at "
+						+ result.from() + " was meant to be treeless, and has " + left + " logs around it");
+			}
+		}
+		LOGGER.info("Starting wood by seed: {}", outcomes);
+
+		// The picture last, so looking around as a spectator cannot touch any run being checked.
+		TestRuns.end(server);
+		TestRuns.start(server, MOVED_SEED);
+		StartingWood.Result moved = server.computeOnServer(unused -> StartingWood.last());
+		look(context, server, connection, moved.spawn(), "run-spawn-moved-to-trees");
 	}
 
 	/**
-	 * Land nobody has been to, made on the spot while the unlock is missing, has no wood in it.
+	 * A Medium border is judged on all of its land, not just the part by spawn. Seed 11 has no wood
+	 * anywhere near its spawn — the smallest border has to move away from it — but a border 512
+	 * across reaches trees, so the start must be kept rather than moved.
+	 */
+	private void aBiggerBorderCountsAllOfItsLand(TestDedicatedServerContext server) {
+		server.runCommand("mhr border medium");
+		if (TestRuns.phase(server) == RunPhase.RUNNING) {
+			TestRuns.end(server);
+		}
+		TestRuns.start(server, MOVED_SEED);
+
+		StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
+		LOGGER.info("Run on seed {} with a Medium border: starting wood {} at {}, spawn {} (was {})", MOVED_SEED,
+				result.outcome(), result.log(), result.spawn(), result.from());
+		int nearSpawn = server.computeOnServer(minecraftServer -> logsInSquare(minecraftServer.overworld(),
+				result.from(), 63));
+		check(nearSpawn < StartingWood.VIABLE_LOGS, "setup: seed " + MOVED_SEED + " was meant to have no wood"
+				+ " within the smallest border of its spawn, and has " + nearSpawn + " logs there");
+		check(result.outcome() == StartingWood.Outcome.FOUND && result.spawn().equals(result.from()),
+				"a Medium border with trees inside it must keep its start, and the check says "
+						+ result.outcome() + " from " + result.from() + " to " + result.spawn());
+		String problem = server.computeOnServer(minecraftServer -> {
+			ServerLevel overworld = minecraftServer.overworld();
+			var border = overworld.getWorldBorder();
+			if (border.getSize() < 500) {
+				return "setup: the border is " + border.getSize() + " across, not Medium";
+			}
+			if (!border.isWithinBounds(result.log()) || !overworld.getBlockState(result.log()).is(BlockTags.LOGS)) {
+				return result.log() + " is not a log inside the border";
+			}
+			int far = horizontalDistance(result.log(), result.from());
+			return far <= 64 ? "the log it found at " + result.log() + " is by spawn, where there were none" : null;
+		});
+		check(problem == null, "the Medium run on seed " + MOVED_SEED + ": " + problem);
+	}
+
+	private static int horizontalDistance(BlockPos a, BlockPos b) {
+		return Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getZ() - b.getZ()));
+	}
+
+	/** Every log in every column inside the overworld's border, top to bottom. */
+	private static int logsInsideTheBorder(ServerLevel overworld) {
+		var border = overworld.getWorldBorder();
+		int half = (int) (border.getSize() / 2) - 1;
+		BlockPos centre = BlockPos.containing(border.getCenterX(), 0, border.getCenterZ());
+		return logsInSquare(overworld, centre, half);
+	}
+
+	/** Every log in the columns within {@code half} blocks of {@code centre}, top to bottom. */
+	private static int logsInSquare(ServerLevel overworld, BlockPos centre, int half) {
+		BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+		int logs = 0;
+		for (int x = centre.getX() - half; x <= centre.getX() + half; x++) {
+			for (int z = centre.getZ() - half; z <= centre.getZ() + half; z++) {
+				overworld.getChunk(x >> 4, z >> 4);
+				int top = overworld.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
+				for (int y = overworld.getMinY(); y < top; y++) {
+					if (overworld.getBlockState(pos.set(x, y, z)).is(BlockTags.LOGS)) {
+						logs++;
+					}
+				}
+			}
+		}
+		return logs;
+	}
+
+	/**
+	 * Land nobody has been to, made on the spot with nothing bought, has trees in it.
 	 *
 	 * <p>Thousands of blocks from spawn on purpose: these chunks did not exist until this scenario
 	 * asked for them, so what is being checked is the worldgen path and not a world that happened
 	 * to be made earlier.
 	 */
-	private void freshLandHasNoTreesWhileLocked(ClientGameTestContext context,
+	private void freshLandHasTreesWithNothingBought(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
-		server.runCommand("mhr lock world.trees");
-
-		BlockPos forest = findForest(server, LOCKED_SEARCH_FROM);
+		BlockPos forest = findForest(server, SEARCH_FROM);
 		generate(server, forest);
 		int logs = count(server, forest, BlockTags.LOGS);
-		int ground = count(server, forest, BlockTags.DIRT);
-		LOGGER.info("Locked forest at {}: {} logs, {} ground blocks", forest, logs, ground);
+		LOGGER.info("Fresh forest at {}: {} logs", forest, logs);
 
-		check(ground > 0, "the patch at " + forest + " did not generate at all: no ground in it,"
-				+ " so counting zero logs there would prove nothing");
-		check(logs == 0, "fresh land generated while world.trees is locked must have no logs in it,"
-				+ " but the patch at " + forest + " has " + logs);
+		check(logs > 0, "fresh land must have trees in it with nothing bought, but the patch at "
+				+ forest + " has no logs");
 
-		look(context, server, connection, forest, "fresh-forest-trees-locked");
-	}
-
-	/** Buy the unlock, walk to land nobody has generated yet, and the trees are back. */
-	private void freshLandHasTreesOnceUnlocked(ClientGameTestContext context,
-			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
-		server.runCommand("mhr unlock world.trees");
-
-		BlockPos forest = findForest(server, UNLOCKED_SEARCH_FROM);
-		generate(server, forest);
-		int logs = count(server, forest, BlockTags.LOGS);
-		LOGGER.info("Unlocked forest at {}: {} logs", forest, logs);
-
-		check(logs > 0, "fresh land generated after world.trees is unlocked must have trees in it,"
-				+ " but the patch at " + forest + " has no logs");
-
-		look(context, server, connection, forest, "fresh-forest-trees-unlocked");
+		look(context, server, connection, forest, "fresh-forest-trees-vanilla");
 	}
 
 	// --- the world -------------------------------------------------------------------------
@@ -226,42 +336,6 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 		});
 	}
 
-	/**
-	 * Wait until the server has the whole patch loaded, without asking it to generate anything.
-	 *
-	 * <p>What loads the land a run starts in is the player standing in it, and that finishes a few
-	 * ticks after they arrive. Waiting for it is not the same as force-loading it: nothing here
-	 * asks for a chunk, it only stops the count from running before the ones the player's own
-	 * presence pulls in are there.
-	 */
-	private static void waitForLoadedPatch(ClientGameTestContext context,
-			TestDedicatedServerContext server, BlockPos middle) {
-		for (int attempt = 0; attempt < 60; attempt++) {
-			if (patchIsLoaded(server, middle)) {
-				return;
-			}
-			context.waitTicks(5);
-		}
-		throw new AssertionError("The land around " + middle + " never finished loading");
-	}
-
-	private static boolean patchIsLoaded(TestDedicatedServerContext server, BlockPos middle) {
-		int centreChunkX = middle.getX() >> 4;
-		int centreChunkZ = middle.getZ() >> 4;
-		return server.computeOnServer(minecraftServer -> {
-			ServerLevel level = minecraftServer.overworld();
-			for (int chunkX = -RADIUS_IN_CHUNKS; chunkX <= RADIUS_IN_CHUNKS; chunkX++) {
-				for (int chunkZ = -RADIUS_IN_CHUNKS; chunkZ <= RADIUS_IN_CHUNKS; chunkZ++) {
-					if (level.getChunkSource()
-							.getChunkNow(centreChunkX + chunkX, centreChunkZ + chunkZ) == null) {
-						return false;
-					}
-				}
-			}
-			return true;
-		});
-	}
-
 	/** Counts the blocks in the generated patch that carry a tag. */
 	private static int count(TestDedicatedServerContext server, BlockPos middle, TagKey<Block> tag) {
 		int centreChunkX = middle.getX() >> 4;
@@ -311,7 +385,8 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 		server.runCommand("tp Player0 " + middle.getX() + " " + (surface + 22) + " "
 				+ (middle.getZ() - 28) + " 0 22");
 		connection.waitForChunksRender();
-		context.waitTicks(20);
+		// Long enough for the chat from the run starts to fade, so the picture is of the land.
+		context.waitTicks(220);
 		context.takeScreenshot(name);
 	}
 

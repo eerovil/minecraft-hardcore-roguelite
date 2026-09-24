@@ -37,8 +37,6 @@
 	"mhr.shop.client_mod_required": "Hardcore Roguelite client mod is required to open the shop.",
 	"mhr.lobby.no_run_started": "No run could be started, so you are back on the island: %s",
 
-	"mhr.shop.unlock.world.trees": "Trees",
-	"mhr.shop.unlock.world.trees.desc": "New worlds grow trees again.",
 	"mhr.shop.unlock.world.village": "Villages",
 	"mhr.shop.unlock.world.village.desc": "New worlds generate villages again.",
 

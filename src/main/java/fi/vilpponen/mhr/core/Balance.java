@@ -19,7 +19,7 @@ import java.util.Set;
  * something costs or how hard something hits, and never writes the number down itself. Retuning
  * the game is then editing {@code default-balance.json} or the config override, not editing Java.
  *
- * <p>Unlocks are keyed by a stable string id such as {@code world.trees} or
+ * <p>Unlocks are keyed by a stable string id such as {@code world.village} or
  * {@code player.slot.helmet}. They are strings rather than enum ordinals on purpose: an id is
  * written into config files and saved state, so it has to survive constants being reordered,
  * renamed or removed. Adding an unlock later is adding a key here — no persistence, shop or

@@ -85,13 +85,27 @@ Vaikeuden pitäisi tuntua **reilulta ja ymmärrettävältä**, ei hitaalta tai �
 
 ## 4. Lähtömaailmasta poistettavia asioita
 
-### Puut
+### Puut (ei enää poisteta)
 
-Ensimmäisissä runeissa maailmassa ei ole puita lainkaan.
+Puut olivat alun perin lukittu unlock, mutta ensimmäinen oikea testipelaus ilman cheat-komentoja
+osoitti, että puuttomasta maailmasta ei päässyt alkuun lainkaan: ei puuta, ei työpöytää, ei
+työkaluja eikä tapaa ansaita ensimmäistä valuuttaa (#60).
 
-Kaupasta voidaan ostaa pysyvä unlock, jonka jälkeen puut generoidaan tulevissa maailmoissa normaalisti.
+Puut generoidaan siksi normaalisti jo ensimmäisestä runista alkaen, eikä niitä myydä kaupassa.
 
-Tämä muuttaa ensimmäiset runit voimakkaasti ja tarkoituksella.
+Kun run alkaa rajatun world borderin sisällä, aloituspaikaksi valitaan luonnostaan kelvollinen
+paikka. Kelvollinen tarkoittaa vähintään kolmea saavutettavaa `#minecraft:logs`-blokkia borderin
+sisällä (työpöytä ja puuhakku):
+
+1. Jos alkuperäinen spawn on kelvollinen, siihen ei kosketa.
+2. Muuten lähimmät biomit, joihin voi kasvaa puita, haetaan biomikartasta (kuten `locate biome`),
+   enintään 512 blokin päästä. Spawn ja border siirretään ensimmäiseen, jonka todellinen maasto on
+   kelvollinen. Haku generoi enintään 1 089 chunkkia, jottei esimerkiksi meren keskeltä alkava ajo
+   generoi koko ympäristöään.
+3. Jos sellaista ei löydy (esim. superflat), aloitus jätetään ennalleen.
+
+Maailmaa ei koskaan muokata: aavikkoon tai jäätikölle ei istuteta puuta, joka ei sinne kuulu. Seediä
+ei vaihdeta: nimetty seed pysyy samana.
 
 ### Malmit
 
@@ -212,7 +226,6 @@ Muita vaikeuksia haetaan ensisijaisesti siitä, että maailmasta puuttuu hyödyl
 Esimerkiksi:
 
 - pieni world border
-- ei puita
 - ei malmeja
 - ei eläimiä
 - ei armor-slotien käyttöä
@@ -337,7 +350,6 @@ Pelaaja saa itse päättää, millaisen progression hän rakentaa.
 Mahdollisia kategorioita:
 
 ### World
-- puut
 - yksittäiset malmit
 - eläinlajit
 - kylät

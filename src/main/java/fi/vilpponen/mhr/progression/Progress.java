@@ -35,7 +35,7 @@ import net.minecraft.world.level.storage.LevelResource;
  * <pre>
  * {
  *   "currency": 35,
- *   "unlocks": { "world.trees": 1, "player.craft.enchant": 2 },
+ *   "unlocks": { "world.village": 1, "player.craft.enchant": 2 },
  *   "paidAdvancements": { "run": 7, "entries": ["&lt;player uuid&gt;|minecraft:story/mine_stone"] }
  * }
  * </pre>

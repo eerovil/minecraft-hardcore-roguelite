@@ -65,7 +65,7 @@ Settled since:
 ## Technical, once coding starts
 
 - How permanent unlocks are stored across worlds, and where that file lives.
-- How removed content (trees, ores, animals, villages) is actually suppressed in worldgen
+- How removed content (ores, animals, villages) is actually suppressed in worldgen
   and spawning, per unlock.
 - Whether unlock state is meant to be shareable or resettable by the player.
 

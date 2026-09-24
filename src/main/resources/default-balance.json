@@ -26,7 +26,6 @@
 	},
 
 	"unlocks": {
-		"world.trees": { "price": 3 },
 		"world.village": { "price": 30 },
 
 		"world.ore.coal": { "price": 3 },

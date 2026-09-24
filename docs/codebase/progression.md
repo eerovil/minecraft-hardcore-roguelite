@@ -41,7 +41,7 @@ Currency and ownership are one file because they are one purchase. The persisted
 {
   "currency": 35,
   "unlocks": {
-    "world.trees": 1,
+    "world.village": 1,
     "player.slot.helmet": 1,
     "player.craft.enchant": 3,
     "starter.bread": 1
@@ -78,7 +78,7 @@ One dotted string is intentionally reused across the system:
 
 Examples:
 
-- `world.trees`
+- `world.village`
 - `world.ore.iron`
 - `world.animal.cow`
 - `player.slot.helmet`
@@ -103,7 +103,6 @@ category table just to render the shop.
 
 Examples:
 
-- trees;
 - villages;
 - ores;
 - animals;
@@ -181,6 +180,9 @@ when the matching feature returns.
 Do not "clean up" unknown ids during load unless the product explicitly introduces an irreversible
 migration with a replacement policy.
 
+`world.trees` is the first retired id. Trees became vanilla from the first run (#60), so a save that
+bought them still holds `world.trees`, which nothing reads and nothing sells. It was not refunded.
+
 ## Feature boundaries
 
 A gameplay feature should expose a narrow semantic API and read the central progression state rather
@@ -248,7 +250,7 @@ So the ledger is a third field in the snapshot, written by the same commit as th
 ```json
 {
   "currency": 35,
-  "unlocks": { "world.trees": 1 },
+  "unlocks": { "world.village": 1 },
   "paidAdvancements": { "run": 7, "entries": ["<player uuid>|minecraft:story/mine_stone"] }
 }
 ```
@@ -312,7 +314,7 @@ adding machinery to the gap before the gap itself was removed. **There is now on
 ```json
 {
   "currency": 35,
-  "unlocks": { "world.trees": 1, "player.craft.enchant": 2 },
+  "unlocks": { "world.village": 1, "player.craft.enchant": 2 },
   "paidAdvancements": { "run": 7, "entries": ["<player uuid>|minecraft:story/mine_stone"] }
 }
 ```
