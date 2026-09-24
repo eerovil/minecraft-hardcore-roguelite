@@ -123,7 +123,8 @@ public class StartingWoodClientTest implements FabricClientGameTest {
 		server.runCommand("gamemode spectator Player0");
 		server.runCommand("tp Player0 " + spawn.getX() + " " + (surface + 6) + " " + spawn.getZ() + " 0 15");
 		connection.waitForChunksRender();
-		context.waitTicks(20);
+		// Long enough for the chat from the run start to fade, so the picture is of the land.
+		context.waitTicks(220);
 		context.takeScreenshot("flat-world-start-left-as-generated");
 	}
 

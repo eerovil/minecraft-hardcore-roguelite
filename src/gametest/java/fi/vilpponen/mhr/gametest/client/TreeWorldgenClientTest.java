@@ -339,7 +339,8 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 		server.runCommand("tp Player0 " + middle.getX() + " " + (surface + 22) + " "
 				+ (middle.getZ() - 28) + " 0 22");
 		connection.waitForChunksRender();
-		context.waitTicks(20);
+		// Long enough for the chat from the run starts to fade, so the picture is of the land.
+		context.waitTicks(220);
 		context.takeScreenshot(name);
 	}
 
