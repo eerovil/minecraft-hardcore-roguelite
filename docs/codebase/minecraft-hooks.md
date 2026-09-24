@@ -42,8 +42,11 @@ Current hooks cover:
 - client locked-slot overlay rendering;
 - normal ore feature placement;
 - deep iron/copper vein material placement;
-- tree generation;
 - village structure generation.
+
+Trees have no hook. They were an unlock once, and are vanilla from the first run now (#60). What a
+run does about wood is choose where it starts, in `fi.vilpponen.mhr.border.StartingWood`, and that
+reads the world rather than hooking it.
 
 The config has `defaultRequire: 1`. A missing required injection point should fail loudly rather
 than quietly shipping a feature that no longer hooks Minecraft.
@@ -60,7 +63,6 @@ Examples already encoded in the project:
 - locked animals do not block explicit `/summon`, spawn eggs, breeding, drops or combat;
 - locked equipment slots do not block crafting or storing the equipment;
 - village locking suppresses villages, not unrelated structures;
-- tree locking must not suppress all vegetation;
 - an unlocked feature should follow vanilla behaviour, not a home-grown approximation.
 
 When picking a hook, prefer the point where the unwanted vanilla behaviour is still one narrow
@@ -130,6 +132,11 @@ private `MinecraftServer` fields — the level map, the executor, the save direc
 world-generation settings — because `fi.vilpponen.mhr.run.RunWorlds` has to create and destroy
 levels inside a running server and Minecraft creates every level exactly once, in a method that
 offers to do it again for nobody.
+
+It also invokes one private method, `updateEffectiveRespawnData`. The spawn vanilla hands out is the
+world's own pulled inside the border, and it is only worked out again once a tick. A run start moves
+the border — and sometimes the spawn, to reach trees — and the starter chest and arriving players ask
+for the spawn in that same call, so `WorldBorders.apply` brings it up to date at once.
 
 The rules that keep that honest are the same ones as for any other hook:
 
