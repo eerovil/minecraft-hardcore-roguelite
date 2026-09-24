@@ -94,8 +94,14 @@ työkaluja eikä tapaa ansaita ensimmäistä valuuttaa (#60).
 Puut generoidaan siksi normaalisti jo ensimmäisestä runista alkaen, eikä niitä myydä kaupassa.
 
 Kun run alkaa rajatun world borderin sisällä, borderin sisällä on aina vähintään yksi
-`#minecraft:logs`-blokki. Jos worldgen ei jättänyt alueelle yhtään puuta, spawnin viereen kasvatetaan
-yksi tammi. Muuten maailmaan ei kosketa.
+`#minecraft:logs`-blokki:
+
+1. Jos worldgen jätti borderin sisään puuta, maailmaan ei kosketa.
+2. Muuten spawn ja border siirretään lähimmän metsäisen biomin puiden viereen, enintään 512 blokin
+   päähän. Maailma pysyy täysin vanillana.
+3. Jos sellaista ei ole (esim. superflat), spawnin viereen kasvatetaan yksi tammi.
+
+Seediä ei koskaan vaihdeta: nimetty seed pysyy samana.
 
 ### Malmit
 

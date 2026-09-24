@@ -202,8 +202,9 @@ regenerated from that seed and you are dropped into the new overworld.
 Look around. With nothing bought:
 
 - **Trees, as vanilla has them.** Trees are not sold; they grow from the first run. There is always
-  wood somewhere inside the border: if the seed put none there, one oak stands a few steps from
-  spawn, and the server log says `No wood inside the starting border, so an oak was grown`.
+  wood somewhere inside the border. If the seed put none there, the run starts next to the nearest
+  trees instead (the log says `the run's spawn moved from ... to ...`), and only when there are none
+  within 512 blocks does one oak stand a few steps from spawn (`an oak was grown`).
 - **No starter chest** at your feet. With something bought there would be one within three blocks.
 - **A 128-block world.** Walk in any direction and the border stops you about 64 blocks out. That is
   the `tiny` tier, the one you get for having bought no tier at all.

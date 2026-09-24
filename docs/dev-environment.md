@@ -397,7 +397,8 @@ Each one lays its own patch of dirt:
   vanilla feature places, which is the same call worldgen, bonemeal and a sapling all come down to.
 - **a-sapling-grows-with-nothing-bought** — a sapling pushed along the way bonemeal pushes it.
 - **a-woodless-patch-gets-a-tree** — `StartingWood` asked about a patch with no log in it grows a
-  vanilla oak inside the patch.
+  vanilla oak inside the patch. (The step before planting, moving the spawn to trees nearby, needs
+  real biomes, so it is in the client test below.)
 - **a-patch-with-wood-is-left-alone** — the control: one log already there, and nothing is grown or
   changed.
 - **a-flooded-patch-still-gets-wood** — under water no vanilla oak stands, so the last resort builds
@@ -407,8 +408,9 @@ The real paths need real worlds, so they are client GameTests:
 
 - `TreeWorldgenClientTest` builds a dedicated server on an *ordinary* overworld.
   **a-fresh-run-has-vanilla-trees** starts runs on the smallest border with nothing bought, on a
-  fixed list of seeds. Every one must have a log inside its border, and it stops at the first
-  seed where the fallback *found* vanilla wood rather than planting any — at least one must.
+  fixed pair of seeds. Every one must have a log inside its border, a border centered on its spawn
+  and its player inside it. At least one seed must *find* vanilla wood and be left alone, and at
+  least one must have none inside and *move* its spawn and border to trees nearby.
   **fresh-land-has-trees-with-nothing-bought** force-loads a plain `minecraft:forest` six thousand
   blocks out and counts its logs.
 - `StartingWoodClientTest` uses the harness's own superflat world, which has no trees at all — the
@@ -416,9 +418,9 @@ The real paths need real worlds, so they are client GameTests:
   starts a run on the smallest border, then scans every column inside the border for logs, so "the
   fallback says it planted one" and "there is one" are separate claims.
 
-| A fresh forest, nothing bought | A run on flat land, which has no trees of its own |
-| ------------------------------ | ------------------------------------------------- |
-| ![a forest full of oaks](images/gametest-fresh-forest-trees-vanilla.png) | ![flat grass and one oak a few steps from spawn](images/gametest-starting-wood-on-a-flat-world.png) |
+| A fresh forest, nothing bought | A run moved to trees nearby | A run on flat land, which has no trees of its own |
+| ------------------------------ | --------------------------- | ------------------------------------------------- |
+| ![a forest full of oaks](images/gametest-fresh-forest-trees-vanilla.png) | ![the run's spawn next to trees](images/gametest-run-spawn-moved-to-trees.png) | ![flat grass and one oak a few steps from spawn](images/gametest-starting-wood-on-a-flat-world.png) |
 
 #### The animal unlocks
 
@@ -1059,8 +1061,9 @@ scripts/dev.sh rcon "op <your-username>"
 Trees are vanilla from the first run; there is nothing to unlock. `scripts/dev.sh gametest` covers
 it and the starting-wood guarantee — see [Automated gameplay tests](#automated-gameplay-tests). On
 the dev server, what a run start found is in the server log: `Starting border already has wood` when
-worldgen put some inside the border, `No wood inside the starting border, so an oak was grown` when
-it had to plant one.
+worldgen put some inside the border, `No wood inside the starting border or within 512 blocks, so an oak was grown` when
+it had to plant one; `the run's spawn moved from ... to ...` when it moved the start to trees nearby
+instead.
 
 The progression file lives at `/server/world/hardcore-roguelite-progress.json`
 on the volume — at the root of the save, which a new run's dimensions do not touch. One save is one

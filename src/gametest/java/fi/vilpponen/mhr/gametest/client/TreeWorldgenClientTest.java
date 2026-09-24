@@ -44,12 +44,13 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 	private static final String RETIRED_TREES = "world.trees";
 
 	/**
-	 * The seeds runs are started on, in order. Named so every scenario is about the same worlds every
-	 * time. Several, because whether a seed starts with trees inside the smallest border or has to
-	 * move to them is up to vanilla, and both need a seed that shows them.
+	 * The seeds runs are started on. Whether a seed starts with trees inside the smallest border or
+	 * has to move to them is up to vanilla, so these were picked by trying seeds 1 to 16: seed 1 has
+	 * trees inside its first border, and seed 11 has none there and a forest about 230 blocks away.
+	 * Kept to two because every run start holds the server still for a moment, and a long list of
+	 * them in a row is enough for the client to time out.
 	 */
-	private static final long[] RUN_SEEDS = {20260924L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L,
-			12L, 13L, 14L, 15L, 16L, 42L, 12345L};
+	private static final long[] RUN_SEEDS = {1L, 11L};
 
 	/** How far out from the middle of the patch to generate, in chunks. 5×5 is plenty of forest. */
 	private static final int RADIUS_IN_CHUNKS = 2;

@@ -24,7 +24,8 @@ first run if you can afford it, so you pick your own path.
 Early. Fabric mod for Minecraft 26.3 that builds and runs, with these unlocks implemented:
 
 - **trees are vanilla from the first run.** They are not sold. A run's starting border always has
-  wood inside it: if worldgen left none there, one oak is grown a few steps from spawn.
+  wood inside it: if worldgen left none there, the spawn and the border move to the nearest trees
+  within 512 blocks, and only if there are none is one oak grown a few steps from spawn.
 - **villages** — until you buy it, new land generates with no villages in it.
 - **the ores** — coal, iron, copper, gold, redstone, lapis and diamond, each bought separately.
   A locked ore is missing from new terrain. Mining, recipes and loot are untouched.
