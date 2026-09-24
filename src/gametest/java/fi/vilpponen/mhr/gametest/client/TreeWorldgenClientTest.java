@@ -45,10 +45,11 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 
 	/**
 	 * The seeds runs are started on, in order. Named so every scenario is about the same worlds every
-	 * time. Several, because which of them put a tree inside the smallest border is up to vanilla,
-	 * and the claim needs at least one that did.
+	 * time. Several, because whether a seed starts with trees inside the smallest border or has to
+	 * move to them is up to vanilla, and both need a seed that shows them.
 	 */
-	private static final long[] RUN_SEEDS = {20260924L, 1L, 2L, 3L, 42L, 12345L};
+	private static final long[] RUN_SEEDS = {20260924L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L,
+			12L, 13L, 14L, 15L, 16L, 42L, 12345L};
 
 	/** How far out from the middle of the patch to generate, in chunks. 5×5 is plenty of forest. */
 	private static final int RADIUS_IN_CHUNKS = 2;
@@ -104,15 +105,17 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 	/**
 	 * The world a run actually begins in, on the smallest border, with nothing bought.
 	 *
-	 * <p>Every run must end up with a log inside its border, whatever the seed. And at least one of
-	 * the seeds must have had vanilla trees there already, with the fallback leaving that start
-	 * exactly as generated: the fallback is for starts vanilla left without wood, and trees
-	 * themselves must not be suppressed. Runs stop at the first seed that proves the second half.
+	 * <p>Every run must end up with a log inside its border and the player standing inside it,
+	 * whatever the seed. At least one seed must have had vanilla trees there already and been left
+	 * exactly as generated — trees are not suppressed. And at least one must have had none inside,
+	 * but trees in reach, and have moved its spawn and border to them rather than planting.
 	 */
 	private void aFreshRunHasVanillaTrees(ClientGameTestContext context,
 			TestDedicatedServerContext server, TestDedicatedServerConnection connection) {
 		server.runCommand("mhr border tiny");
-		Long vanillaSeed = null;
+		List<String> outcomes = new ArrayList<>();
+		boolean sawFound = false;
+		Long movedSeed = null;
 		for (long seed : RUN_SEEDS) {
 			if (TestRuns.phase(server) == RunPhase.RUNNING) {
 				TestRuns.end(server);
@@ -121,31 +124,58 @@ public class TreeWorldgenClientTest implements FabricClientGameTest {
 
 			StartingWood.Result result = server.computeOnServer(unused -> StartingWood.last());
 			check(result != null, "starting a run on seed " + seed + " did not run the starting-wood check");
-			LOGGER.info("Run on seed {}: starting wood {} at {}", seed, result.outcome(), result.log());
+			outcomes.add(seed + "=" + result.outcome());
+			LOGGER.info("Run on seed {}: starting wood {} at {}, spawn {}", seed, result.outcome(),
+					result.log(), result.spawn());
 			check(result.outcome() != StartingWood.Outcome.UNBOUNDED,
 					"the run on seed " + seed + " was meant to be on the smallest border");
-			boolean real = server.computeOnServer(minecraftServer -> {
+			String problem = server.computeOnServer(minecraftServer -> {
 				ServerLevel overworld = minecraftServer.overworld();
-				return overworld.getWorldBorder().isWithinBounds(result.log())
-						&& overworld.getBlockState(result.log()).is(BlockTags.LOGS);
+				var border = overworld.getWorldBorder();
+				if (!border.isWithinBounds(result.log()) || !overworld.getBlockState(result.log()).is(BlockTags.LOGS)) {
+					return result.log() + " (" + result.outcome() + ") is not a log inside the border";
+				}
+				BlockPos spawn = minecraftServer.getWorldData().overworldData().getRespawnData().pos();
+				if (!spawn.equals(result.spawn())) {
+					return "the run's spawn is " + spawn + " but the check says it is " + result.spawn();
+				}
+				if (Math.abs(border.getCenterX() - (spawn.getX() + 0.5)) > 1
+						|| Math.abs(border.getCenterZ() - (spawn.getZ() + 0.5)) > 1) {
+					return "the border is centered on " + border.getCenterX() + ", " + border.getCenterZ()
+							+ " and not on the spawn " + spawn;
+				}
+				for (var player : minecraftServer.getPlayerList().getPlayers()) {
+					if (player.level() == overworld && !border.isWithinBounds(player.blockPosition())) {
+						return player.getGameProfile().name() + " arrived at " + player.blockPosition()
+								+ ", outside the border";
+					}
+				}
+				return null;
 			});
-			check(real, "the run on seed " + seed + " must have a log inside its border, and "
-					+ result.log() + " (" + result.outcome() + ") is not one");
+			check(problem == null, "the run on seed " + seed + ": " + problem);
 
-			if (result.outcome() == StartingWood.Outcome.FOUND) {
+			if (result.outcome() == StartingWood.Outcome.FOUND && !sawFound) {
 				generate(server, result.log());
 				int logs = count(server, result.log(), BlockTags.LOGS);
 				LOGGER.info("Around the log at {}: {} logs", result.log(), logs);
 				check(logs > 1, "vanilla trees are more than one log, and around " + result.log()
 						+ " there are " + logs);
-				vanillaSeed = seed;
-				break;
+				sawFound = true;
+			}
+			if (result.outcome() == StartingWood.Outcome.MOVED && movedSeed == null) {
+				movedSeed = seed;
 			}
 		}
-		check(vanillaSeed != null, "none of the seeds " + java.util.Arrays.toString(RUN_SEEDS)
-				+ " started with vanilla trees inside the smallest border, so nothing here shows trees"
-				+ " are left alone");
-		connection.waitForChunksRender();
+		LOGGER.info("Starting wood by seed: {}", outcomes);
+		check(sawFound, "none of the seeds started with vanilla trees inside the smallest border, so"
+				+ " nothing here shows trees are left alone: " + outcomes);
+		check(movedSeed != null, "none of the seeds had to move to trees, so the move is untested: " + outcomes);
+
+		// The picture last, so looking around as a spectator cannot touch any run being checked.
+		TestRuns.end(server);
+		TestRuns.start(server, movedSeed);
+		StartingWood.Result moved = server.computeOnServer(unused -> StartingWood.last());
+		look(context, server, connection, moved.spawn(), "run-spawn-moved-to-trees");
 	}
 
 	/**
