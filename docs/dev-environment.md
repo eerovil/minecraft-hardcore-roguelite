@@ -413,9 +413,9 @@ The real paths need real worlds, so they are client GameTests:
   biome to move to. **a-start-with-no-trees-in-reach-is-left-as-generated** starts a run there and
   scans every column inside the border: the spawn has not moved and there is not one log.
 
-| A fresh forest, nothing bought | Seed 11's run, moved to trees |
-| ------------------------------ | ----------------------------- |
-| ![a forest full of oaks](images/gametest-fresh-forest-trees-vanilla.png) | ![the run's spawn next to trees](images/gametest-run-spawn-moved-to-trees.png) |
+| A fresh forest, nothing bought | Seed 11's run, moved to trees | Superflat, left as generated |
+| ------------------------------ | ----------------------------- | ---------------------------- |
+| ![a forest full of trees](images/gametest-fresh-forest-trees-vanilla.png) | ![badlands edge with a wooded plain beside it](images/gametest-run-spawn-moved-to-trees.png) | ![flat grass, no tree anywhere](images/gametest-flat-world-start-left-as-generated.png) |
 
 #### The animal unlocks
 
