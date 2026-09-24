@@ -141,7 +141,7 @@ public final class TreeGameTest {
 	public void aLaterCandidateIsTriedAfterManyFail(GameTestHelper helper) {
 		java.util.List<BlockPos> candidates = new java.util.ArrayList<>();
 		for (int i = 0; i < 12; i++) {
-			candidates.add(new BlockPos(i * StartingWood.CANDIDATE_SPACING, 64, 0));
+			candidates.add(new BlockPos(i * 96, 64, 0));
 		}
 		java.util.List<BlockPos> tried = new java.util.ArrayList<>();
 
@@ -156,16 +156,33 @@ public final class TreeGameTest {
 	}
 
 	/**
-	 * Every spaced candidate is tried before the search gives up, and one too close to a candidate
-	 * already tried is skipped rather than tried again.
+	 * A candidate right next to one that failed is still tried, and can be the one chosen. Each
+	 * candidate looks only at the land around it, so a neighbour 64 blocks off each way covers
+	 * mostly new ground — skipping it as "too close" would miss trees that are really there.
 	 */
 	@GameTest
-	public void everySpacedCandidateIsTriedBeforeGivingUp(GameTestHelper helper) {
+	public void aCandidateNextToAFailedOneIsStillTried(GameTestHelper helper) {
+		BlockPos failed = new BlockPos(0, 64, 0);
+		BlockPos neighbour = new BlockPos(64, 64, 64);
+		java.util.List<BlockPos> tried = new java.util.ArrayList<>();
+
+		BlockPos chosen = StartingWood.firstViable(java.util.List.of(failed, neighbour), candidate -> {
+			tried.add(candidate);
+			return candidate.equals(neighbour) ? candidate : null;
+		});
+
+		helper.assertValueEqual(chosen, neighbour, "the candidate chosen after its neighbour failed");
+		helper.assertValueEqual(tried, java.util.List.of(failed, neighbour), "the candidates tried, in order");
+		helper.succeed();
+	}
+
+	/** Every candidate is tried before the search gives up. */
+	@GameTest
+	public void everyCandidateIsTriedBeforeGivingUp(GameTestHelper helper) {
 		java.util.List<BlockPos> candidates = new java.util.ArrayList<>();
 		for (int i = 0; i < 20; i++) {
-			candidates.add(new BlockPos(i * StartingWood.CANDIDATE_SPACING, 64, 0));
-			// A near neighbour of each, which covers the same land and must not cost a second try.
-			candidates.add(new BlockPos(i * StartingWood.CANDIDATE_SPACING, 64, 16));
+			candidates.add(new BlockPos(i * 32, 64, 0));
+			candidates.add(new BlockPos(i * 32, 64, 32));
 		}
 		java.util.List<BlockPos> tried = new java.util.ArrayList<>();
 
@@ -175,7 +192,7 @@ public final class TreeGameTest {
 		});
 
 		helper.assertTrue(chosen == null, "nothing may be chosen when no candidate has trees, and " + chosen + " was");
-		helper.assertValueEqual(tried.size(), 20, "spaced candidates tried before giving up");
+		helper.assertValueEqual(tried, candidates, "the candidates tried before giving up");
 		helper.succeed();
 	}
 
