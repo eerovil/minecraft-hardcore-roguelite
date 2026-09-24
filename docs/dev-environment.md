@@ -399,6 +399,9 @@ Each one lays its own patch of dirt:
 - **a-sapling-grows-with-nothing-bought** — a sapling pushed along the way bonemeal pushes it.
 - **two-logs-are-not-a-viable-start** / **three-logs-are-a-viable-start** — the rule
   `StartingWood` judges a start by, and proof that counting changes nothing in the patch.
+- **a-later-candidate-is-tried-after-many-fail** / **every-spaced-candidate-is-tried-before-giving-up**
+  — the search for a natural start tries every wooded candidate within reach, in order, rather than
+  giving up after a few that turned out to have no trees.
 
 The real paths need real worlds, so they are client GameTests:
 

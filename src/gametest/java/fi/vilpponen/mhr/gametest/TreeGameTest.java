@@ -130,6 +130,55 @@ public final class TreeGameTest {
 		helper.succeed();
 	}
 
+	// --- choosing a natural start ----------------------------------------------------------
+
+	/**
+	 * The search does not give up early. Nine candidates in a row turn out to have no trees, and the
+	 * tenth does: it is the one chosen, and every one before it was tried, in order. A cap on how many
+	 * may fail would leave a run without wood while a viable start was still in reach.
+	 */
+	@GameTest
+	public void aLaterCandidateIsTriedAfterManyFail(GameTestHelper helper) {
+		java.util.List<BlockPos> candidates = new java.util.ArrayList<>();
+		for (int i = 0; i < 12; i++) {
+			candidates.add(new BlockPos(i * StartingWood.CANDIDATE_SPACING, 64, 0));
+		}
+		java.util.List<BlockPos> tried = new java.util.ArrayList<>();
+
+		BlockPos chosen = StartingWood.firstViable(candidates, candidate -> {
+			tried.add(candidate);
+			return tried.size() == 10 ? candidate : null;
+		});
+
+		helper.assertValueEqual(chosen, candidates.get(9), "the candidate chosen after nine that failed");
+		helper.assertValueEqual(tried, candidates.subList(0, 10), "the candidates tried, in order");
+		helper.succeed();
+	}
+
+	/**
+	 * Every spaced candidate is tried before the search gives up, and one too close to a candidate
+	 * already tried is skipped rather than tried again.
+	 */
+	@GameTest
+	public void everySpacedCandidateIsTriedBeforeGivingUp(GameTestHelper helper) {
+		java.util.List<BlockPos> candidates = new java.util.ArrayList<>();
+		for (int i = 0; i < 20; i++) {
+			candidates.add(new BlockPos(i * StartingWood.CANDIDATE_SPACING, 64, 0));
+			// A near neighbour of each, which covers the same land and must not cost a second try.
+			candidates.add(new BlockPos(i * StartingWood.CANDIDATE_SPACING, 64, 16));
+		}
+		java.util.List<BlockPos> tried = new java.util.ArrayList<>();
+
+		BlockPos chosen = StartingWood.firstViable(candidates, candidate -> {
+			tried.add(candidate);
+			return null;
+		});
+
+		helper.assertTrue(chosen == null, "nothing may be chosen when no candidate has trees, and " + chosen + " was");
+		helper.assertValueEqual(tried.size(), 20, "spaced candidates tried before giving up");
+		helper.succeed();
+	}
+
 	/** Lays {@code count} logs on the dirt, in a row along one edge of the patch. */
 	private static void placeLogs(GameTestHelper helper, int count) {
 		for (int i = 0; i < count; i++) {

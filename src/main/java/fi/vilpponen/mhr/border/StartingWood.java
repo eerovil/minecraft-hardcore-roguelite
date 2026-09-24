@@ -4,6 +4,7 @@ import fi.vilpponen.mhr.HardcoreRoguelite;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Function;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.QuartPos;
@@ -76,10 +77,7 @@ public final class StartingWood {
 	 * A candidate this close to one already turned down is skipped, so each look covers new land
 	 * rather than the edge of the same unlucky patch.
 	 */
-	private static final int CANDIDATE_SPACING = 96;
-
-	/** How many candidates to try before giving up. Each one generates some land to count in. */
-	private static final int MAX_CANDIDATES = 8;
+	public static final int CANDIDATE_SPACING = 96;
 
 	/** How far around a candidate its wood is counted before the spawn is moved to it, in blocks. */
 	private static final int GROVE_RADIUS = 32;
@@ -151,50 +149,68 @@ public final class StartingWood {
 			return new Result(Outcome.FOUND, here.get(0), spawn, spawn);
 		}
 
-		List<BlockPos> tried = new ArrayList<>();
-		for (BlockPos candidate : woodedCandidates(overworld, spawn)) {
-			if (tried.size() >= MAX_CANDIDATES) {
-				break;
-			}
-			if (tried.stream().anyMatch(other -> horizontalDistance(other, candidate) < CANDIDATE_SPACING)) {
-				continue;
-			}
-			tried.add(candidate);
-
-			// A wooded biome is a promise of trees, not a tree, so its land is counted before anything
-			// moves. Only this little patch is generated to find out.
-			Area grove = new Area(candidate.getX() - GROVE_RADIUS, candidate.getZ() - GROVE_RADIUS,
-					candidate.getX() + GROVE_RADIUS, candidate.getZ() + GROVE_RADIUS);
-			if (border.contains(candidate)) {
-				// Inside the border already, past where the first look stopped: trees here mean the
-				// start is fine as it is, and moving would only take the player away from them.
-				List<BlockPos> inside = countLogs(overworld, border.intersect(grove), candidate, VIABLE_LOGS,
-						Integer.MAX_VALUE);
-				if (inside.size() >= VIABLE_LOGS) {
-					return new Result(Outcome.FOUND, inside.get(0), spawn, spawn);
-				}
-				continue;
-			}
-			List<BlockPos> groveLogs = countLogs(overworld, grove, candidate, VIABLE_LOGS);
-			if (groveLogs.size() < VIABLE_LOGS) {
-				continue;
-			}
-
-			BlockPos moved = standingSpotNear(overworld, groveLogs.get(0));
-			moveSpawn(server, moved);
-			// Counted again inside the border the move produced, rather than assumed: the border has
-			// to hold the trees, not just the spawn.
-			List<BlockPos> inside = countLogs(overworld, reachable(overworld), moved, VIABLE_LOGS,
-					MAX_SCAN_CHUNKS);
-			if (inside.size() >= VIABLE_LOGS) {
-				return new Result(Outcome.MOVED, inside.get(0), moved, spawn);
-			}
+		Result natural = firstViable(woodedCandidates(overworld, spawn),
+				candidate -> tryCandidate(server, overworld, border, spawn, candidate));
+		if (natural != null) {
+			return natural;
 		}
 
 		if (!spawnOf(server).equals(spawn)) {
 			moveSpawn(server, spawn);
 		}
 		return new Result(Outcome.NONE, null, spawn, spawn);
+	}
+
+	/**
+	 * Try the candidates in order until one works, and answer with what it gave, or null once they
+	 * have all been tried.
+	 *
+	 * <p>Every candidate is tried: each is only a promise of trees, and a later one may keep it where
+	 * an earlier one did not. The list is bounded — it only holds spots within {@link #MOVE_RADIUS} —
+	 * so trying all of it is bounded too. A candidate within {@link #CANDIDATE_SPACING} of one already
+	 * tried is skipped, so each try covers new land. Public so a GameTest can drive it with a made-up
+	 * list rather than a world.
+	 */
+	public static <R> R firstViable(List<BlockPos> candidates, Function<BlockPos, R> attempt) {
+		List<BlockPos> tried = new ArrayList<>();
+		for (BlockPos candidate : candidates) {
+			if (tried.stream().anyMatch(other -> horizontalDistance(other, candidate) < CANDIDATE_SPACING)) {
+				continue;
+			}
+			tried.add(candidate);
+			R result = attempt.apply(candidate);
+			if (result != null) {
+				return result;
+			}
+		}
+		return null;
+	}
+
+	/** One candidate: a start at it if its land has the wood, or null to go on to the next. */
+	private static Result tryCandidate(MinecraftServer server, ServerLevel overworld, Area border,
+			BlockPos spawn, BlockPos candidate) {
+		// A wooded biome is a promise of trees, not a tree, so its land is counted before anything
+		// moves. Only this little patch is generated to find out.
+		Area grove = new Area(candidate.getX() - GROVE_RADIUS, candidate.getZ() - GROVE_RADIUS,
+				candidate.getX() + GROVE_RADIUS, candidate.getZ() + GROVE_RADIUS);
+		if (border.contains(candidate)) {
+			// Inside the border already, past where the first look stopped: trees here mean the
+			// start is fine as it is, and moving would only take the player away from them.
+			List<BlockPos> inside = countLogs(overworld, border.intersect(grove), candidate, VIABLE_LOGS,
+					Integer.MAX_VALUE);
+			return inside.size() >= VIABLE_LOGS ? new Result(Outcome.FOUND, inside.get(0), spawn, spawn) : null;
+		}
+		List<BlockPos> groveLogs = countLogs(overworld, grove, candidate, VIABLE_LOGS);
+		if (groveLogs.size() < VIABLE_LOGS) {
+			return null;
+		}
+
+		BlockPos moved = standingSpotNear(overworld, groveLogs.get(0));
+		moveSpawn(server, moved);
+		// Counted again inside the border the move produced, rather than assumed: the border has
+		// to hold the trees, not just the spawn.
+		List<BlockPos> inside = countLogs(overworld, reachable(overworld), moved, VIABLE_LOGS, MAX_SCAN_CHUNKS);
+		return inside.size() >= VIABLE_LOGS ? new Result(Outcome.MOVED, inside.get(0), moved, spawn) : null;
 	}
 
 	private static void moveSpawn(MinecraftServer server, BlockPos to) {
