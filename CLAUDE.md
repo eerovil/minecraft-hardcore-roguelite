@@ -89,6 +89,9 @@ These have already cost implementation/debugging time.
   verification" for deterministic behaviour before checking whether Client GameTest can exercise it.
 - **Worldgen only answers once.** An unlock change cannot rewrite already-generated chunks. Use
   fresh regions/worlds with fixed seeds for before/after tests.
+- **Pick the seed before you write the test.** Before building a client GameTest around a worldgen
+  seed, list which seeds give the start you need (`TreeWorldgenClientTest` keeps seeds 1 and 11 for
+  opposite starts). Each guess costs a full client run, about 15 minutes.
 - **A zero result can be a fake pass.** Worldgen/spawn tests need positive controls proving the test
   setup can actually produce the vanilla thing when it is allowed.
 - **The roguelite border can invalidate distant-world tests.** Tests that intentionally generate
