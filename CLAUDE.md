@@ -58,7 +58,8 @@ Prefer extending the existing feature seam over creating a second path that owns
 - [open questions](docs/open-questions.md) — read before deciding something the design has
   deliberately left unsettled.
 - [balance](docs/balance.md) — read before adding/changing prices, rewards, sizes, multipliers,
-  starter stacks, or other tuning.
+  starter stacks, or other tuning. Run a balance simulation on a tiny case first and check its
+  numbers by hand before layering model versions on it.
 - [dev environment](docs/dev-environment.md) — read before building, testing, changing GameTests,
   or touching Kubernetes.
 - [agent workflow](docs/agent-workflow.md) — read before implementing or reviewing a GitHub issue.
